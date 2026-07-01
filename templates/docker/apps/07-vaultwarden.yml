@@ -1,0 +1,17 @@
+# PSM-NAME: vaultwarden
+# PSM-LABEL: Vaultwarden — 自托管密码管理器
+# PSM-PORT: 8080
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    ports:
+      - "__BIND__:__PORT__:80"
+    environment:
+      - WEBSOCKET_ENABLED=true
+      - SIGNUPS_ALLOWED=true
+    volumes:
+      - vaultwarden_data:/data
+volumes:
+  vaultwarden_data:

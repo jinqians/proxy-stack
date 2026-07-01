@@ -1,0 +1,15 @@
+# PSM-NAME: portainer
+# PSM-LABEL: Portainer — Docker 可视化管理面板
+# PSM-PORT: 9000
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "__BIND__:__PORT__:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+volumes:
+  portainer_data:

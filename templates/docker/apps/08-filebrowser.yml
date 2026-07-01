@@ -1,0 +1,15 @@
+# PSM-NAME: filebrowser
+# PSM-LABEL: Filebrowser — Web 文件管理器
+# PSM-PORT: 8088
+services:
+  filebrowser:
+    image: filebrowser/filebrowser:latest
+    container_name: filebrowser
+    restart: unless-stopped
+    ports:
+      - "__BIND__:__PORT__:80"
+    volumes:
+      - /:/srv
+      - filebrowser_db:/database
+volumes:
+  filebrowser_db:

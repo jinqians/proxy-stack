@@ -1,0 +1,19 @@
+# PSM-NAME: adguardhome
+# PSM-LABEL: AdGuard Home — DNS 广告过滤
+# PSM-PORT: 3000
+# PSM-WARN: AdGuard Home 将绑定系统 53 端口，若运行 systemd-resolved 请先执行: systemctl disable --now systemd-resolved
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: adguardhome
+    restart: unless-stopped
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "__BIND__:__PORT__:3000"
+    volumes:
+      - adguard_work:/opt/adguardhome/work
+      - adguard_conf:/opt/adguardhome/conf
+volumes:
+  adguard_work:
+  adguard_conf:

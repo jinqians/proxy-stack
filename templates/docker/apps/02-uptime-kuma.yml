@@ -1,0 +1,14 @@
+# PSM-NAME: uptime-kuma
+# PSM-LABEL: Uptime Kuma — 服务在线监控
+# PSM-PORT: 3001
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "__BIND__:__PORT__:3001"
+    volumes:
+      - uptime_kuma_data:/app/data
+volumes:
+  uptime_kuma_data:

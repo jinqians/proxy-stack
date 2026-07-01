@@ -1,0 +1,14 @@
+# PSM-NAME: memos
+# PSM-LABEL: Memos — 轻量笔记应用
+# PSM-PORT: 5230
+services:
+  memos:
+    image: neosmemo/memos:stable
+    container_name: memos
+    restart: unless-stopped
+    ports:
+      - "__BIND__:__PORT__:5230"
+    volumes:
+      - memos_data:/var/opt/memos
+volumes:
+  memos_data:

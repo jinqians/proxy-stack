@@ -1,0 +1,29 @@
+# PSM-NAME: netdata
+# PSM-LABEL: Netdata — 实时系统性能监控
+# PSM-PORT: 19999
+services:
+  netdata:
+    image: netdata/netdata:latest
+    container_name: netdata
+    restart: unless-stopped
+    pid: host
+    ports:
+      - "__BIND__:__PORT__:19999"
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdata_config:/etc/netdata
+      - netdata_lib:/var/lib/netdata
+      - netdata_cache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+volumes:
+  netdata_config:
+  netdata_lib:
+  netdata_cache:

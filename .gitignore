@@ -1,0 +1,16 @@
+# Runtime state (may contain credentials/passwords)
+config/psm.state
+config/xray/
+config/stream/
+config/http/
+config/ssl/
+
+# Backup archives
+backup/
+*.tar.gz
+
+# Logs
+logs/
+
+# macOS
+.DS_Store

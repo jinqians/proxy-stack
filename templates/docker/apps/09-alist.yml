@@ -1,0 +1,18 @@
+# PSM-NAME: alist
+# PSM-LABEL: Alist — 多存储聚合文件列表
+# PSM-PORT: 5244
+services:
+  alist:
+    image: xhofe/alist:latest
+    container_name: alist
+    restart: unless-stopped
+    ports:
+      - "__BIND__:__PORT__:5244"
+    environment:
+      - PUID=0
+      - PGID=0
+      - UMASK=022
+    volumes:
+      - alist_data:/opt/alist/data
+volumes:
+  alist_data:
