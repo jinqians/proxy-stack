@@ -25,17 +25,87 @@ f2b_install() {
     else
         log_step "正在安装 fail2ban..."
         detect_os
-        [[ "$PKG_MGR" == "yum" ]] && yum install -y epel-release 2>/dev/null
-        # python3-systemd: required for the systemd journal backend we use for
+        # On the RHEL family fail2ban lives in EPEL — enable it the right way
+        # per distro (Oracle/RHEL/Amazon each differ; see ensure_epel).
+        # `|| true`: ensure_epel returns 1 on AL2023/EPEL-unavailable, and a bare
+        # `&& ensure_epel` would abort f2b_install under `set -e`.
+        [[ "$PKG_MGR" == "yum" ]] && ensure_epel || true
+        # Install separately: batching would let a missing python3-systemd (not
+        # packaged everywhere) abort the fail2ban install itself.
+        pkg_install fail2ban || { log_error "fail2ban 安装失败"; return 1; }
+        # python3-systemd: required for the systemd journal backend we prefer for
         # the sshd jail — without it fail2ban falls back to reading log files
         # that may not exist on journald-only systems (e.g. Debian 12+).
-        pkg_install fail2ban python3-systemd || { log_error "安装失败"; return 1; }
+        pkg_install python3-systemd 2>/dev/null \
+            || log_warn "python3-systemd 未能安装，将使用日志文件后端（journald-only 系统上 SSH 规则可能失效）"
         log_ok "fail2ban 已安装"
     fi
     svc_enable fail2ban
-    svc_start fail2ban 2>/dev/null || svc_restart fail2ban
+
+    # Older PSM versions shipped a self-referential `ignoreip = %(ignoreip)s ...`
+    # in psm-defaults.conf, which makes fail2ban abort at startup with
+    # "Recursion limit exceeded in value substitution". Repair any such leftover
+    # BEFORE starting, then start with validation so a broken drop-in can't
+    # silently wedge the service (and we don't falsely report success).
+    _f2b_repair_stale_configs
+    if ! _f2b_start_validated; then
+        log_error "fail2ban 服务未能启动，请运行「journalctl -u fail2ban」查看详情。"
+        return 1
+    fi
 
     ask_yn "是否现在配置 SSH 防爆破规则（推荐）？" Y && f2b_setup_wizard
+}
+
+# ── Startup safety ────────────────────────────────────────────────────────────
+# Repair PSM drop-ins written by older versions that make fail2ban abort with
+# "Recursion limit exceeded in value substitution" — the classic culprit is a
+# self-referential `ignoreip = %(ignoreip)s ...`. Rewrites our defaults drop-in
+# cleanly so an upgrade heals itself instead of staying broken.
+_f2b_repair_stale_configs() {
+    local f
+    for f in "$F2B_DEFAULTS_JAIL" "$F2B_JAIL_DIR"/psm-*.conf; do
+        [[ -f "$f" ]] || continue
+        if grep -Eq '^[[:space:]]*ignoreip[[:space:]]*=.*%\(ignoreip\)s' "$f"; then
+            log_warn "检测到旧版本残留的递归 fail2ban 配置：$(basename "$f")，正在修复..."
+            if [[ "$f" == "$F2B_DEFAULTS_JAIL" ]]; then
+                _f2b_write_defaults_jail
+            else
+                sed -i -E 's/%\(ignoreip\)s//g' "$f"
+            fi
+        fi
+    done
+}
+
+# Move every PSM-managed jail.d drop-in aside so a single bad file can't keep the
+# whole service down. Admin/non-PSM configs are left untouched.
+_f2b_quarantine_dropins() {
+    local dir="$F2B_JAIL_DIR"
+    compgen -G "$dir/psm-*.conf" >/dev/null 2>&1 || return 0
+    local q="$dir/psm-quarantine.$(date +%Y%m%d%H%M%S)"
+    mkdir -p "$q"
+    mv "$dir"/psm-*.conf "$q"/ 2>/dev/null || true
+    log_warn "已将 PSM 的 fail2ban 规则备份到 ${q}"
+}
+
+# Start fail2ban and confirm it actually came up. If a PSM drop-in wedges the
+# service, quarantine ALL PSM drop-ins and retry so the base service still runs
+# — the user can then re-run the wizard to regenerate clean rules.
+_f2b_start_validated() {
+    if command -v fail2ban-client &>/dev/null && ! fail2ban-client -t &>/dev/null; then
+        log_warn "fail2ban 配置校验未通过，正在隔离 PSM 规则后重试..."
+        _f2b_quarantine_dropins
+    fi
+    svc_start fail2ban 2>/dev/null || svc_restart fail2ban 2>/dev/null || true
+    svc_is_active fail2ban && return 0
+
+    log_warn "fail2ban 启动失败，正在隔离 PSM 规则后重试..."
+    _f2b_quarantine_dropins
+    svc_restart fail2ban 2>/dev/null || true
+    if svc_is_active fail2ban; then
+        log_warn "已隔离 PSM 规则并成功启动 fail2ban；请重新运行「一键配置向导」生成规则。"
+        return 0
+    fi
+    return 1
 }
 
 # ── Firewall backend detection ───────────────────────────────────────────────
@@ -170,6 +240,20 @@ _f2b_current_ssh_ports() {
     printf '%s' "${p:-22}"
 }
 
+# True when fail2ban's systemd journal backend is usable (needs the python3
+# systemd bindings). Debian: python3-systemd; EL: python3-systemd from EPEL.
+_f2b_journal_ok() {
+    python3 -c 'import systemd.journal' &>/dev/null
+}
+
+# Backend line for jails: prefer the journal (works on journald-only systems),
+# fall back to "auto" (pyinotify/polling on the distro's default log paths —
+# /var/log/auth.log on Debian, /var/log/secure on the RHEL family, both of
+# which fail2ban resolves itself via paths-*.conf).
+_f2b_backend() {
+    _f2b_journal_ok && echo "systemd" || echo "auto"
+}
+
 # ── Jail configuration ───────────────────────────────────────────────────────
 f2b_configure_sshd_jail() {
     mkdir -p "$F2B_JAIL_DIR"
@@ -179,6 +263,7 @@ f2b_configure_sshd_jail() {
     # Last-resort literal: iptables-multiport ships with every fail2ban version,
     # so the jail stays valid even if detection came up empty.
     [[ -z "$banaction" ]] && banaction="iptables-multiport"
+    local backend; backend=$(_f2b_backend)
 
     local maxretry findtime bantime
     ask maxretry "统计窗口内允许的最大失败次数" "5"
@@ -189,7 +274,7 @@ f2b_configure_sshd_jail() {
 # Managed by PSM — 通过「安全加固 → Fail2ban」菜单重新生成，请勿手动编辑
 [sshd]
 enabled   = true
-backend   = systemd
+backend   = ${backend}
 port      = ${ports}
 maxretry  = ${maxretry}
 findtime  = ${findtime}

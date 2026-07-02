@@ -41,7 +41,14 @@ check_requirements() {
 install_base_packages() {
     log_step "正在安装基础依赖..."
     pkg_update
-    pkg_install curl wget unzip jq openssl socat qrencode 2>/dev/null || true
+    # RHEL 系（CentOS/Rocky/Alma/RHEL/Oracle）的 qrencode 在 EPEL——先启用，
+    # 否则 dnf 的严格模式会因为一个包不可用而放弃整个事务（curl/jq 也装不上）。
+    detect_os
+    [[ "$PKG_MGR" == "yum" ]] && { ensure_epel || true; }
+    # ensure_pkg_deps 逐个安装：任何一个包失败都不影响其余的。
+    ensure_pkg_deps curl wget unzip jq openssl socat qrencode
+    # 这些是 PSM 运行的硬性依赖，缺了直接失败并给出明确指引。
+    require_cmd curl jq unzip openssl
     log_ok "基础依赖已安装。"
 }
 

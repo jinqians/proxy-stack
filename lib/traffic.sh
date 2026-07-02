@@ -379,8 +379,13 @@ _trf_ensure_iptables() {
     log_warn "iptables 未安装，正在自动安装..."
     if command -v apt-get &>/dev/null; then
         apt-get install -y iptables >/dev/null 2>&1
+    elif command -v dnf &>/dev/null; then
+        # EL9+ 的包名是 iptables-nft（提供 iptables 命令，nft 后端）
+        dnf install -y iptables >/dev/null 2>&1 \
+            || dnf install -y iptables-nft >/dev/null 2>&1
     elif command -v yum &>/dev/null; then
-        yum install -y iptables >/dev/null 2>&1
+        yum install -y iptables >/dev/null 2>&1 \
+            || yum install -y iptables-nft >/dev/null 2>&1
     elif command -v apk &>/dev/null; then
         apk add --no-cache iptables >/dev/null 2>&1
     fi

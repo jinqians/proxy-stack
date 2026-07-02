@@ -22,8 +22,10 @@ ask_yn "是否删除 Nginx？" N && {
     systemctl disable nginx --quiet 2>/dev/null || true
     detect_os
     case "$OS_ID" in
-        ubuntu|debian) apt-get purge -y nginx nginx-common ;;
-        centos|rhel)   yum remove -y nginx ;;
+        ubuntu|debian|raspbian)
+            apt-get purge -y nginx nginx-common 2>/dev/null || true ;;
+        centos|rhel|rocky|almalinux|ol|amzn|fedora)
+            "$(_rhel_pkg_cmd)" remove -y nginx 2>/dev/null || true ;;
     esac
     rm -rf /etc/nginx
     log_ok "Nginx 已删除。"
@@ -47,7 +49,18 @@ ask_yn "是否删除 Hysteria2？" N && {
     log_ok "Hysteria2 已删除。"
 }
 
-ask_yn "是否删除 acme.sh？（SSL 证书将保留在 $NGINX_SSL_DIR）" N && {
+ask_yn "是否删除 acme.sh？（SSL 证书将保留在 $NGINX_SSL_DIR）
+  ${YELLOW}警告：删除后重装会重新签发证书，同一域名 7 天内最多签 5 张（Let's Encrypt 限流）。${NC}" N && {
+    # 删除前先把 acme.sh 账户与证书缓存打包备份，避免重装后重新签发触发限流
+    if [[ -d "$ACME_HOME" ]]; then
+        mkdir -p "$BAK_DIR"
+        acme_bak="$BAK_DIR/acme-home-$(date +%Y%m%d-%H%M%S).tar.gz"
+        if tar -czf "$acme_bak" -C "$(dirname "$ACME_HOME")" "$(basename "$ACME_HOME")" 2>/dev/null; then
+            log_ok "acme.sh 缓存已备份到 $acme_bak"
+        else
+            log_warn "acme.sh 缓存备份失败，仍继续卸载。" || true
+        fi
+    fi
     [[ -f "$ACME_HOME/acme.sh" ]] && "$ACME_HOME/acme.sh" --uninstall
     rm -rf "$ACME_HOME"
     log_ok "acme.sh 已删除。"

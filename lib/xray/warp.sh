@@ -24,9 +24,9 @@ _warp_ensure_deps() {
     if ! command -v wg &>/dev/null; then
         log_step "正在安装 wireguard-tools（生成密钥对需要）..."
         detect_os
-        if [[ "$PKG_MGR" == "yum" ]]; then
-            yum install -y epel-release 2>/dev/null || true
-        fi
+        # EL8/9（CentOS/Rocky/Alma/RHEL/Oracle）的 wireguard-tools 在 EPEL；
+        # AL2023/Fedora 在基础仓库。ensure_epel 会按发行版正确启用。
+        [[ "$PKG_MGR" == "yum" ]] && ensure_epel 2>/dev/null || true
         pkg_install wireguard-tools \
             && log_ok "wireguard-tools 已安装" \
             || { log_error "wireguard-tools 安装失败，无法生成密钥对"; return 1; }

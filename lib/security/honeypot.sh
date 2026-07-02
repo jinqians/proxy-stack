@@ -138,7 +138,8 @@ _hp_ensure_iptables() {
     log_warn "未找到 iptables（蜜罐的 LOG+DROP 规则依赖它）"
     log_step "正在安装 iptables..."
     detect_os
-    pkg_install iptables 2>/dev/null || true
+    # EL9+ renamed the package to iptables-nft (provides the iptables command)
+    pkg_install iptables 2>/dev/null || pkg_install iptables-nft 2>/dev/null || true
     if command -v iptables &>/dev/null; then
         log_ok "iptables 已安装"
         return 0
@@ -173,6 +174,10 @@ _hp_remove_port() {
 }
 
 _hp_persist_iptables() {
+    # RHEL family keeps rules in /etc/sysconfig (dir always exists there);
+    # Debian family uses /etc/iptables, which only exists once
+    # iptables-persistent is installed — create it so the save can land.
+    [[ -d /etc/sysconfig ]] || mkdir -p /etc/iptables 2>/dev/null || true
     iptables-save  > /etc/sysconfig/iptables    2>/dev/null \
         || iptables-save  > /etc/iptables/rules.v4 2>/dev/null || true
     ip6tables-save > /etc/iptables/rules.v6     2>/dev/null || true
@@ -222,13 +227,35 @@ EOF
 _hp_write_jail() {
     mkdir -p "$(dirname "$HP_JAIL_FILE")"
     local banaction; banaction=$(_f2b_detect_banaction)
+    # An empty banaction produces `action = %(banaction)s[...]` with no action
+    # name — fail2ban then fails to start. iptables-multiport ships with every
+    # version, so fall back to it (same last-resort literal as the sshd jail).
+    [[ -z "$banaction" ]] && banaction="iptables-multiport"
+
+    # Where to read the kernel's iptables LOG lines from. Prefer the journal
+    # (works on journald-only boxes); without python3-systemd fall back to the
+    # rsyslog kernel log file — /var/log/kern.log on Debian/Ubuntu,
+    # /var/log/messages on the RHEL family.
+    local source_lines
+    if declare -f _f2b_journal_ok &>/dev/null && _f2b_journal_ok; then
+        source_lines=$'backend      = systemd\njournalmatch = _TRANSPORT=kernel'
+    elif [[ -f /var/log/kern.log ]]; then
+        source_lines=$'backend      = auto\nlogpath      = /var/log/kern.log'
+    elif [[ -f /var/log/messages ]]; then
+        source_lines=$'backend      = auto\nlogpath      = /var/log/messages'
+    else
+        # Last resort: keep the journal backend and let f2b_reload surface the
+        # error — better than a jail with no log source at all.
+        source_lines=$'backend      = systemd\njournalmatch = _TRANSPORT=kernel'
+        log_warn "未检测到 python3-systemd 或内核日志文件，蜜罐 jail 可能无法读取日志"
+    fi
+
     cat > "$HP_JAIL_FILE" <<EOF
 # Managed by PSM — 命中即永久封禁：这些端口本机没有任何合法服务，第一次触碰就是探测
 [psm-honeypot]
 enabled      = true
 filter       = psm-honeypot
-backend      = systemd
-journalmatch = _TRANSPORT=kernel
+${source_lines}
 maxretry     = 1
 findtime     = 1d
 bantime      = -1

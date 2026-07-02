@@ -80,14 +80,27 @@ xray_install() {
 
     unzip -q "$tmp_dir/$zip_name" -d "$tmp_dir/xray"
 
-    install -m 755 "$tmp_dir/xray/xray"    /usr/local/bin/xray
-    install -m 644 "$tmp_dir/xray/geoip.dat"   /usr/local/share/xray/ 2>/dev/null || true
-    install -m 644 "$tmp_dir/xray/geosite.dat" /usr/local/share/xray/ 2>/dev/null || true
+    install -m 755 "$tmp_dir/xray/xray" /usr/local/bin/xray
+
+    # Geo data (geoip.dat/geosite.dat) drives every geosite:/geoip: routing rule
+    # — i.e. all WARP unlock + custom shunting. Xray searches /usr/local/share/xray
+    # by default, so install them there. mkdir FIRST: `install`/`cp` into a
+    # missing dir is a silent no-op (the previous order left geo data uninstalled
+    # on a fresh box, so shunt rules never matched). The release zip bundles them;
+    # warn if it somehow didn't, so a broken shunt is diagnosable.
     mkdir -p /usr/local/share/xray
-    cp "$tmp_dir/xray"/geo*.dat /usr/local/share/xray/ 2>/dev/null || true
+    cp -f "$tmp_dir/xray"/geoip.dat   /usr/local/share/xray/ 2>/dev/null || true
+    cp -f "$tmp_dir/xray"/geosite.dat /usr/local/share/xray/ 2>/dev/null || true
+    if [[ ! -s /usr/local/share/xray/geoip.dat || ! -s /usr/local/share/xray/geosite.dat ]]; then
+        log_warn "未能安装 geoip.dat/geosite.dat，geosite/geoip 分流规则（含 WARP 解锁）可能不生效。"
+    fi
 
     rm -rf "$tmp_dir"
     mkdir -p "$XRAY_CFG_DIR"
+    # config.json carries every node's secrets (UUIDs, passwords, private/WARP
+    # keys). Keep the dir root-only so the config isn't world-readable; xray.service
+    # runs as root, so this doesn't affect it.
+    chmod 700 "$XRAY_CFG_DIR" 2>/dev/null || true
 
     if [[ -f "$XRAY_CFG" ]]; then
         if ! "$XRAY_BIN" run -test -config "$XRAY_CFG" &>/dev/null \
@@ -279,6 +292,22 @@ xray_update_inbound() {
     local tag="$1" new_json="$2"
     xray_remove_inbound_by_tag "$tag"
     xray_add_inbound "$new_json"
+}
+
+# ── Safe config replacement ───────────────────────────────────────────────────
+# Atomically replace XRAY_CFG with a candidate file ONLY if it's non-empty valid
+# JSON. Guards against jq pipelines that failed halfway and produced empty or
+# partial output — writing that would wipe the running config. On failure the
+# existing config is left untouched and we return non-zero. (Full Xray semantic
+# validation is done by the caller's xray_test_restart, which then also reports.)
+_xray_write_cfg_checked() {
+    local candidate="$1"
+    if [[ ! -s "$candidate" ]] || ! jq -e . "$candidate" >/dev/null 2>&1; then
+        log_error "生成的 Xray 配置为空或非法 JSON，已放弃写入（保留原配置）。"
+        rm -f "$candidate"
+        return 1
+    fi
+    mv -f "$candidate" "$XRAY_CFG"
 }
 
 # ── Status & logs ─────────────────────────────────────────────────────────────

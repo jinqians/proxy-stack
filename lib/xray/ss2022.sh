@@ -183,6 +183,14 @@ xss_add_node() {
     _xss_apply_to_xray
 
     log_ok "节点 ${tag} 已添加（端口 ${port}，${method}）"
+
+    # SS2022 直接监听自己的端口（不走 Nginx）。RHEL 系默认 firewalld 为
+    # Enforcing 且只放行 SSH，不放行端口则节点从外部不可达——主动询问放行。
+    ask_yn "是否现在放行防火墙端口 ${port}？" Y && {
+        source "$LIB_DIR/system.sh"
+        firewall_open_port "$port" "both"
+    }
+
     _xss_uri "$tag"
 }
 

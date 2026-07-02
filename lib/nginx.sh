@@ -24,21 +24,43 @@ nginx_install() {
             pkg_install nginx libnginx-mod-stream
             ;;
         centos|rhel|rocky|almalinux|ol|amzn|fedora)
-            yum install -y epel-release 2>/dev/null || true
-            pkg_install nginx
-            # On RHEL-family, stream is a dynamic module; install the package
-            yum install -y nginx-mod-stream 2>/dev/null || true
+            # nginx + nginx-mod-stream live in AppStream on EL8/9 (and in the
+            # base repos on AL2023/Fedora) — EPEL is normally NOT needed. Fall
+            # back to enabling EPEL only if the base install fails (older CentOS).
+            pkg_install nginx 2>/dev/null \
+                || { ensure_epel || true; pkg_install nginx 2>/dev/null || true; }
+            is_installed nginx || die "Nginx 安装失败，请检查软件源。"
+            pkg_install nginx-mod-stream 2>/dev/null || true
             ;;
     esac
+    _nginx_selinux_permit
 
     mkdir -p "$NGINX_STREAM_D" "$NGINX_HTTP_D" "$NGINX_SSL_DIR"
 
     _write_nginx_main
     init_stream_sni
     svc_enable nginx
-    # restart (not start) so nginx loads our custom config, not the distro default
-    svc_restart nginx
-    log_ok "Nginx 已安装。"
+    # Verify the generated config BEFORE (re)starting. A `stream {}` block with
+    # the stream module missing fails `nginx -t` and takes down ALL of nginx
+    # (including plain reverse-proxy sites), so never blindly restart — and never
+    # report success when the service didn't actually come up.
+    local test_out
+    if test_out=$(nginx -t 2>&1); then
+        if svc_restart nginx; then
+            log_ok "Nginx 已安装。"
+        else
+            log_error "Nginx 配置有效，但服务启动失败："
+            svc_status nginx 2>&1 | tail -n 15 >&2 || true
+            return 1
+        fi
+    else
+        log_error "Nginx 配置测试失败，未启动服务："
+        echo "$test_out" >&2
+        if grep -q 'unknown directive "stream"' <<<"$test_out"; then
+            log_error "stream 模块未加载：请安装 libnginx-mod-stream（Debian/Ubuntu）或 nginx-mod-stream（RHEL 系）后重试。"
+        fi
+        return 1
+    fi
 }
 
 _nginx_runtime_user() {
@@ -53,27 +75,83 @@ _nginx_runtime_user() {
     fi
 }
 
-# Emit the `load_module ...;` line needed to make the `stream {}` block work.
-# Relying on `include /etc/nginx/modules-enabled/*.conf` proved unreliable
-# (the include didn't pull in ngx_stream_module.so → "unknown directive stream"),
-# so we load the module explicitly instead:
-#   - static build   (--with-stream, no =dynamic): built-in, load nothing
-#   - dynamic build  (--with-stream=dynamic):       must load the .so ourselves
-#   - not compiled at all:                          emit nothing; nginx -t will fail
-# We deliberately do NOT `include modules-enabled/*.conf` alongside this — doing
-# both would load the stream module twice and nginx would refuse to start.
+# ── SELinux (RHEL family: CentOS/Rocky/Alma/Oracle default to Enforcing) ─────
+# nginx runs confined as httpd_t there, and httpd_t may NOT initiate outbound
+# connections by default — so proxy_pass to the local Xray/camouflage upstream
+# (127.0.0.1:1443/8443/8080) fails with "Permission denied (13)" and the whole
+# SNI-routing design silently breaks. Flip the standard boolean that allows it.
+# No-op when SELinux is absent (Debian/Ubuntu) or not enforcing.
+_nginx_selinux_permit() {
+    command -v getenforce &>/dev/null || return 0
+    [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]] || return 0
+    if command -v getsebool &>/dev/null \
+        && getsebool httpd_can_network_connect 2>/dev/null | grep -q 'on$'; then
+        return 0
+    fi
+    log_step "检测到 SELinux Enforcing，正在放行 nginx 反代所需的网络连接权限..."
+    if setsebool -P httpd_can_network_connect 1 2>/dev/null; then
+        log_ok "SELinux：httpd_can_network_connect 已开启（nginx → 本机上游）"
+    else
+        log_warn "无法设置 SELinux 布尔值，若反代 502/权限拒绝，请手动执行："
+        log_warn "  setsebool -P httpd_can_network_connect 1"
+    fi
+}
+
+# Locate a dynamic nginx module .so by name across distro-specific module dirs.
+_nginx_find_module() {
+    find /usr/lib/nginx/modules /usr/lib64/nginx/modules \
+         /usr/share/nginx/modules /etc/nginx/modules \
+         -name "$1" 2>/dev/null | head -1
+}
+
+# True if the stream module can actually be used: compiled statically into
+# nginx, OR present on disk as a dynamic .so we can load. Checks the real .so —
+# NOT the package DB, since a package in "rc" (removed, config-only) state makes
+# `dpkg -l` succeed while the .so is gone.
+_nginx_stream_module_available() {
+    local nginx_v; nginx_v=$(nginx -V 2>&1)
+    if grep -qw -- '--with-stream' <<<"$nginx_v" && ! grep -q -- '--with-stream=dynamic' <<<"$nginx_v"; then
+        return 0   # static build → always available
+    fi
+    [[ -n "$(_nginx_find_module ngx_stream_module.so)" ]]
+}
+
+# Emit the top-level directive(s) that make the `stream {}` block + ssl_preread
+# work, tolerant of every packaging layout:
+#   - static build   (--with-stream, no =dynamic): built-in → emit nothing
+#   - dynamic build:  load ngx_stream_module.so (+ a separate ssl_preread .so if
+#                     the distro splits it out, e.g. nginx.org / RHEL builds)
+#   - .so not found on disk but Debian ships load lines under modules-enabled:
+#                     fall back to the distro-native include (last resort)
+# We never emit BOTH an explicit load_module and the include — loading the same
+# module twice makes nginx refuse to start.
 _nginx_stream_load_directive() {
     local nginx_v; nginx_v=$(nginx -V 2>&1)
-    grep -q 'with-stream=dynamic' <<<"$nginx_v" || return 0   # static or absent → nothing to load
-    local so
-    so=$(find /usr/lib/nginx/modules /usr/lib64/nginx/modules \
-              /usr/share/nginx/modules /etc/nginx/modules \
-              -name 'ngx_stream_module.so' 2>/dev/null | head -1)
-    [[ -n "$so" ]] && printf 'load_module %s;' "$so"
+    if grep -qw -- '--with-stream' <<<"$nginx_v" && ! grep -q -- '--with-stream=dynamic' <<<"$nginx_v"; then
+        return 0   # static → nothing to load
+    fi
+
+    local out="" so found
+    for so in ngx_stream_module.so ngx_stream_ssl_preread_module.so; do
+        found=$(_nginx_find_module "$so")
+        [[ -n "$found" ]] && out+="load_module ${found};"$'\n'
+    done
+    if [[ -n "$out" ]]; then
+        printf '%s' "$out"
+        return 0
+    fi
+
+    # Couldn't find the .so directly — use Debian's modules-enabled include.
+    if compgen -G '/etc/nginx/modules-enabled/*.conf' >/dev/null 2>&1; then
+        echo 'include /etc/nginx/modules-enabled/*.conf;'
+    fi
 }
 
 _write_nginx_main() {
     local nginx_user stream_load
+    # Make sure the stream module is installed BEFORE we compute the load
+    # directive — otherwise we'd write a `stream {}` block with nothing to load.
+    _nginx_ensure_stream_module || true
     nginx_user="$(_nginx_runtime_user)"
     stream_load="$(_nginx_stream_load_directive)"
 
@@ -137,7 +215,7 @@ nginx_upgrade() {
     log_step "正在升级 Nginx..."
     case "$OS_ID" in
         ubuntu|debian|raspbian) apt-get install --only-upgrade -y nginx ;;
-        centos|rhel|rocky|almalinux|ol|amzn|fedora) yum update -y nginx ;;
+        centos|rhel|rocky|almalinux|ol|amzn|fedora) "$(_rhel_pkg_cmd)" update -y nginx ;;
     esac
     nginx_test_reload
     log_ok "Nginx 已升级。"
@@ -149,7 +227,7 @@ nginx_uninstall() {
     detect_os
     case "$OS_ID" in
         ubuntu|debian|raspbian) apt-get purge -y nginx nginx-common ;;
-        centos|rhel|rocky|almalinux|ol|amzn|fedora) yum remove -y nginx ;;
+        centos|rhel|rocky|almalinux|ol|amzn|fedora) "$(_rhel_pkg_cmd)" remove -y nginx ;;
     esac
     log_ok "Nginx 已删除。"
 }
@@ -160,25 +238,31 @@ nginx_uninstall() {
 
 _sni_map_file() { echo "$NGINX_STREAM_D/00-sni-map.conf"; }
 
+# Ensure the stream module is usable. Checks the real .so on disk, installs the
+# distro module package if it's missing, and returns non-zero if stream STILL
+# isn't available afterwards — so callers can warn instead of writing a
+# `stream {}` block that would break all of nginx. Does NOT restart nginx here;
+# the caller reloads once, after the config is written and tested.
 _nginx_ensure_stream_module() {
+    _nginx_stream_module_available && return 0
     detect_os
+    log_step "正在安装 Nginx stream 模块..."
     case "$OS_ID" in
         ubuntu|debian|raspbian)
-            if ! dpkg -l libnginx-mod-stream &>/dev/null; then
-                log_step "正在安装 Nginx stream 模块..."
-                pkg_install libnginx-mod-stream
-                svc_restart nginx 2>/dev/null || true
-            fi
+            # Retry behind a `pkg_update` — the usual reason the .so is absent is
+            # a stale/empty apt index (the module then silently didn't install
+            # alongside nginx), which refreshing the index fixes.
+            pkg_install libnginx-mod-stream 2>/dev/null \
+                || { pkg_update 2>/dev/null || true; pkg_install libnginx-mod-stream 2>/dev/null || true; }
             ;;
         centos|rhel|rocky|almalinux|ol|amzn|fedora)
-            # Stream is a dynamic module on distro nginx; install if missing
-            if ! rpm -q nginx-mod-stream &>/dev/null 2>&1; then
-                log_step "正在安装 Nginx stream 模块..."
-                yum install -y nginx-mod-stream 2>/dev/null || true
-                svc_restart nginx 2>/dev/null || true
-            fi
+            pkg_install nginx-mod-stream 2>/dev/null || true
             ;;
     esac
+    _nginx_stream_module_available && return 0
+    log_warn "未能安装/找到 Nginx stream 模块（ngx_stream_module.so）。"
+    log_warn "SNI 分流依赖该模块，请手动安装 libnginx-mod-stream（Debian/Ubuntu）或 nginx-mod-stream（RHEL 系）。"
+    return 1
 }
 
 init_stream_sni() {
@@ -222,6 +306,7 @@ nginx_ensure_stream_sni() {
 
     mkdir -p "$NGINX_STREAM_D" "$NGINX_HTTP_D" "$NGINX_SSL_DIR"
     _nginx_ensure_stream_module
+    _nginx_selinux_permit
     _write_nginx_main
     [[ -f "$(_sni_map_file)" ]] || init_stream_sni
     nginx_test_reload
@@ -238,6 +323,7 @@ nginx_ensure_local_http() {
 
     mkdir -p "$NGINX_HTTP_D" "$NGINX_SSL_DIR"
     _nginx_ensure_stream_module
+    _nginx_selinux_permit
     _write_nginx_main
     svc_enable nginx 2>/dev/null || true
     svc_is_active nginx || svc_start nginx 2>/dev/null || true

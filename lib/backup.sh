@@ -135,22 +135,24 @@ do_restore() {
     echo    "  6. Docker Compose 项目 / 数据卷"
     echo    "  7. 全部（完整恢复）"
     read -rp "$(echo -e "${CYAN}请选择 [7]: ${NC}")" rc; rc="${rc:-7}"
+    # 选 7（全部恢复）时展开为全部组件；否则保留用户输入的多个数字（空格分隔）
+    [[ "$rc" == *7* ]] && rc="1 2 3 4 5 6"
 
     _stop_services
 
     for c in $rc; do
         case "$c" in
-            1|7)
+            1)
                 [[ -d "$bak_dir/nginx"      ]] && { rm -rf /etc/nginx && cp -a "$bak_dir/nginx" /etc/nginx; log_ok "Nginx 已恢复。"; } ;;
-            2|7)
+            2)
                 [[ -d "$bak_dir/xray"       ]] && { rm -rf "$XRAY_CFG_DIR" && cp -a "$bak_dir/xray" "$XRAY_CFG_DIR"; log_ok "Xray 已恢复。"; } ;;
-            3|7)
+            3)
                 [[ -d "$bak_dir/hysteria"   ]] && { rm -rf /etc/hysteria && cp -a "$bak_dir/hysteria" /etc/hysteria; log_ok "Hysteria2 已恢复。"; } ;;
-            4|7)
+            4)
                 [[ -d "$bak_dir/psm_config" ]] && { rm -rf "$CFG_DIR" && cp -a "$bak_dir/psm_config" "$CFG_DIR"; log_ok "PSM 配置已恢复。"; } ;;
-            5|7)
+            5)
                 [[ -d "$bak_dir/ssl"        ]] && { rm -rf "$NGINX_SSL_DIR" && cp -a "$bak_dir/ssl" "$NGINX_SSL_DIR"; log_ok "SSL 证书已恢复。"; } ;;
-            6|7)
+            6)
                 [[ -d "$bak_dir/docker_compose" ]] && { rm -rf /opt/psm/compose && cp -a "$bak_dir/docker_compose" /opt/psm/compose; log_ok "Docker Compose 项目已恢复。"; }
                 source "$LIB_DIR/docker/backup.sh" 2>/dev/null \
                     && declare -f docker_restore_volumes &>/dev/null \
@@ -190,6 +192,7 @@ _rotate_backups() {
 # ── Schedule auto-backup ──────────────────────────────────────────────────────
 auto_backup_enable() {
     local hour; ask hour "每日备份执行时刻（0-23）" "3"
+    ensure_cron || true   # RHEL 系最小安装没有 cronie，/etc/cron.d 会被无声忽略
     cat > /etc/cron.d/psm-backup <<EOF
 0 ${hour} * * * root $PSM_ROOT/manager.sh --backup-full >> $LOG_DIR/backup.log 2>&1
 EOF

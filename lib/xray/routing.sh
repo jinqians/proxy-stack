@@ -79,11 +79,15 @@ _route_apply_to_xray() {
 
     local tmp; tmp=$(mktemp)
 
-    # Remove all PSM routing rules (outboundTag starts with "out-"),
-    # preserving api/blocked/direct rules untouched.
-    jq 'del(.routing.rules[] | select(
-            (.outboundTag // "") | startswith("out-")
-        ))' "$XRAY_CFG" > "$tmp"
+    # Remove all PSM routing rules (outboundTag starts with "out-"), preserving
+    # api/blocked/direct rules untouched. `(.routing.rules) //= []` first so a
+    # config without a routing.rules array (older/hand-edited configs) can't
+    # crash jq ("Cannot iterate over null") and blank out the whole config.
+    if ! jq '(.routing.rules) //= []
+             | del(.routing.rules[] | select((.outboundTag // "") | startswith("out-")))' \
+             "$XRAY_CFG" > "$tmp"; then
+        log_error "读取 Xray 路由配置失败，已放弃写入（保留原配置）。"; rm -f "$tmp"; return 1
+    fi
 
     # Set domainStrategy if any geosite/domain rules exist
     local needs_dns=0
@@ -91,8 +95,11 @@ _route_apply_to_xray() {
         && needs_dns=1
     if (( needs_dns )); then
         local tmp2; tmp2=$(mktemp)
-        jq '.routing.domainStrategy = "IPIfNonMatch"' "$tmp" > "$tmp2"
-        mv "$tmp2" "$tmp"
+        if jq '.routing.domainStrategy = "IPIfNonMatch"' "$tmp" > "$tmp2"; then
+            mv "$tmp2" "$tmp"
+        else
+            rm -f "$tmp2"
+        fi
     fi
 
     # Build PSM rule array
@@ -106,14 +113,16 @@ _route_apply_to_xray() {
 
     # Insert PSM rules right after the api rule (highest routing priority)
     local tmp2; tmp2=$(mktemp)
-    jq --argjson pr "$psm_rules" '
+    if ! jq --argjson pr "$psm_rules" '
         .routing.rules =
             [.routing.rules[]? | select(.outboundTag == "api")]
             + $pr
             + [.routing.rules[]? | select(.outboundTag != "api")]
-    ' "$tmp" > "$tmp2"
-    mv "$tmp2" "$XRAY_CFG"
+    ' "$tmp" > "$tmp2"; then
+        log_error "生成 Xray 路由规则失败，已放弃写入（保留原配置）。"; rm -f "$tmp" "$tmp2"; return 1
+    fi
     rm -f "$tmp"
+    _xray_write_cfg_checked "$tmp2"
 }
 
 # ── Interactive: add rule ─────────────────────────────────────────────────────

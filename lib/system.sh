@@ -163,7 +163,7 @@ EOF
 
 # ── Timezone ──────────────────────────────────────────────────────────────────
 set_timezone() {
-    ask tz "时区" "Asia/Shanghai"
+    local tz; ask tz "时区" "Asia/Shanghai"
     timedatectl set-timezone "$tz" 2>/dev/null \
         || { ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime && echo "$tz" > /etc/timezone; }
     log_ok "时区已设置为 $tz"
@@ -265,7 +265,9 @@ firewall_open_port() {
             ip6tables -C INPUT -p "$p" --dport "$port" -j ACCEPT 2>/dev/null \
                 || ip6tables -I INPUT -p "$p" --dport "$port" -j ACCEPT 2>/dev/null || true
         done
-        # Persist rules across reboots
+        # Persist rules across reboots (RHEL family: /etc/sysconfig always
+        # exists; Debian family: create /etc/iptables so the save can land)
+        [[ -d /etc/sysconfig ]] || mkdir -p /etc/iptables 2>/dev/null || true
         iptables-save  > /etc/sysconfig/iptables 2>/dev/null \
             || iptables-save  > /etc/iptables/rules.v4 2>/dev/null || true
         ip6tables-save > /etc/iptables/rules.v6  2>/dev/null || true

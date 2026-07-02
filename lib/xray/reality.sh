@@ -202,17 +202,25 @@ reality_add_node() {
         [[ -z "$domain" ]] && { log_error "域名不能为空。"; return 1; }
 
         source "$LIB_DIR/cert.sh"
-        cert_ensure_domain "$domain" \
+        if cert_ensure_domain "$domain" \
             "Reality 本身不需要证书。这个证书用于本机 HTTPS 伪装站点
   (127.0.0.1:8443)，探测者连接你的服务器时会看到它。
-  如果没有证书，伪装会表现为普通 TLS 错误，较容易被识别。" || {
-            log_warn "将继续安装节点，但伪装站点质量会降低。"
-        }
-
-        server_names_raw="$domain"
-        # dest receives raw TLS stream → must be an HTTPS (TLS-capable) backend
-        dest="127.0.0.1:8443"
-        log_info "伪装目标已设置为 127.0.0.1:8443（本机 HTTPS 站点）"
+  如果没有证书，伪装会表现为普通 TLS 错误，较容易被识别。"; then
+            server_names_raw="$domain"
+            # dest receives raw TLS stream → must be an HTTPS (TLS-capable) backend
+            dest="127.0.0.1:8443"
+            log_info "伪装目标已设置为 127.0.0.1:8443（本机 HTTPS 站点）"
+        else
+            # 没有证书时 nginx 不会创建 8443 伪装站（见 nginx_setup_camouflage_site），
+            # 若仍把 dest 指向 127.0.0.1:8443 会得到 connection refused，反而暴露。
+            # 因此回退到公共域名伪装：dest 指向真实存在的外部 HTTPS 站点。
+            log_warn "无证书，本机 HTTPS 伪装站点无法建立，已回退为公共域名伪装。"
+            own_domain=0
+            server_names_raw="$REALITY_DEFAULT_SERVER_NAME"
+            dest="$REALITY_DEFAULT_DEST"
+            domain="$server_names_raw"
+            log_info "伪装目标已回退为 $dest（公共域名）"
+        fi
     else
         own_domain=0
         ask server_names_raw "伪装 SNI（例如 www.apple.com）"     "$REALITY_DEFAULT_SERVER_NAME"

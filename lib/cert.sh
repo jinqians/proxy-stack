@@ -15,6 +15,10 @@ acme_install() {
     local email; ask email "证书注册邮箱" ""
     [[ -z "$email" ]] && email="admin@$(hostname -f 2>/dev/null || echo 'example.com')"
 
+    # acme.sh 用 crontab 做自动续期——RHEL 系最小安装没有 cronie，装好 acme.sh
+    # 也不会续期（安装器只是打印一行警告），这里先保证 cron 可用。
+    ensure_cron || true
+
     # acme.sh installer expects  email=xxx  (no dashes), not --email xxx
     curl -fsSL "$ACME_INSTALL_URL" | sh -s "email=$email"
 
@@ -68,6 +72,42 @@ _fw_close80() {
     esac
 }
 
+# ── Let's Encrypt 限流检测与处理 ──────────────────────────────────────────────
+# 判断 acme.sh 输出是否命中「按完全相同域名集合」的签发限流（7 天 5 张）。
+_cert_is_ratelimited() {
+    grep -qiE 'rateLimited|too many certificates' <<<"${1:-}"
+}
+
+# 命中限流时给出针对性提示，并可选切换 ZeroSSL 重试一次。
+# 用法：_cert_ratelimit_handle <安装用域名> <acme输出> <acme --issue 的参数...>
+# 换 CA 重试成功返回 0，否则返回 1。
+_cert_ratelimit_handle() {
+    local domain="$1" output="$2"; shift 2
+    log_error "$domain 触发 Let's Encrypt 限流（rateLimited / too many certificates）。"
+    log_warn "这是按「完全相同域名集合」计算的签发限制：同一组域名 7 天内最多 5 张，"
+    log_warn "与验证方式无关——改用 DNS-01 也无法绕过，因此不再自动切换验证方式重试。"
+    # 尽量从输出中提取解封时间
+    local retry
+    retry=$(grep -oiE 'retry after[^,"]*' <<<"$output" | head -1)
+    [[ -n "$retry" ]] && log_warn "Let's Encrypt 解封时间：$retry"
+    echo -e "\n  两条出路："
+    echo -e "    A. 等待上述解封时间后再签发"
+    echo -e "    B. 换一家 CA（ZeroSSL / Google Trust Services 配额独立）\n"
+    if ask_yn "是否立即切换到 ZeroSSL 重试？" N; then
+        _acme --set-default-ca --server zerossl \
+            || { log_error "切换默认 CA 到 ZeroSSL 失败。"; return 1; }
+        if _acme --issue "$@"; then
+            cert_install_domain "$domain"
+            return 0
+        fi
+        log_error "ZeroSSL 签发失败。"
+        log_warn "ZeroSSL 需要已注册的账户邮箱，可先运行："
+        echo -e "    acme.sh --register-account -m <你的邮箱> --server zerossl"
+        log_warn "注册后重新签发即可。"
+    fi
+    return 1
+}
+
 # ── Shared HTTP-01 issue logic ────────────────────────────────────────────────
 # Issues a cert for $1, choosing webroot (Nginx running) or standalone.
 # Returns 0 and installs to SSL_DIR on success.
@@ -76,6 +116,8 @@ _cert_http01_issue() {
     local webroot="/var/www/${domain}"
     mkdir -p "$webroot"
     local issued=0
+    local acme_out=""       # 捕获 acme.sh 输出，用于识别限流
+    local issue_args=()     # 记录本次签发参数，供限流后换 CA 重试复用
 
     if is_installed nginx && svc_is_active nginx; then
         # Nginx is running → use webroot (no need to touch port 80)
@@ -89,7 +131,10 @@ server {
 }
 NGINXEOF
         nginx -s reload 2>/dev/null || true
-        _acme --issue -d "$domain" --webroot "$webroot" && issued=1
+        issue_args=(-d "$domain" --webroot "$webroot")
+        local rc=0
+        acme_out=$(set -o pipefail; _acme --issue "${issue_args[@]}" 2>&1 | tee /dev/stderr) || rc=$?
+        (( rc == 0 )) && issued=1
         rm -f "$http_conf"
         nginx -s reload 2>/dev/null || true
     else
@@ -102,7 +147,10 @@ NGINXEOF
         local fw_tag; fw_tag=$(_fw_open80)
         [[ -n "$fw_tag" ]] && log_info "已临时开放本机防火墙端口 80（$fw_tag）"
 
-        _acme --issue -d "$domain" --standalone && issued=1
+        issue_args=(-d "$domain" --standalone)
+        local rc=0
+        acme_out=$(set -o pipefail; _acme --issue "${issue_args[@]}" 2>&1 | tee /dev/stderr) || rc=$?
+        (( rc == 0 )) && issued=1
 
         if [[ -n "$fw_tag" ]]; then
             _fw_close80 "$fw_tag"
@@ -118,6 +166,13 @@ NGINXEOF
     if (( issued )); then
         cert_install_domain "$domain"
         return 0
+    fi
+
+    # 先判断是否命中 Let's Encrypt 限流——限流与验证方式无关，换 DNS-01 也绕不过，
+    # 因此这里直接给出针对性提示并跳过下面的「切 DNS-01 重试」分支。
+    if _cert_is_ratelimited "$acme_out"; then
+        _cert_ratelimit_handle "$domain" "$acme_out" "${issue_args[@]}" && return 0
+        return 1
     fi
 
     log_error "$domain 的证书签发失败。"
@@ -197,8 +252,16 @@ cert_issue_dns() {
         *) log_error "无效选项"; return 1 ;;
     esac
 
-    _acme --issue --dns "$dns_plugin" -d "$domain" $extra_args \
-        || { log_error "签发失败"; return 1; }
+    local dns_out rc=0
+    dns_out=$(set -o pipefail; _acme --issue --dns "$dns_plugin" -d "$domain" $extra_args 2>&1 | tee /dev/stderr) || rc=$?
+    if (( rc != 0 )); then
+        # 限流时给针对性提示并可选换 ZeroSSL 重试；否则按普通失败处理
+        if _cert_is_ratelimited "$dns_out"; then
+            _cert_ratelimit_handle "${domain#\*.}" "$dns_out" \
+                --dns "$dns_plugin" -d "$domain" $extra_args && return 0
+        fi
+        log_error "签发失败"; return 1
+    fi
 
     cert_install_domain "${domain#\*.}"
 }
@@ -243,10 +306,29 @@ cert_install_domain() {
 # ── Renew ─────────────────────────────────────────────────────────────────────
 cert_renew() {
     local domain; ask domain "域名（留空则续期全部）" ""
+    # 默认普通续期，由 acme.sh 自行判断是否到期；强制续期会忽略有效期，易触发限流
+    local force=""
+    ask_yn "是否强制续期（忽略有效期，注意 Let's Encrypt 限流）？" N && force="--force"
+    # 普通续期时 acme.sh 对「未到续期时间」返回 2，需吞掉，避免 errexit 中断菜单
+    local rc=0
     if [[ -z "$domain" ]]; then
-        _acme --renew-all --force
+        _acme --renew-all $force || {
+            rc=$?
+            if (( rc == 2 )); then
+                log_info "证书未到续期时间，已跳过（需要可选强制续期）。"
+            else
+                log_error "续期失败"
+            fi
+        }
     else
-        _acme --renew -d "$domain" --force
+        _acme --renew -d "$domain" $force || {
+            rc=$?
+            if (( rc == 2 )); then
+                log_info "证书未到续期时间，已跳过（需要可选强制续期）。"
+            else
+                log_error "续期失败"
+            fi
+        }
     fi
 }
 
@@ -267,9 +349,11 @@ cert_list() {
 cert_delete() {
     cert_list
     local domain; ask domain "要删除的域名"
+    # 域名为空时直接返回，避免 rm -rf 在空值下清空整个证书目录
+    [[ -z "$domain" ]] && { log_error "域名不能为空。"; return 1; }
     _acme --remove -d "$domain" 2>/dev/null
     ask_yn "同时删除本地文件 $SSL_DIR/$domain？" N \
-        && rm -rf "$SSL_DIR/$domain"
+        && rm -rf "${SSL_DIR:?}/${domain:?}"
     log_ok "证书已删除。"
 }
 
@@ -337,8 +421,14 @@ cert_ensure_domain() {
                 4) dns_plugin="dns_manual" ;;
                 *) log_error "无效选项"; return 1 ;;
             esac
-            if _acme --issue --dns "$dns_plugin" -d "$domain"; then
+            local dns_out rc=0
+            dns_out=$(set -o pipefail; _acme --issue --dns "$dns_plugin" -d "$domain" 2>&1 | tee /dev/stderr) || rc=$?
+            if (( rc == 0 )); then
                 cert_install_domain "$domain"
+            elif _cert_is_ratelimited "$dns_out"; then
+                # 限流与验证方式无关，给针对性提示并可选换 ZeroSSL 重试
+                _cert_ratelimit_handle "$domain" "$dns_out" \
+                    --dns "$dns_plugin" -d "$domain" || return 1
             else
                 log_error "$domain 的证书签发失败。"
                 return 1

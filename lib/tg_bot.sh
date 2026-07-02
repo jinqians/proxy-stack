@@ -197,7 +197,8 @@ _tgbot_bar() {
     local used="$1" total="$2" width=12
     local pct=0; (( total > 0 )) && pct=$(( used * 100 / total ))
     (( pct > 100 )) && pct=100
-    local filled=$(( pct * width / 100 )) empty=$(( width - filled ))
+    local filled=$(( pct * width / 100 ))
+    local empty=$(( width - filled ))
     local bar=""
     for ((i=0; i<filled; i++)); do bar+="█"; done
     for ((i=0; i<empty;  i++)); do bar+="░"; done

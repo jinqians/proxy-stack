@@ -158,6 +158,7 @@ cf_ddns_install_cron() {
         cron_expr="*/${interval} * * * *"
     fi
 
+    ensure_cron || true   # RHEL 系最小安装没有 cronie，/etc/cron.d 会被无声忽略
     echo "${cron_expr} root ${PSM_ROOT}/manager.sh --ddns-update >> /var/log/psm-ddns.log 2>&1" \
         > /etc/cron.d/psm-ddns
     state_set "ddns_interval" "$interval"

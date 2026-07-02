@@ -223,8 +223,12 @@ _outb_apply_to_xray() {
     local count; count=$(echo "$nodes" | jq 'length')
 
     local tmp; tmp=$(mktemp)
-    # Remove all PSM-managed outbounds (tag starts with "out-")
-    jq 'del(.outbounds[] | select(.tag | startswith("out-")))' "$XRAY_CFG" > "$tmp"
+    # Remove all PSM-managed outbounds (tag starts with "out-"). Guard the tag
+    # with // "" — a tagless outbound (e.g. a "dns" outbound) would otherwise
+    # crash jq (startswith needs a string) and blank out the whole config.
+    if ! jq 'del(.outbounds[] | select((.tag // "") | startswith("out-")))' "$XRAY_CFG" > "$tmp"; then
+        log_error "读取 Xray 出站配置失败，已放弃写入（保留原配置）。"; rm -f "$tmp"; return 1
+    fi
 
     local i
     for (( i=0; i<count; i++ )); do
@@ -232,12 +236,15 @@ _outb_apply_to_xray() {
         local xray_ob; xray_ob=$(_outb_build_xray "$entry")
         if [[ -n "$xray_ob" ]]; then
             local tmp2; tmp2=$(mktemp)
-            jq --argjson ob "$xray_ob" '.outbounds += [$ob]' "$tmp" > "$tmp2"
-            mv "$tmp2" "$tmp"
+            if jq --argjson ob "$xray_ob" '.outbounds += [$ob]' "$tmp" > "$tmp2"; then
+                mv "$tmp2" "$tmp"
+            else
+                rm -f "$tmp2"
+            fi
         fi
     done
 
-    mv "$tmp" "$XRAY_CFG"
+    _xray_write_cfg_checked "$tmp"
 }
 
 # ── Interactive: add outbound ─────────────────────────────────────────────────

@@ -79,15 +79,49 @@ _docker_offer_expose() {
 }
 
 # ── Install Docker ────────────────────────────────────────────────────────────
+# get.docker.com does NOT support Amazon Linux ("Unsupported distribution
+# 'amzn'") or Oracle Linux ('ol'), and its Rocky/Alma handling has been flaky —
+# so only the Debian family goes through the official script. The RHEL family
+# uses Docker's own centos repo (the documented path for CentOS/Rocky/Alma/RHEL
+# and the community-standard one for Oracle), and Amazon Linux installs the
+# `docker` package Amazon maintains in its base repos.
 docker_install() {
     if is_installed docker; then
         log_info "Docker 已安装：$(docker --version)"
         return 0
     fi
-    log_step "正在通过官方脚本安装 Docker..."
-    curl -fsSL https://get.docker.com | sh
+    detect_os
+    case "$OS_ID" in
+        amzn)
+            log_step "正在从 Amazon Linux 仓库安装 Docker..."
+            pkg_install docker || { log_error "Docker 安装失败"; return 1; }
+            ;;
+        centos|rhel|rocky|almalinux|ol|fedora)
+            log_step "正在添加 Docker CE 官方仓库并安装..."
+            local repo_os="centos"
+            [[ "$OS_ID" == "fedora" ]] && repo_os="fedora"
+            [[ "$OS_ID" == "rhel"   ]] && repo_os="rhel"
+            local pkg_cmd repo_url
+            pkg_cmd=$(_rhel_pkg_cmd)
+            repo_url="https://download.docker.com/linux/${repo_os}/docker-ce.repo"
+            if ! [[ -f /etc/yum.repos.d/docker-ce.repo ]]; then
+                if ! "$pkg_cmd" config-manager --add-repo "$repo_url" 2>/dev/null; then
+                    "$pkg_cmd" install -y dnf-plugins-core 2>/dev/null || true
+                    "$pkg_cmd" config-manager --add-repo "$repo_url" 2>/dev/null \
+                        || curl -fsSL "$repo_url" -o /etc/yum.repos.d/docker-ce.repo \
+                        || { log_error "无法添加 Docker CE 仓库"; return 1; }
+                fi
+            fi
+            "$pkg_cmd" install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin \
+                || { log_error "Docker 安装失败"; return 1; }
+            ;;
+        *)
+            log_step "正在通过官方脚本安装 Docker..."
+            curl -fsSL https://get.docker.com | sh || { log_error "Docker 安装失败"; return 1; }
+            ;;
+    esac
     svc_enable docker
-    svc_start docker
+    svc_start docker || { log_error "Docker 服务启动失败"; return 1; }
     log_ok "Docker 已安装：$(docker --version)"
 }
 
@@ -101,17 +135,32 @@ docker_install_compose() {
         return 0
     fi
     log_step "正在安装 Docker Compose 插件..."
-    detect_os
-    case "$OS_ID" in
-        ubuntu|debian)
-            pkg_install docker-compose-plugin 2>/dev/null \
-                || pip3 install docker-compose 2>/dev/null
-            ;;
-        centos|rhel)
-            yum install -y docker-compose-plugin 2>/dev/null \
-                || pip3 install docker-compose 2>/dev/null
-            ;;
-    esac
+    # Family-wide package attempt first (works wherever the docker-ce repo or
+    # the distro provides it) …
+    pkg_install docker-compose-plugin 2>/dev/null || true
+
+    # … then a universal fallback: the official compose binary as a CLI plugin.
+    # This covers Amazon Linux (no docker-compose-plugin package) and any other
+    # distro/repo combination that lacks the package. Arch-aware.
+    if ! docker compose version &>/dev/null; then
+        local arch plugin_dir
+        case "$(uname -m)" in
+            x86_64)  arch="x86_64"  ;;
+            aarch64) arch="aarch64" ;;
+            armv7l)  arch="armv7"   ;;
+            *)       arch="" ;;
+        esac
+        if [[ -n "$arch" ]]; then
+            plugin_dir="/usr/local/lib/docker/cli-plugins"
+            mkdir -p "$plugin_dir"
+            log_step "正在下载 Docker Compose 官方二进制（${arch}）..."
+            curl -fsSL \
+                "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${arch}" \
+                -o "$plugin_dir/docker-compose" 2>/dev/null \
+                && chmod +x "$plugin_dir/docker-compose"
+        fi
+    fi
+
     docker compose version &>/dev/null && log_ok "Compose 插件已安装。" \
         || log_error "安装可能失败，请手动检查。"
 }
@@ -120,10 +169,15 @@ docker_uninstall() {
     ask_yn "是否删除 Docker？（所有容器和镜像将丢失）" N || return 0
     detect_os
     case "$OS_ID" in
-        ubuntu|debian) apt-get purge -y docker-ce docker-ce-cli containerd.io docker-compose-plugin ;;
-        centos|rhel)   yum remove -y docker-ce docker-ce-cli containerd.io ;;
+        ubuntu|debian|raspbian)
+            apt-get purge -y docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>/dev/null || true ;;
+        amzn)
+            "$(_rhel_pkg_cmd)" remove -y docker 2>/dev/null || true ;;
+        centos|rhel|rocky|almalinux|ol|fedora)
+            "$(_rhel_pkg_cmd)" remove -y docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>/dev/null || true ;;
     esac
     rm -rf /var/lib/docker /etc/docker
+    rm -f /usr/local/lib/docker/cli-plugins/docker-compose
     log_ok "Docker 已删除。"
 }
 
