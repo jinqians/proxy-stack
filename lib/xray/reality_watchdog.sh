@@ -6,9 +6,30 @@
 # that dest. If a camouflage target gets rate-limited/blocked/goes down, the
 # node's handshake starts failing or looks suspicious. This module lets a
 # Reality node have several candidate (SNI, dest) pairs, periodically health-
-# checks the active one via a real TLS 1.3 handshake, and atomically switches
-# to a healthy candidate (updating both the Xray inbound and, if the node is
-# behind Nginx SNI routing, the Nginx SNI map) when it stays unhealthy.
+# checks the active one, and atomically switches to a healthy candidate
+# (updating both the Xray inbound and, if the node is behind Nginx SNI routing,
+# the Nginx SNI map) when it stays unhealthy.
+#
+# Health checking is layered, because a plain server→dest TLS handshake can
+# report "healthy" while real clients still cannot connect:
+#
+#   Layer 1  Reality listener liveness — probe the local Xray inbound
+#            (127.0.0.1:port) so a dead Xray / unbound port is caught, not just
+#            a dead dest. Switching camouflage targets can't fix this, so it is
+#            reported as a node-wide warning rather than a switch trigger.
+#
+#   Layer 2  dest Reality-fitness — the server→dest TLS 1.3 handshake, now
+#            additionally asserting the two hard REALITY requirements the old
+#            check ignored: X25519 key exchange and (soft) h2 ALPN, plus a
+#            handshake-latency ceiling. A dest that is merely reachable but not
+#            a valid REALITY dest no longer counts as healthy.
+#
+#   Layer 3  client-vantage reachability (optional) — the server can never see
+#            GFW/ISP blocking of a specific SNI on the client's path, which is
+#            the most common reason a "healthy" node is unusable. If the user
+#            supplies an external probe (RWD_CLIENT_PROBE), its verdict for the
+#            active candidate feeds the switch decision. A passive scan of
+#            Xray's error.log provides best-effort visibility without one.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
@@ -19,6 +40,20 @@ RWD_LOG="${LOG_DIR}/reality_watchdog.log"
 PSM_RWD_SVC="/etc/systemd/system/psm-reality-watchdog.service"
 PSM_RWD_TIMER="/etc/systemd/system/psm-reality-watchdog.timer"
 RWD_FAIL_THRESHOLD=2
+
+# Handshakes slower than this (ms) are flagged as a soft "slow" warning — a
+# rate-limited/overloaded dest degrades long before it fully times out.
+RWD_LATENCY_CEIL_MS=6000
+
+# Xray error log, scanned passively for REALITY handshake rejections.
+RWD_XRAY_ERROR_LOG="${RWD_XRAY_ERROR_LOG:-/var/log/xray/error.log}"
+
+# Optional Layer 3 hook: absolute path to a user-provided executable that tests
+# whether the node is actually reachable from a real client's network (i.e. from
+# outside, where GFW/ISP SNI blocking is visible). Called as:
+#     <probe> <tag> <server_name> <public_port>
+# Exit 0 = reachable, non-zero = blocked/unreachable. Unset by default.
+RWD_CLIENT_PROBE="${RWD_CLIENT_PROBE:-}"
 
 # ── State helpers ─────────────────────────────────────────────────────────────
 _rwd_init() {
@@ -129,6 +164,33 @@ _rwd_tls13_negotiated() {
     grep -Eq "New, TLSv1\.3|Protocol *: TLSv1\.3|Protocol version: TLSv1\.3" "$out_file"
 }
 
+# REALITY steals the dest's TLS handshake and embeds its own auth inside the
+# X25519 key share, so the dest MUST negotiate a pure X25519 group. A dest that
+# picks P-256, or a post-quantum hybrid like X25519MLKEM768, breaks REALITY auth
+# for real clients even though a plain openssl handshake succeeds. If openssl
+# didn't report the group at all (very old build), we can't judge — don't fail.
+_rwd_x25519_negotiated() {
+    local out_file="$1" line
+    line=$(grep -Ei "Server Temp Key|Negotiated TLS1\.3 group" "$out_file")
+    [[ -z "$line" ]] && return 0
+    printf '%s\n' "$line" | grep -Eqi "X25519(,| |$)"
+}
+
+# h2 ALPN is what browsers (and thus well-behaved REALITY clients) negotiate; a
+# dest that only offers http/1.1 is a weaker fingerprint. Soft signal only.
+_rwd_h2_negotiated() {
+    local out_file="$1"
+    grep -Eqi "ALPN protocol: *h2($|[^-c])" "$out_file"
+}
+
+# Millisecond wall clock. GNU date supports %3N; fall back to whole seconds on
+# builds that don't so the latency ceiling still works (coarsely).
+_rwd_now_ms() {
+    local t; t=$(date +%s%3N 2>/dev/null)
+    [[ "$t" =~ ^[0-9]+$ ]] && { printf '%s' "$t"; return; }
+    printf '%s' "$(( $(date +%s) * 1000 ))"
+}
+
 _rwd_cert_trusted() {
     local out_file="$1"
     grep -Eq "Verify return code: 0 \\(ok\\)|Verification: OK" "$out_file"
@@ -158,9 +220,14 @@ _rwd_s_client_tls13() {
     fi
 }
 
+# Layer 2. Hard failures set RWD_CHECK_REASON and return 1. On success (return
+# 0) any non-fatal degradations are left in RWD_CHECK_WARN (comma-separated) and
+# the handshake round-trip in RWD_CHECK_RTT_MS.
 _rwd_check_dest() {
     local dest="$1" sni="$2"
     RWD_CHECK_REASON=""
+    RWD_CHECK_WARN=""
+    RWD_CHECK_RTT_MS=""
     if ! _rwd_sni_resolves "$sni"; then
         RWD_CHECK_REASON="sni_dns_failed"
         return 1
@@ -175,12 +242,15 @@ _rwd_check_dest() {
     connect="${host}:${port}"
     [[ "$host" == *:* ]] && connect="[${host}]:${port}"
 
-    local out_file cert_file rc
+    local out_file cert_file rc start_ms end_ms
     out_file=$(mktemp) || { RWD_CHECK_REASON="tmp_failed"; return 1; }
     cert_file=$(mktemp) || { rm -f "$out_file"; RWD_CHECK_REASON="tmp_failed"; return 1; }
 
+    start_ms=$(_rwd_now_ms)
     _rwd_s_client_tls13 "$connect" "$sni" </dev/null >"$out_file" 2>&1
     rc=$?
+    end_ms=$(_rwd_now_ms)
+    RWD_CHECK_RTT_MS=$(( end_ms - start_ms ))
 
     if _rwd_openssl_timed_out "$rc"; then
         RWD_CHECK_REASON="tls_timeout"
@@ -190,6 +260,8 @@ _rwd_check_dest() {
         RWD_CHECK_REASON="tls13_unsupported"
     elif ! _rwd_tls13_negotiated "$out_file"; then
         RWD_CHECK_REASON="tls13_failed"
+    elif ! _rwd_x25519_negotiated "$out_file"; then
+        RWD_CHECK_REASON="no_x25519"
     elif ! _rwd_extract_leaf_cert "$out_file" "$cert_file"; then
         RWD_CHECK_REASON="no_certificate"
     elif ! _rwd_cert_matches_sni "$cert_file" "$sni"; then
@@ -197,12 +269,68 @@ _rwd_check_dest() {
     elif ! _rwd_cert_trusted "$out_file"; then
         RWD_CHECK_REASON="cert_untrusted"
     else
+        _rwd_h2_negotiated "$out_file" || RWD_CHECK_WARN+="${RWD_CHECK_WARN:+,}no_h2"
+        if [[ "$RWD_CHECK_RTT_MS" =~ ^[0-9]+$ ]] && (( RWD_CHECK_RTT_MS > RWD_LATENCY_CEIL_MS )); then
+            RWD_CHECK_WARN+="${RWD_CHECK_WARN:+,}slow_${RWD_CHECK_RTT_MS}ms"
+        fi
         rm -f "$out_file" "$cert_file"
         return 0
     fi
 
     rm -f "$out_file" "$cert_file"
     return 1
+}
+
+# Layer 1. Probe the node's own Xray REALITY listener at 127.0.0.1:port. A live
+# inbound accepts the TCP connection (then transparently proxies our un-authed
+# hello to dest); a dead Xray or unbound port is refused at TCP. Works for both
+# Nginx-routed (127.0.0.1:port) and direct (0.0.0.0:port) nodes, since loopback
+# is bound in either case.
+#
+# We only treat a TCP-level refusal as "listener down". A slow/dead dest makes
+# the TLS handshake time out or error even though Xray itself is up and
+# accepting — that is Layer 2's job to catch, so it must not masquerade as a
+# listener failure here.
+_rwd_probe_listener() {
+    local port="$1" sni="$2"
+    RWD_LISTENER_REASON=""
+    [[ "$port" =~ ^[0-9]+$ ]] || { RWD_LISTENER_REASON="bad_port"; return 1; }
+
+    local out_file
+    out_file=$(mktemp) || { RWD_LISTENER_REASON="tmp_failed"; return 1; }
+    _rwd_s_client_tls13 "127.0.0.1:${port}" "$sni" </dev/null >"$out_file" 2>&1
+
+    if _rwd_tcp_failed "$out_file"; then
+        RWD_LISTENER_REASON="listener_down"
+        rm -f "$out_file"
+        return 1
+    fi
+
+    rm -f "$out_file"
+    return 0
+}
+
+# Layer 3 (optional). Delegate to a user-supplied external probe that tests the
+# node from a real client's vantage point. Returns non-zero (with a reason) only
+# when the probe is configured AND reports the node unreachable.
+_rwd_client_probe() {
+    local tag="$1" sni="$2" public_port="$3"
+    RWD_PROBE_REASON=""
+    [[ -n "$RWD_CLIENT_PROBE" && -x "$RWD_CLIENT_PROBE" ]] || return 0
+    if ! "$RWD_CLIENT_PROBE" "$tag" "$sni" "$public_port" >/dev/null 2>&1; then
+        RWD_PROBE_REASON="client_probe_failed"
+        return 1
+    fi
+    return 0
+}
+
+# Best-effort passive advisory: count recent REALITY-rejection lines in Xray's
+# error log. Attribution to a specific inbound is unreliable, so this only feeds
+# the log for the operator, never a switch. Echoes a count (0 if none/no log).
+_rwd_recent_reality_errors() {
+    [[ -r "$RWD_XRAY_ERROR_LOG" ]] || { printf '0'; return; }
+    tail -n 500 "$RWD_XRAY_ERROR_LOG" 2>/dev/null \
+        | grep -Eic "REALITY.*(invalid|reject|fail|forbidden)" || true
 }
 
 # ── Candidate management ───────────────────────────────────────────────────────
@@ -329,27 +457,72 @@ rwd_check_node() {
     local count; count=$(echo "$entry" | jq '.candidates | length')
     (( count == 0 )) && return 0
 
-    local i
+    local active; active=$(echo "$entry" | jq -r '.active')
+
+    # Node topology: Xray listens on <port> (loopback-reachable either way);
+    # clients reach it on <public_port> (443 behind Nginx, else the same port).
+    local node; node=$(_reality_get_by_tag "$tag")
+    local nport public_port
+    nport=$(echo "$node" | jq -r '.port')
+    public_port=$(echo "$node" | jq -r \
+        '.public_port // (if (.listen_addr // "0.0.0.0") == "127.0.0.1" then 443 else .port end)')
+
+    # ── Layer 2: per-candidate dest health ───────────────────────────────────
+    local i active_dest_ok=0
     for (( i=0; i<count; i++ )); do
-        local sn dest ok reason
+        local sn dest ok reason warn rtt
         sn=$(echo "$entry"   | jq -r ".candidates[$i].server_name")
         dest=$(echo "$entry" | jq -r ".candidates[$i].dest")
         if _rwd_check_dest "$dest" "$sn"; then
             ok=1
             reason=""
+            warn="$RWD_CHECK_WARN"
             entry=$(echo "$entry" | jq ".candidates[$i].consec_fail = 0")
+            [[ "$sn" == "$active" ]] && active_dest_ok=1
         else
             ok=0
             reason="${RWD_CHECK_REASON:-unknown}"
+            warn=""
             entry=$(echo "$entry" | jq ".candidates[$i].consec_fail += 1")
         fi
-        echo "${now} tag=${tag} sni=${sn} dest=${dest} ok=${ok}${reason:+ reason=${reason}}" >> "$RWD_LOG"
+        rtt="${RWD_CHECK_RTT_MS:-}"
+        entry=$(echo "$entry" | jq --arg w "$warn" --arg r "$rtt" \
+            ".candidates[$i].last_warn = \$w | .candidates[$i].last_rtt_ms = \$r")
+        echo "${now} tag=${tag} sni=${sn} dest=${dest} ok=${ok}${rtt:+ rtt=${rtt}ms}${reason:+ reason=${reason}}${warn:+ warn=${warn}}" >> "$RWD_LOG"
     done
     entry=$(echo "$entry" | jq --arg now "$now" '.last_check = $now')
 
+    # ── Layer 1: local Xray REALITY listener liveness (node-wide advisory) ────
+    # Switching camouflage targets can't revive a dead Xray, so this is reported
+    # for the operator rather than counted toward a switch.
+    if _rwd_probe_listener "$nport" "$active"; then
+        entry=$(echo "$entry" | jq '.listener_ok = true | .listener_reason = ""')
+    else
+        entry=$(echo "$entry" | jq --arg r "${RWD_LISTENER_REASON:-unknown}" \
+            '.listener_ok = false | .listener_reason = $r')
+        echo "${now} tag=${tag} WARN Xray REALITY 监听异常（${RWD_LISTENER_REASON:-unknown}，127.0.0.1:${nport}）——切换伪装目标无法修复，请检查 Xray 是否运行" >> "$RWD_LOG"
+    fi
+
+    # ── Layer 3: optional external client-vantage probe for the active SNI ────
+    # The only layer that can see GFW/ISP blocking of a specific SNI on the
+    # client's path. A failure counts against the active candidate (at most once
+    # per cycle) so persistent client-side blocking triggers a switch.
+    if ! _rwd_client_probe "$tag" "$active" "$public_port"; then
+        if (( active_dest_ok == 1 )); then
+            entry=$(echo "$entry" | jq --arg sn "$active" \
+                '(.candidates[] | select(.server_name == $sn) | .consec_fail) += 1')
+        fi
+        echo "${now} tag=${tag} sni=${active} WARN 外部测活失败（${RWD_PROBE_REASON:-unknown}）——客户端侧可能被封锁，计入失败以考虑切换" >> "$RWD_LOG"
+    fi
+
+    # ── Passive advisory: recent REALITY rejections in Xray's error log ──────
+    local rerr; rerr=$(_rwd_recent_reality_errors)
+    if [[ "$rerr" =~ ^[0-9]+$ ]] && (( rerr > 0 )); then
+        echo "${now} tag=${tag} INFO Xray error.log 近期出现 ${rerr} 条 REALITY 拒绝/异常记录（全局信号，非本节点专属）" >> "$RWD_LOG"
+    fi
+
     # Decide whether the active candidate needs replacing
-    local active fail
-    active=$(echo "$entry" | jq -r '.active')
+    local fail
     fail=$(echo "$entry" | jq -r --arg sn "$active" '[.candidates[] | select(.server_name == $sn)][0].consec_fail // 0')
 
     if (( fail >= RWD_FAIL_THRESHOLD )); then
@@ -392,13 +565,27 @@ rwd_status() {
         local entry; entry=$(_rwd_get_entry "$tag")
         local active last_check; active=$(echo "$entry" | jq -r '.active'); last_check=$(echo "$entry" | jq -r '.last_check')
         echo -e "\n  ${CYAN}节点 ${tag}${NC}  最近检查：${last_check:-（未检查）}"
-        echo "$entry" | jq -r '.candidates[] | "\(.server_name)\t\(.dest)\t\(.consec_fail)"' \
-            | while IFS=$'\t' read -r sn dest fail; do
+
+        # Layer 1 listener health line (node-wide).
+        local listener_ok listener_reason
+        listener_ok=$(echo "$entry" | jq -r '.listener_ok // empty')
+        listener_reason=$(echo "$entry" | jq -r '.listener_reason // ""')
+        if [[ "$listener_ok" == "false" ]]; then
+            echo -e "    Xray 监听：${RED}异常（${listener_reason:-unknown}）——切换目标无法修复，请检查 Xray${NC}"
+        elif [[ "$listener_ok" == "true" ]]; then
+            echo -e "    Xray 监听：${GREEN}正常${NC}"
+        fi
+
+        echo "$entry" | jq -r '.candidates[] | "\(.server_name)\t\(.dest)\t\(.consec_fail)\t\(.last_rtt_ms // "")\t\(.last_warn // "")"' \
+            | while IFS=$'\t' read -r sn dest fail rtt warn; do
                 local mark="  "
                 [[ "$sn" == "$active" ]] && mark="${GREEN}●${NC} "
                 local health="${GREEN}健康${NC}"
                 (( fail > 0 )) && health="${RED}失败 ${fail} 次${NC}"
-                printf "    %b%-28s %-28s %b\n" "$mark" "$sn" "$dest" "$(echo -e "$health")"
+                local extra=""
+                [[ -n "$rtt"  ]] && extra="${extra} ${rtt}ms"
+                [[ -n "$warn" ]] && extra="${extra} ${YELLOW}[${warn}]${NC}"
+                printf "    %b%-28s %-28s %b%b\n" "$mark" "$sn" "$dest" "$(echo -e "$health")" "$(echo -e "$extra")"
             done
     done <<< "$tags"
     echo -e "\n${BOLD}${BLUE}════════════════════════════════════════════════${NC}"
@@ -461,9 +648,16 @@ rwd_setup_wizard() {
     log_info "已为节点 ${tag} 启用测活切换（当前 SNI/伪装目标已作为候选 #1）"
     echo -e "  ${YELLOW}切换时只会更新伪装目标，已发给客户端的旧 SNI 链接会一直保留有效，${NC}"
     echo -e "  ${YELLOW}无需通知客户端更新——新客户端拿到的链接会使用当前生效的 SNI。${NC}"
-    echo -e "  ${YELLOW}常见 TLS1.3 大站可作候选（需自行确认在目标地区可正常访问）：${NC}"
-    echo "    www.microsoft.com:443   www.apple.com:443   www.amazon.com:443"
-    echo "    addons.mozilla.org:443  www.samsung.com:443"
+    echo ""
+    echo -e "  ${YELLOW}候选目标选择建议（重要）：${NC}"
+    echo -e "    • 服务器端测活无法察觉客户端所在地区对某 SNI 的封锁/限速。"
+    echo -e "      被教程用烂的大厂域名（www.microsoft.com / www.apple.com /"
+    echo -e "      www.amazon.com 等）恰恰最容易在客户端侧被指纹识别或限速——"
+    echo -e "      ${RED}优先避免使用${NC}，即使本机测活显示健康。"
+    echo -e "    • 首选：目标地区能正常访问、较冷门、支持 TLS1.3 + X25519 + h2、"
+    echo -e "      且证书 SNI 与域名匹配的独立站点（测活会自动校验这些条件）。"
+    echo -e "    • 想真正检测客户端侧封锁，可配置外部测活钩子 ${CYAN}RWD_CLIENT_PROBE${NC}"
+    echo -e "      （见文件头注释），从境外/客户端网络对节点做真实拨测。"
     echo ""
 
     while ask_yn "是否再添加一个候选伪装目标？" Y; do
