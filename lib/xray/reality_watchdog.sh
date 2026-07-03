@@ -40,12 +40,169 @@ _rwd_get_entry() {
 _rwd_enabled_tags() { _rwd_load | jq -r 'keys[]' 2>/dev/null; }
 
 # ── Health check: real TLS 1.3 handshake to the dest, SNI-matched ─────────────
+_rwd_is_ip_literal() {
+    local host="${1#[}"
+    host="${host%]}"
+    [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$host" == *:* ]]
+}
+
+_rwd_sni_resolves() {
+    local sni="$1"
+    sni="${sni%.}"
+    [[ "$sni" == \*.* ]] && sni="${sni#*.}"
+    [[ -z "$sni" ]] && return 1
+    _rwd_is_ip_literal "$sni" && return 0
+
+    # Plain hostnames may be intentionally local. Public FQDN-style SNI values
+    # must still resolve; otherwise a local dest such as 127.0.0.1:8443 can mask
+    # a deleted domain and report a false healthy state.
+    [[ "$sni" != *.* ]] && return 0
+
+    if command -v getent &>/dev/null; then
+        getent ahosts "$sni" >/dev/null 2>&1 || getent hosts "$sni" >/dev/null 2>&1
+        return
+    fi
+
+    if command -v dig &>/dev/null; then
+        local records
+        records=$(
+            dig +time=3 +tries=1 +short A "$sni" 2>/dev/null
+            dig +time=3 +tries=1 +short AAAA "$sni" 2>/dev/null
+        )
+        printf '%s\n' "$records" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$|:'
+        return
+    fi
+
+    if command -v nslookup &>/dev/null; then
+        nslookup "$sni" >/dev/null 2>&1
+        return
+    fi
+
+    return 0
+}
+
+_rwd_parse_dest() {
+    local dest="$1"
+    RWD_DEST_HOST=""
+    RWD_DEST_PORT=""
+
+    if [[ "$dest" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+        RWD_DEST_HOST="${BASH_REMATCH[1]}"
+        RWD_DEST_PORT="${BASH_REMATCH[2]}"
+    elif [[ "$dest" == *:* && "$dest" != *:*:* ]]; then
+        RWD_DEST_HOST="${dest%:*}"
+        RWD_DEST_PORT="${dest##*:}"
+    else
+        return 1
+    fi
+
+    [[ -n "$RWD_DEST_HOST" && "$RWD_DEST_PORT" =~ ^[0-9]+$ ]]
+}
+
+_rwd_extract_leaf_cert() {
+    local out_file="$1" cert_file="$2"
+    awk '
+        /-----BEGIN CERTIFICATE-----/ { in_cert=1 }
+        in_cert { print }
+        /-----END CERTIFICATE-----/ { exit }
+    ' "$out_file" > "$cert_file"
+    grep -q "BEGIN CERTIFICATE" "$cert_file"
+}
+
+_rwd_openssl_timed_out() {
+    local rc="$1"
+    [[ "$rc" == "124" ]]
+}
+
+_rwd_tls13_unsupported() {
+    local out_file="$1"
+    grep -Eqi "protocol version|unsupported protocol|wrong version number|no protocols available|tlsv1 alert protocol version" "$out_file"
+}
+
+_rwd_tcp_failed() {
+    local out_file="$1"
+    grep -Eqi "connect:errno|Connection refused|No route to host|Network is unreachable|Connection timed out|Operation timed out|Operation not permitted|Name or service not known|nodename nor servname" "$out_file"
+}
+
+_rwd_tls13_negotiated() {
+    local out_file="$1"
+    grep -Eq "New, TLSv1\.3|Protocol *: TLSv1\.3|Protocol version: TLSv1\.3" "$out_file"
+}
+
+_rwd_cert_trusted() {
+    local out_file="$1"
+    grep -Eq "Verify return code: 0 \\(ok\\)|Verification: OK" "$out_file"
+}
+
+_rwd_cert_matches_sni() {
+    local cert_file="$1" sni="$2"
+    local clean_sni="${sni#[}"
+    clean_sni="${clean_sni%]}"
+    if _rwd_is_ip_literal "$clean_sni"; then
+        openssl x509 -help 2>&1 | grep -q -- "-checkip" || return 0
+        openssl x509 -in "$cert_file" -noout -checkip "$clean_sni" >/dev/null 2>&1
+    else
+        openssl x509 -help 2>&1 | grep -q -- "-checkhost" || return 0
+        openssl x509 -in "$cert_file" -noout -checkhost "$sni" >/dev/null 2>&1
+    fi
+}
+
+_rwd_s_client_tls13() {
+    local connect="$1" sni="$2"
+    if command -v timeout &>/dev/null; then
+        timeout 8 openssl s_client -connect "$connect" -servername "$sni" \
+            -tls1_3 -alpn h2,http/1.1 -showcerts
+    else
+        openssl s_client -connect "$connect" -servername "$sni" \
+            -tls1_3 -alpn h2,http/1.1 -showcerts
+    fi
+}
+
 _rwd_check_dest() {
     local dest="$1" sni="$2"
-    local host="${dest%:*}" port="${dest##*:}"
-    [[ -z "$host" || -z "$port" ]] && return 1
-    timeout 6 openssl s_client -connect "${host}:${port}" -servername "$sni" \
-        -tls1_3 -alpn h2,http/1.1 </dev/null 2>&1 | grep -q "BEGIN CERTIFICATE"
+    RWD_CHECK_REASON=""
+    if ! _rwd_sni_resolves "$sni"; then
+        RWD_CHECK_REASON="sni_dns_failed"
+        return 1
+    fi
+
+    if ! _rwd_parse_dest "$dest"; then
+        RWD_CHECK_REASON="bad_dest"
+        return 1
+    fi
+
+    local host="$RWD_DEST_HOST" port="$RWD_DEST_PORT" connect
+    connect="${host}:${port}"
+    [[ "$host" == *:* ]] && connect="[${host}]:${port}"
+
+    local out_file cert_file rc
+    out_file=$(mktemp) || { RWD_CHECK_REASON="tmp_failed"; return 1; }
+    cert_file=$(mktemp) || { rm -f "$out_file"; RWD_CHECK_REASON="tmp_failed"; return 1; }
+
+    _rwd_s_client_tls13 "$connect" "$sni" </dev/null >"$out_file" 2>&1
+    rc=$?
+
+    if _rwd_openssl_timed_out "$rc"; then
+        RWD_CHECK_REASON="tls_timeout"
+    elif _rwd_tcp_failed "$out_file"; then
+        RWD_CHECK_REASON="tcp_failed"
+    elif _rwd_tls13_unsupported "$out_file"; then
+        RWD_CHECK_REASON="tls13_unsupported"
+    elif ! _rwd_tls13_negotiated "$out_file"; then
+        RWD_CHECK_REASON="tls13_failed"
+    elif ! _rwd_extract_leaf_cert "$out_file" "$cert_file"; then
+        RWD_CHECK_REASON="no_certificate"
+    elif ! _rwd_cert_matches_sni "$cert_file" "$sni"; then
+        RWD_CHECK_REASON="sni_cert_mismatch"
+    elif ! _rwd_cert_trusted "$out_file"; then
+        RWD_CHECK_REASON="cert_untrusted"
+    else
+        rm -f "$out_file" "$cert_file"
+        return 0
+    fi
+
+    rm -f "$out_file" "$cert_file"
+    return 1
 }
 
 # ── Candidate management ───────────────────────────────────────────────────────
@@ -174,17 +331,19 @@ rwd_check_node() {
 
     local i
     for (( i=0; i<count; i++ )); do
-        local sn dest ok
+        local sn dest ok reason
         sn=$(echo "$entry"   | jq -r ".candidates[$i].server_name")
         dest=$(echo "$entry" | jq -r ".candidates[$i].dest")
         if _rwd_check_dest "$dest" "$sn"; then
             ok=1
+            reason=""
             entry=$(echo "$entry" | jq ".candidates[$i].consec_fail = 0")
         else
             ok=0
+            reason="${RWD_CHECK_REASON:-unknown}"
             entry=$(echo "$entry" | jq ".candidates[$i].consec_fail += 1")
         fi
-        echo "${now} tag=${tag} sni=${sn} dest=${dest} ok=${ok}" >> "$RWD_LOG"
+        echo "${now} tag=${tag} sni=${sn} dest=${dest} ok=${ok}${reason:+ reason=${reason}}" >> "$RWD_LOG"
     done
     entry=$(echo "$entry" | jq --arg now "$now" '.last_check = $now')
 
