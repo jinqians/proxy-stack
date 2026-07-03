@@ -226,35 +226,61 @@ EOF
     log_ok "文件描述符限制已设置。"
 }
 
+# ── Firewall backend detection — prefer a RUNNING backend over a merely
+#    installed one (a package can be present while its daemon is down) ──────────
+_fw_ufw_active()       { command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qi '^Status: active'; }
+_fw_firewalld_active() { command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; }
+# iptables counts only when INPUT actually enforces (default DROP/REJECT policy
+# or an explicit drop/reject rule); an empty default-ACCEPT table is not a
+# firewall and appending ACCEPT rules to it would be meaningless noise.
+_fw_iptables_enforcing() {
+    command -v iptables &>/dev/null || return 1
+    { iptables -S INPUT 2>/dev/null; ip6tables -S INPUT 2>/dev/null; } \
+        | grep -Eq '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'
+}
+
 # ── Open a single port without resetting the whole firewall ──────────────────
 # Usage: firewall_open_port <port> [tcp|udp|both]
 firewall_open_port() {
     local port="$1" proto="${2:-tcp}"
-    local fw
-    if command -v ufw &>/dev/null; then fw="ufw"
-    elif command -v firewall-cmd &>/dev/null; then fw="firewalld"
-    elif command -v iptables &>/dev/null; then fw="iptables"
-    else
-        log_warn "未找到防火墙工具（ufw / firewalld / iptables），请手动开放端口 $port/$proto。"
+    local fw=""
+    if _fw_ufw_active; then fw="ufw"
+    elif _fw_firewalld_active; then fw="firewalld"
+    elif _fw_iptables_enforcing; then fw="iptables"
+    fi
+
+    if [[ -z "$fw" ]]; then
+        # No firewall is enforcing. Name any installed-but-idle backends so the
+        # user knows what they would have to configure by hand later on.
+        local installed=()
+        command -v ufw &>/dev/null          && installed+=("ufw")
+        command -v firewall-cmd &>/dev/null && installed+=("firewalld")
+        command -v iptables &>/dev/null     && installed+=("iptables")
+        if (( ${#installed[@]} == 0 )); then
+            log_warn "未找到防火墙工具（ufw / firewalld / iptables），请手动开放端口 $port/$proto。"
+            return 0
+        fi
+        local idle; idle=$(IFS='、'; echo "${installed[*]}")
+        log_warn "未检测到正在运行的防火墙（检测到已安装但未运行：${idle}）；端口 $port/$proto 当前在本机可直接访问。请确认云服务商安全组已放行该端口；若日后启用 ufw/firewalld，请手动放行此端口。"
         return 0
     fi
 
     if [[ "$fw" == "ufw" ]]; then
         if [[ "$proto" == "both" ]]; then
-            ufw allow "$port/tcp"
-            ufw allow "$port/udp"
+            ufw allow "$port/tcp" || { log_error "ufw 放行端口失败，请手动执行：ufw allow $port/tcp"; return 1; }
+            ufw allow "$port/udp" || { log_error "ufw 放行端口失败，请手动执行：ufw allow $port/udp"; return 1; }
         else
-            ufw allow "$port/$proto"
+            ufw allow "$port/$proto" || { log_error "ufw 放行端口失败，请手动执行：ufw allow $port/$proto"; return 1; }
         fi
         ufw reload 2>/dev/null || true
     elif [[ "$fw" == "firewalld" ]]; then
         if [[ "$proto" == "both" ]]; then
-            firewall-cmd --permanent --add-port="$port/tcp"
-            firewall-cmd --permanent --add-port="$port/udp"
+            firewall-cmd --permanent --add-port="$port/tcp" || { log_error "firewalld 放行端口失败，请手动执行：firewall-cmd --permanent --add-port=$port/tcp && firewall-cmd --reload"; return 1; }
+            firewall-cmd --permanent --add-port="$port/udp" || { log_error "firewalld 放行端口失败，请手动执行：firewall-cmd --permanent --add-port=$port/udp && firewall-cmd --reload"; return 1; }
         else
-            firewall-cmd --permanent --add-port="$port/$proto"
+            firewall-cmd --permanent --add-port="$port/$proto" || { log_error "firewalld 放行端口失败，请手动执行：firewall-cmd --permanent --add-port=$port/$proto && firewall-cmd --reload"; return 1; }
         fi
-        firewall-cmd --reload
+        firewall-cmd --reload || { log_error "firewalld 重新加载失败，请手动执行：firewall-cmd --reload"; return 1; }
     else
         # iptables fallback (RHEL without firewalld, or minimal installs)
         local protos=()
@@ -272,13 +298,17 @@ firewall_open_port() {
             || iptables-save  > /etc/iptables/rules.v4 2>/dev/null || true
         ip6tables-save > /etc/iptables/rules.v6  2>/dev/null || true
     fi
-    log_ok "防火墙：端口 $port/$proto 已开放。"
+    log_ok "防火墙（$fw）：端口 $port/$proto 已开放。"
 }
 
 # ── Firewall quick-lock ───────────────────────────────────────────────────────
 configure_firewall() {
-    local fw
-    if command -v ufw &>/dev/null; then fw="ufw"
+    local fw=""
+    # Prefer a running backend; otherwise fall back to whichever is installed
+    # (ufw's branch force-enables it; firewalld we start explicitly below).
+    if _fw_ufw_active; then fw="ufw"
+    elif _fw_firewalld_active; then fw="firewalld"
+    elif command -v ufw &>/dev/null; then fw="ufw"
     elif command -v firewall-cmd &>/dev/null; then fw="firewalld"
     else
         log_warn "未找到支持的防火墙（ufw / firewalld）。"
@@ -295,11 +325,19 @@ configure_firewall() {
         ufw allow 443/udp
         ufw --force enable &>/dev/null
     else
-        firewall-cmd --permanent --set-default-zone=drop
-        firewall-cmd --permanent --add-port=22/tcp
-        firewall-cmd --permanent --add-port=443/tcp
-        firewall-cmd --permanent --add-port=443/udp
-        firewall-cmd --reload
+        # firewalld may be installed but stopped — start it before we rely on it.
+        if ! _fw_firewalld_active; then
+            command -v systemctl &>/dev/null && systemctl enable --now firewalld &>/dev/null
+            if ! firewall-cmd --state &>/dev/null; then
+                log_error "firewalld 未能启动，请手动执行：systemctl enable --now firewalld"
+                return 1
+            fi
+        fi
+        firewall-cmd --permanent --set-default-zone=drop || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --set-default-zone=drop"; return 1; }
+        firewall-cmd --permanent --add-port=22/tcp  || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --add-port=22/tcp"; return 1; }
+        firewall-cmd --permanent --add-port=443/tcp || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --add-port=443/tcp"; return 1; }
+        firewall-cmd --permanent --add-port=443/udp || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --add-port=443/udp"; return 1; }
+        firewall-cmd --reload || { log_error "firewalld 重新加载失败，请手动执行：firewall-cmd --reload"; return 1; }
     fi
     log_ok "防火墙已配置。"
 }
