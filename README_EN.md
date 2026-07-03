@@ -22,6 +22,21 @@
 
 Every node automatically generates its own key pair and can export share links and QR codes, with Clash Meta / Shadowrocket config export supported. Certificates are issued and renewed automatically via acme.sh — no manual steps required. Multiple protocol nodes can also share the same public port 443 (see below).
 
+### Who it is for
+
+- VPS users who want one entry point for managing Xray / Hysteria2 / Snell / SS2022
+- Self-hosters who also need certificates, Nginx, Cloudflare, Docker apps, backups, and hardening
+- Users who do not want to maintain several single-protocol install scripts
+- Lightweight operations workflows that need traffic quotas, expiry reminders, and Telegram reports
+
+### Why PSM
+
+- **One command to enter the full management menu** — after installation, run `psm`
+- **Multi-protocol management** — Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 can coexist under one workflow
+- **Operations included by default** — certificates, backups, traffic, expiry, health reports, Telegram notifications, and cleanup are built in
+- **Designed for long-lived VPS instances** — not just a one-off installer, but a tool for update, backup, restore, service status, and hardening
+- **Transparent and auditable** — the project is Bash-based, installs under `/opt/psm`, and documents its system write paths
+
 ---
 
 ## 443 Port Reuse
@@ -64,7 +79,7 @@ bash <(curl -fsSL https://psm.jinqians.com)
 bash <(wget -qO- https://psm.jinqians.com)
 ```
 
-> Re-running the same command on an already-installed machine just does a `git pull` update — it won't re-run the install wizard.
+> Re-running the same command on a complete installation performs a `git pull` update. If a partial install left by an older uninstall flow is detected, the installer automatically reruns the setup flow to repair it.
 
 Once installed, just run:
 
@@ -145,7 +160,7 @@ These are the actual entry points that each feature module's scheduled task call
 bash /opt/psm/uninstall.sh
 ```
 
-Asks per-component whether to remove it; backup files are kept by default.
+The uninstaller cleans up PSM-owned shortcuts, cron entries, systemd timers/services, PSM firewall/Fail2ban rules, and asks by default whether to remove `/opt/psm` with its runtime config/state. Shared components such as Nginx, Xray, Hysteria2, Snell, ss-rust, acme.sh, certificates, and Docker Compose apps are confirmed one by one to avoid deleting services you maintain outside PSM.
 
 ---
 
@@ -212,6 +227,57 @@ Asks per-component whether to remove it; backup files are kept by default.
 ├── templates/            # config templates (including the Docker app store)
 └── backup/               # backup archives
 ```
+
+---
+
+## Safety Boundaries and Write Paths
+
+PSM keeps its own state under `/opt/psm` as much as possible, but some features need to write system service, certificate, firewall, or application config. Common paths include:
+
+| Path | Purpose |
+| ---- | ------- |
+| `/opt/psm` | PSM scripts, runtime state, config, backups, and Docker Compose projects |
+| `/usr/local/bin/psm` | global shortcut command |
+| `/etc/systemd/system/psm-*.service` / `/etc/systemd/system/psm-*.timer` | PSM scheduled jobs and daemons |
+| `/usr/local/etc/xray` / `/usr/local/bin/xray` | Xray config and binary |
+| `/etc/hysteria` / `/usr/local/bin/hysteria` | Hysteria2 config and binary |
+| `/etc/nginx` | Nginx sites, stream routing, and SSL files |
+| `/root/.acme.sh` | acme.sh account and certificate cache |
+| `/etc/fail2ban` / `iptables` | Fail2ban rules, honeypot traps, and traffic accounting chain |
+| `/etc/cron.d/psm-*` | cron entry points for backup, DDNS, etc. |
+
+Before using PSM on a production VPS, read the install output and uninstall prompts. If the machine already has important Nginx, Docker, or Cloudflare Tunnel state, take a snapshot or manual backup first.
+
+---
+
+## FAQ
+
+### What happens if I run the one-line installer again?
+
+If `/opt/psm` is a complete installation, the bootstrap script runs `git pull` to update it. If it detects a partial install left by an older uninstall flow, such as a remaining `.git` directory but a missing `psm` command or config directory, it reruns `install.sh` to repair the installation.
+
+### Why does the uninstaller ask before removing some components?
+
+Nginx, Docker, certificates, and Cloudflare Tunnel may be shared with services outside PSM. The uninstaller removes PSM-owned traces by default and asks before touching shared components.
+
+### Will PSM overwrite an existing Nginx setup?
+
+PSM manages its own site and stream-routing config. If you already run production sites, back up `/etc/nginx` first and review domain, port, and certificate choices before applying menu actions.
+
+### Can PSM run without root?
+
+No. PSM installs packages, writes systemd units, manages Nginx, certificates, firewall rules, and proxy services, so it must run as root.
+
+### Is multi-server management supported?
+
+PSM currently focuses on local management for a single VPS. Multi-server inventory, remote status, and orchestration are not supported yet.
+
+---
+
+## Project Resources
+
+- [Chinese README](README.md)
+- [Changelog](CHANGELOG.md)
 
 ---
 

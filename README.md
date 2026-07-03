@@ -22,6 +22,13 @@
 
 每个节点都能自动生成密钥对，导出分享链接与二维码，支持 Clash Meta / shadowrocket 配置导出；证书通过 acme.sh 自动签发续期，无需手动操作。多个协议节点还可以共用同一个 443 端口对外呈现（详见下文）。
 
+### 为什么选择 PSM
+
+- **一条命令进入完整管理菜单**：安装后只需要运行 `psm`，所有功能都在同一个 CLI 菜单内
+- **多协议统一管理**：Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 可以共存，不需要每个协议维护一套脚本
+- **适合长期维护的 VPS**：不是一次性安装脚本，而是把更新、备份、恢复、服务状态和安全加固放到同一套工具里
+- **透明可审计**：项目主体是 Bash 脚本，安装目录固定在 `/opt/psm`，系统写入路径在文档中明确列出
+
 ---
 
 ## 443 端口复用
@@ -64,7 +71,7 @@ bash <(curl -fsSL https://psm.jinqians.com)
 bash <(wget -qO- https://psm.jinqians.com)
 ```
 
-> 已安装的机器上重复执行同一命令，会自动 `git pull` 更新，不会重新跑一遍安装向导。
+> 已完整安装的机器上重复执行同一命令，会自动 `git pull` 更新；如果检测到旧版卸载遗留的半安装状态，会自动重新运行安装流程修复。
 
 安装完成后，随时输入：
 
@@ -145,7 +152,7 @@ manager.sh --health-report         # 发送一次每日体检报告
 bash /opt/psm/uninstall.sh
 ```
 
-对每个组件逐一询问是否删除，备份文件默认保留。
+卸载器会清理 PSM 自身创建的快捷命令、cron、systemd timer/service、PSM 防火墙/Fail2ban 规则，并默认询问是否删除 `/opt/psm` 程序目录及其中配置状态。Nginx、Xray、Hysteria2、Snell、ss-rust、acme.sh、证书和 Docker Compose 应用等组件会逐一确认，避免误删你手动维护的系统服务。
 
 ---
 
@@ -212,6 +219,57 @@ bash /opt/psm/uninstall.sh
 ├── templates/            # 配置模板（含 Docker 应用商店模板）
 └── backup/               # 备份归档
 ```
+
+---
+
+## 写入路径
+
+PSM 会尽量把项目自身状态集中在 `/opt/psm`，但部分功能需要写入系统服务、证书、防火墙或应用配置。常见路径如下：
+
+| 路径                                                                        | 用途                                                 |
+| --------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `/opt/psm`                                                                | PSM 程序、运行状态、配置、备份和 Docker Compose 项目 |
+| `/usr/local/bin/psm`                                                      | 全局快捷命令                                         |
+| `/etc/systemd/system/psm-*.service` / `/etc/systemd/system/psm-*.timer` | PSM 定时任务和守护服务                               |
+| `/usr/local/etc/xray` / `/usr/local/bin/xray`                           | Xray 配置和二进制                                    |
+| `/etc/hysteria` / `/usr/local/bin/hysteria`                             | Hysteria2 配置和二进制                               |
+| `/etc/nginx`                                                              | Nginx 站点、stream 分流和 SSL 文件                   |
+| `/root/.acme.sh`                                                          | acme.sh 账户和证书签发缓存                           |
+| `/etc/fail2ban` / `iptables`                                            | Fail2ban 规则、蜜罐和流量统计链                      |
+| `/etc/cron.d/psm-*`                                                       | 备份、DDNS 等 cron 入口                              |
+
+如果你准备在生产 VPS 上使用，建议先阅读安装输出和卸载提示；如果机器上已有重要 Nginx、Docker 或 Cloudflare Tunnel 配置，先做快照或手动备份。
+
+---
+
+## 常见问题
+
+### 重复执行一键安装会怎样？
+
+如果 `/opt/psm` 已是完整安装，脚本会执行 `git pull` 更新。若检测到旧版卸载后残留的半安装状态（例如 `.git` 还在但 `psm` 命令或配置目录缺失），会自动重新运行安装流程修复。
+
+### 卸载后为什么还能选择保留某些组件？
+
+Nginx、Docker、证书、Cloudflare Tunnel 等可能被其他站点或服务共用。PSM 的卸载器会默认清理 PSM 自身痕迹，并对共享组件逐一确认。
+
+### 会不会覆盖现有 Nginx 配置？
+
+PSM 会管理自己的站点和 stream 分流配置。已有生产站点建议先备份 `/etc/nginx`，并在菜单操作前确认域名、端口和证书路径。
+
+### 支持非 root 用户安装吗？
+
+不支持。PSM 需要安装系统包、写入 systemd、管理 Nginx、证书、防火墙和代理服务，因此必须使用 root。
+
+### 适合多服务器集中管理吗？
+
+当前 PSM 以单台 VPS 本地管理为主，暂不支持多服务器集中面板、状态同步或远程编排。
+
+---
+
+## 项目资料
+
+- [英文 README](README_EN.md)
+- [变更日志](CHANGELOG.md)
 
 ---
 
