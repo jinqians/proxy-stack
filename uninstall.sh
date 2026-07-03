@@ -12,14 +12,61 @@ require_root
 
 echo -e "\n${RED}${BOLD}PSM 卸载程序${NC}"
 echo -e "${YELLOW}此操作将删除所有 PSM 管理的组件。${NC}"
-echo -e "${YELLOW}备份文件目录 $BAK_DIR 将会保留。${NC}\n"
+echo -e "${YELLOW}PSM 程序目录 $PSM_ROOT 也会删除。${NC}\n"
 
 ask_yn "确定要卸载吗？" N || { log_info "已取消。"; exit 0; }
 
+_systemctl_disable_now() {
+    local unit="$1"
+    systemctl disable --now "$unit" 2>/dev/null || true
+}
+
+_systemctl_stop_disable() {
+    local unit="$1"
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl disable "$unit" --quiet 2>/dev/null || true
+}
+
+_remove_systemd_units() {
+    local unit
+    for unit in "$@"; do
+        rm -f "/etc/systemd/system/$unit"
+    done
+}
+
+_compose_down_all() {
+    local compose_file
+    [[ -d /opt/psm/compose ]] || return 0
+    command -v docker &>/dev/null || command -v docker-compose &>/dev/null || return 0
+    while IFS= read -r compose_file; do
+        if docker compose version &>/dev/null 2>&1; then
+            docker compose -f "$compose_file" down 2>/dev/null || true
+        elif command -v docker-compose &>/dev/null; then
+            docker-compose -f "$compose_file" down 2>/dev/null || true
+        fi
+    done < <(find /opt/psm/compose -name docker-compose.yml -type f 2>/dev/null)
+}
+
+_remove_psm_iptables() {
+    local ipt port
+    for ipt in iptables ip6tables; do
+        command -v "$ipt" &>/dev/null || continue
+        while "$ipt" -D INPUT -j PSM_TRF 2>/dev/null; do :; done
+        while "$ipt" -D OUTPUT -j PSM_TRF 2>/dev/null; do :; done
+        "$ipt" -F PSM_TRF 2>/dev/null || true
+        "$ipt" -X PSM_TRF 2>/dev/null || true
+
+        while IFS= read -r port; do
+            [[ "$port" =~ ^[0-9]+$ ]] || continue
+            "$ipt" -D INPUT -p tcp --dport "$port" -j LOG --log-prefix "PSM-HONEYPOT: " --log-level 4 2>/dev/null || true
+            "$ipt" -D INPUT -p tcp --dport "$port" -j DROP 2>/dev/null || true
+        done < <("$ipt" -S INPUT 2>/dev/null | awk '/PSM-HONEYPOT/ {for (i=1; i<=NF; i++) if ($i == "--dport") print $(i+1)}' || true)
+    done
+}
+
 # ── Optional component removal ────────────────────────────────────────────────
 ask_yn "是否删除 Nginx？" N && {
-    svc_stop nginx 2>/dev/null || true
-    systemctl disable nginx --quiet 2>/dev/null || true
+    _systemctl_stop_disable nginx
     detect_os
     case "$OS_ID" in
         ubuntu|debian|raspbian)
@@ -32,8 +79,7 @@ ask_yn "是否删除 Nginx？" N && {
 }
 
 ask_yn "是否删除 Xray？" N && {
-    svc_stop xray 2>/dev/null || true
-    systemctl disable xray --quiet 2>/dev/null || true
+    _systemctl_stop_disable xray
     rm -f /usr/local/bin/xray /etc/systemd/system/xray.service
     rm -rf "$XRAY_CFG_DIR" /var/log/xray /usr/local/share/xray
     systemctl daemon-reload
@@ -41,12 +87,35 @@ ask_yn "是否删除 Xray？" N && {
 }
 
 ask_yn "是否删除 Hysteria2？" N && {
-    svc_stop hysteria-server 2>/dev/null || true
-    systemctl disable hysteria-server --quiet 2>/dev/null || true
+    _systemctl_stop_disable hysteria-server
     rm -f /usr/local/bin/hysteria /etc/systemd/system/hysteria-server.service
     rm -rf /etc/hysteria
     systemctl daemon-reload
     log_ok "Hysteria2 已删除。"
+}
+
+ask_yn "是否删除 Snell？" N && {
+    systemctl stop snell snell.socket snell-netns 2>/dev/null || true
+    systemctl disable snell snell.socket snell-netns 2>/dev/null || true
+    rm -f /usr/local/bin/snell-server /usr/local/bin/snell
+    _remove_systemd_units snell.service snell.socket snell-netns.service
+    rm -rf /etc/snell
+    systemctl daemon-reload
+    log_ok "Snell 已删除。"
+}
+
+ask_yn "是否删除 ss-rust？" N && {
+    _systemctl_stop_disable ss-rust
+    rm -f /usr/local/bin/ss-rust /etc/systemd/system/ss-rust.service
+    rm -rf /etc/ss-rust
+    systemctl daemon-reload
+    log_ok "ss-rust 已删除。"
+}
+
+ask_yn "是否停止并删除 PSM 管理的 Docker Compose 应用？" N && {
+    _compose_down_all
+    rm -rf /opt/psm/compose
+    log_ok "PSM Docker Compose 应用已删除。"
 }
 
 ask_yn "是否删除 acme.sh？（SSL 证书将保留在 $NGINX_SSL_DIR）
@@ -71,27 +140,27 @@ ask_yn "是否删除 $NGINX_SSL_DIR 中的 SSL 证书？" N && {
     log_ok "证书已删除。"
 }
 
-ask_yn "是否删除 PSM 配置/状态（$CFG_DIR）？" N && {
-    rm -rf "$CFG_DIR"
-    log_ok "PSM 配置已删除。"
-}
-
-# Remove crons
+# Remove crons and PSM-owned systemd units.
 rm -f /etc/cron.d/psm-backup /etc/cron.d/psm-ddns
-# Remove Reality camouflage-target watchdog timer
-systemctl disable --now psm-reality-watchdog.timer 2>/dev/null || true
-rm -f /etc/systemd/system/psm-reality-watchdog.service /etc/systemd/system/psm-reality-watchdog.timer
-# Remove daily health report timer
-systemctl disable --now psm-health-report.timer 2>/dev/null || true
-rm -f /etc/systemd/system/psm-health-report.service /etc/systemd/system/psm-health-report.timer
+_systemctl_disable_now psm-reality-watchdog.timer
+_systemctl_disable_now psm-health-report.timer
+_systemctl_disable_now psm-traffic.timer
+_systemctl_disable_now psm-traffic-shutdown.service
+_systemctl_disable_now psm-tgbot.service
+_remove_systemd_units \
+    psm-reality-watchdog.service psm-reality-watchdog.timer \
+    psm-health-report.service psm-health-report.timer \
+    psm-traffic.service psm-traffic.timer psm-traffic-shutdown.service \
+    psm-tgbot.service
 # Remove symlink
 rm -f /usr/local/bin/psm
 # Remove sysctl / limits files
 rm -f /etc/sysctl.d/99-psm.conf /etc/sysctl.d/99-bbr.conf /etc/security/limits.d/99-psm.conf
-# Remove honeypot iptables rules + fail2ban wiring (leaves already-banned IPs banned)
+# Remove PSM iptables accounting/honeypot rules + fail2ban wiring (leaves already-banned IPs banned)
 if [[ -f "$CFG_DIR/security/honeypot.conf" ]]; then
     source "$LIB_DIR/security/honeypot.sh" 2>/dev/null && hp_remove_rules 2>/dev/null || true
 fi
+_remove_psm_iptables
 rm -f /etc/fail2ban/filter.d/psm-honeypot.conf /etc/fail2ban/action.d/psm-honeypot-alert.conf \
       /etc/fail2ban/jail.d/psm-honeypot.conf
 command -v fail2ban-client &>/dev/null && fail2ban-client reload &>/dev/null || true
@@ -104,5 +173,22 @@ rm -f /etc/fail2ban/jail.d/psm-sshd.conf /etc/fail2ban/jail.d/psm-recidive.conf 
 systemctl stop cloudflared 2>/dev/null || true
 command -v cloudflared &>/dev/null && cloudflared service uninstall 2>/dev/null || true
 
+systemctl daemon-reload 2>/dev/null || true
+
+psm_root_removed=0
+if ask_yn "是否删除 PSM 程序目录及其中配置/状态（$PSM_ROOT）？" Y; then
+    rm -rf "$PSM_ROOT"
+    psm_root_removed=1
+else
+    ask_yn "是否仅删除 PSM 配置/状态（$CFG_DIR）？" N && {
+        rm -rf "$CFG_DIR"
+        log_ok "PSM 配置已删除。"
+    }
+fi
+
 log_ok "PSM 卸载完成。"
-echo -e "  备份文件保留在：${YELLOW}$BAK_DIR${NC}"
+if (( psm_root_removed )); then
+    echo -e "  已删除：${YELLOW}$PSM_ROOT${NC}"
+else
+    echo -e "  PSM 程序目录保留在：${YELLOW}$PSM_ROOT${NC}"
+fi

@@ -79,6 +79,13 @@ if [[ -d "$PSM_DIR/.git" ]]; then
     git -C "$PSM_DIR" pull --ff-only
     chmod +x "$PSM_DIR"/*.sh "$PSM_DIR/lib"/*.sh 2>/dev/null || true
     log_ok "PSM updated."
+
+    psm_cmd_target="$(readlink -f /usr/local/bin/psm 2>/dev/null || true)"
+    if [[ ! -x /usr/local/bin/psm || "$psm_cmd_target" != "$PSM_DIR/manager.sh" || ! -d "$PSM_DIR/config" ]]; then
+        log_warn "Existing checkout is incomplete; running installer to repair it..."
+        exec bash "$PSM_DIR/install.sh"
+    fi
+
     echo ""
     echo -e "  Run ${BOLD}psm${NC} to open the menu."
     echo ""
