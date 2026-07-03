@@ -229,7 +229,10 @@ ask_yn() {
     local hint; [[ "$default" == "Y" ]] && hint="[Y/n]" || hint="[y/N]"
     read -rp "$(echo -e "${CYAN}${prompt} ${hint}: ${NC}")" ans
     [[ -z "$ans" ]] && ans="$default"
-    [[ "${ans,,}" == "y" ]]
+    case "$ans" in
+        [Yy]) return 0 ;;
+        *)    return 1 ;;
+    esac
 }
 
 press_enter() { read -rp "$(echo -e "${YELLOW}按回车继续...${NC}")"; }

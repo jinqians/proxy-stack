@@ -61,20 +61,20 @@ _reality_count() {
 }
 
 _reality_get_by_tag() {
-    _reality_load | jq ".[] | select(.tag == \"$1\")" 2>/dev/null
+    _reality_load | jq --arg tag "$1" '.[] | select(.tag == $tag)' 2>/dev/null
 }
 
 _reality_upsert() {
     local node_json="$1"
     local tag; tag=$(echo "$node_json" | jq -r '.tag')
     local nodes; nodes=$(_reality_load)
-    nodes=$(echo "$nodes" | jq "del(.[] | select(.tag == \"$tag\")) | . += [$node_json]")
+    nodes=$(echo "$nodes" | jq --arg tag "$tag" --argjson node "$node_json" 'del(.[] | select(.tag == $tag)) | . += [$node]')
     _reality_save "$nodes"
 }
 
 _reality_delete() {
     local nodes; nodes=$(_reality_load)
-    nodes=$(echo "$nodes" | jq "del(.[] | select(.tag == \"$1\"))")
+    nodes=$(echo "$nodes" | jq --arg tag "$1" 'del(.[] | select(.tag == $tag))')
     _reality_save "$nodes"
 }
 

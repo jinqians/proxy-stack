@@ -78,6 +78,26 @@ rwd_add_candidate() {
     log_ok "候选目标已添加：${server_name} → ${dest}（节点 ${tag}）"
 }
 
+_rwd_ensure_node_enabled() {
+    local tag="$1"
+    local node; node=$(_reality_get_by_tag "$tag")
+    [[ -z "$node" ]] && { log_error "未找到 Reality 节点：$tag"; return 1; }
+
+    _rwd_init
+    local all; all=$(_rwd_load)
+    local entry; entry=$(echo "$all" | jq --arg t "$tag" '.[$t] // empty')
+    [[ -n "$entry" && "$(echo "$entry" | jq -r '.candidates | length')" != "0" ]] && return 0
+
+    local cur_sn cur_dest
+    cur_sn=$(echo "$node" | jq -r '.server_name')
+    cur_dest=$(echo "$node" | jq -r '.dest')
+    entry=$(jq -n --arg sn "$cur_sn" --arg d "$cur_dest" \
+        '{"candidates":[{"server_name":$sn,"dest":$d,"consec_fail":0}],"active":$sn,"last_check":"","last_switch":""}')
+
+    all=$(echo "$all" | jq --arg t "$tag" --argjson e "$entry" '.[$t] = $e')
+    _rwd_save "$all"
+}
+
 rwd_remove_candidate() {
     local tag="$1" server_name="$2"
     local all; all=$(_rwd_load)
@@ -269,7 +289,7 @@ _rwd_uninstall_timer() {
 
 # ── Interactive wizard ───────────────────────────────────────────────────────
 _rwd_pick_reality_tag() {
-    _show_node_list
+    _show_node_list >&2
     local tag; ask tag "节点标识"
     [[ -z "$(_reality_get_by_tag "$tag")" ]] && { log_error "未找到节点：$tag"; return 1; }
     printf '%s' "$tag"
@@ -277,6 +297,7 @@ _rwd_pick_reality_tag() {
 
 rwd_setup_wizard() {
     local tag; tag=$(_rwd_pick_reality_tag) || return 1
+    _rwd_ensure_node_enabled "$tag" || return 1
 
     log_info "已为节点 ${tag} 启用测活切换（当前 SNI/伪装目标已作为候选 #1）"
     echo -e "  ${YELLOW}切换时只会更新伪装目标，已发给客户端的旧 SNI 链接会一直保留有效，${NC}"
