@@ -368,6 +368,26 @@ realm_uninstall() {
 
 realm_logs() { journalctl -u realm -f --no-pager; }
 
+# ── 状态报告（资源 / 网速 / 延迟；与 Telegram /relay 同源）────────────────────
+realm_status_report() {
+    source "$LIB_DIR/tgbot/relay_status.sh" 2>/dev/null \
+        || { log_error "状态报告模块加载失败"; return 1; }
+    log_step "正在采集状态（CPU/网速采样 1 秒 + 逐规则延迟探测），请稍候..."
+    local report; report=$(rs_build_report)
+    # 终端显示时剥掉 Telegram Markdown 标记
+    echo ""
+    printf '%s\n' "$report" | sed -e 's/[*`]//g' -e 's/\\\[/[/g'
+    echo ""
+    if [[ -f "$CFG_DIR/tg_bot.conf" ]]; then
+        ask_yn "是否将此报告推送到 Telegram 管理员？" N || return 0
+        source "$LIB_DIR/tgbot/notify.sh" 2>/dev/null || return 0
+        tg_notify_admins "$report"
+        log_ok "已推送。也可在 Telegram 中直接发送 /relay 随时查看。"
+    else
+        log_info "提示：配置 Telegram Bot（主菜单 16）后，可在 Telegram 发送 /relay 随时查看此报告。"
+    fi
+}
+
 # ── 依赖检查 ──────────────────────────────────────────────────────────────────
 _realm_check_deps() {
     ensure_pkg_deps curl tar jq
@@ -388,22 +408,24 @@ realm_menu() {
             "修改中转规则" \
             "删除中转规则" \
             "列出中转规则" \
+            "状态报告（资源 / 网速 / 延迟，可推送 TG）" \
             "服务状态" \
             "重启服务" \
             "查看日志" \
             "卸载"
 
         case "$MENU_CHOICE" in
-            1) realm_install ;;
-            2) realm_add_rule ;;
-            3) realm_modify_rule ;;
-            4) realm_delete_rule ;;
-            5) _realm_show_rules ;;
-            6) svc_status realm ;;
-            7) svc_restart realm && log_ok "realm 已重启。" ;;
-            8) realm_logs ;;
-            9) realm_uninstall ;;
-            0) return ;;
+            1)  realm_install ;;
+            2)  realm_add_rule ;;
+            3)  realm_modify_rule ;;
+            4)  realm_delete_rule ;;
+            5)  _realm_show_rules ;;
+            6)  realm_status_report ;;
+            7)  svc_status realm ;;
+            8)  svc_restart realm && log_ok "realm 已重启。" ;;
+            9)  realm_logs ;;
+            10) realm_uninstall ;;
+            0)  return ;;
         esac
         press_enter
     done

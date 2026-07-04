@@ -78,8 +78,19 @@ _tgbot_kb_admin() {
       '{"inline_keyboard":['\
         '[{"text":"📋 所有节点","callback_data":"admin:list"},'\
          '{"text":"👥 租客列表","callback_data":"admin:users"}],'\
-        '[{"text":"ℹ️ 使用说明","callback_data":"admin:help"}]'\
+        '[{"text":"🔁 中转状态","callback_data":"admin:relay"},'\
+         '{"text":"ℹ️ 使用说明","callback_data":"admin:help"}]'\
       ']}'
+}
+
+# 中转状态报告：采样 + 逐规则探测需要几秒，先回一条提示再发结果。
+_tgbot_cmd_relay() {
+    local chat_id="$1"
+    source "$LIB_DIR/tgbot/relay_status.sh" 2>/dev/null || {
+        _tgbot_send "$chat_id" "⚠️ 中转状态模块加载失败"; return
+    }
+    _tgbot_send "$chat_id" "⏳ 正在采集中转服务器状态（资源 / 网速 / 延迟），约需几秒..."
+    _tgbot_send "$chat_id" "$(rs_build_report)"
 }
 
 _tgbot_kb_tenant() {
@@ -103,6 +114,9 @@ _tgbot_handle_callback() {
             admin:users)
                 _tgbot_cmd_users "$chat_id"
                 ;;
+            admin:relay)
+                _tgbot_cmd_relay "$chat_id"
+                ;;
             admin:help)
                 _tgbot_send_kb "$chat_id" \
 "ℹ️ *使用说明*  🔑 管理员
@@ -117,6 +131,9 @@ _tgbot_handle_callback() {
 › \`/bind <ID> <端口>\`  手动绑定
 › \`/unbind <ID>\`  解绑
 › \`/users\`  查看列表
+
+*中转（realm）*
+› \`/relay\`  中转服务器状态
 
 *其他*
 › \`/id\`  查看自己的 ID" \
@@ -566,11 +583,17 @@ _tgbot_handle() {
 › \`/expiry\`  查看所有节点到期状态
 › \`/renew <端口> <月数>\`  为节点续期
 
+*中转（realm）*
+› \`/relay\`  中转服务器状态（资源 / 网速 / 延迟）
+
 _每分钟自动更新_" \
                     "$(_tgbot_kb_admin)"
                 ;;
             /list|/all|/nodes)
                 _tgbot_send "$chat_id" "$(_tgbot_list_nodes)"
+                ;;
+            /relay|/zhongzhuan)
+                _tgbot_cmd_relay "$chat_id"
                 ;;
             /traffic)
                 if [[ "$arg" =~ ^[0-9]+$ ]]; then
