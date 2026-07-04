@@ -167,7 +167,7 @@ _main_menu() {
     printf "  ${C} 6.${N} %s  ${C}14.${N} %s\n"  "$(_mpad "SS 2022 管理")"    "更新 PSM"
     printf "  ${C} 7.${N} %s  ${C}15.${N} %s\n"  "$(_mpad "Docker 管理")"     "流量管理"
     printf "  ${C} 8.${N} %s  ${C}16.${N} %s\n"  "$(_mpad "SSL 证书管理")"    "Telegram Bot"
-    printf "  ${C}17.${N} %s\n"                  "$(_mpad "安全加固")"
+    printf "  ${C}17.${N} %s  ${C}18.${N} %s\n"  "$(_mpad "安全加固")"        "中转管理 (realm)"
     echo -e "${B}──────────────────────────────────────────────────────────────${NC}"
     printf "  ${C} 0.${N} %s\n" "退出"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
@@ -193,6 +193,7 @@ _view_all_nodes() {
 
     source "$LIB_DIR/snell.sh"   2>/dev/null; _snell_show_node_list   2>/dev/null || true
     source "$LIB_DIR/ssrust.sh"   2>/dev/null; _ssrust_show_node_list  2>/dev/null || true
+    source "$LIB_DIR/realm.sh"    2>/dev/null; _realm_show_node_list   2>/dev/null || true
 }
 
 main() {
@@ -268,6 +269,10 @@ main() {
             17)
                 source "$LIB_DIR/security/core.sh"
                 security_menu
+                ;;
+            18)
+                source "$LIB_DIR/realm.sh"
+                realm_menu
                 ;;
             0)
                 echo -e "\n${GREEN}已退出。${NC}\n"
