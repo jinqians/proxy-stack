@@ -13,6 +13,9 @@ HY2_RELEASES="https://github.com/apernet/hysteria/releases"
 
 # ── Install binary ────────────────────────────────────────────────────────────
 hy2_install() {
+    ensure_pkg_deps curl jq
+    require_cmd curl jq
+
     if [[ -f "$HY2_BIN" ]]; then
         log_info "Hysteria2 已安装：$($HY2_BIN version 2>/dev/null | head -1)"
         if [[ ! -f "$HY2_CFG" ]]; then
@@ -32,8 +35,8 @@ hy2_install() {
 
     log_step "正在获取 Hysteria2 最新版本..."
     tag=$(curl -fsSL "https://api.github.com/repos/apernet/hysteria/releases/latest" 2>/dev/null \
-          | grep '"tag_name"' | cut -d'"' -f4 || true)
-    [[ -z "$tag" ]] && { log_warn "无法获取最新版本，使用备用版本 app/v2.6.0"; tag="app/v2.6.0"; }
+          | jq -r '.tag_name // empty' || true)
+    [[ "$tag" =~ ^app/v[0-9] ]] || { log_warn "无法获取最新版本，使用备用版本 app/v2.6.0"; tag="app/v2.6.0"; }
 
     local hy2_arch
     case "$arch" in

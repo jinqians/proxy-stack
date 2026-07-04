@@ -67,8 +67,8 @@ xray_install() {
 
     log_step "正在获取 Xray 最新版本..."
     tag=$(curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" 2>/dev/null \
-          | grep '"tag_name"' | cut -d'"' -f4 || true)
-    [[ -z "$tag" ]] && { log_warn "无法获取最新版本，使用备用版本 v24.9.30"; tag="v24.9.30"; }
+          | jq -r '.tag_name // empty' || true)
+    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "无法获取最新版本，使用备用版本 v24.9.30"; tag="v24.9.30"; }
 
     local zip_name="Xray-linux-${xray_arch}.zip"
     local url="${XRAY_RELEASES}/download/${tag}/${zip_name}"
