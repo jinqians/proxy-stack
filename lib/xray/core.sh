@@ -380,6 +380,13 @@ _xray_view_all_nodes() {
     source "$(dirname "${BASH_SOURCE[0]}")/xhttp.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/ss2022.sh"
 
+    # 展示前把 config.json 中的手动修改（端口/UUID/密码）同步回各协议的
+    # 节点存储，否则这里和后续 show 函数显示的都是旧值。
+    _reality_sync_from_live || true
+    _vision_sync_from_live  || true
+    _xhttp_sync_from_live   || true
+    _xss_sync_from_live     || true
+
     local -a _protos _tags
     local i=0
 

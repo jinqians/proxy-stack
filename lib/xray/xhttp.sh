@@ -26,6 +26,45 @@ _xhttp_list() {
     _xhttp_load | jq -r '.[] | "\(.tag)\t\(.port)\t\(.listen_addr // "127.0.0.1")\t\(.mode)\t\(.domain // "")"' 2>/dev/null
 }
 
+# 节点存储是唯一事实源：手动编辑 config.json 后菜单显示旧值，且下一次
+# _xhttp_apply_all 会覆盖手动修改。查看/修改前把 config.json 的端口/UUID
+# 同步回存储（XHTTP 入站与节点 1:1，按 tag 匹配）。
+_xhttp_sync_from_live() {
+    [[ -f "$XRAY_CFG" ]] || return 0
+    local nodes; nodes=$(_xhttp_load)
+    local count; count=$(echo "$nodes" | jq 'length' 2>/dev/null) || return 0
+    [[ "$count" =~ ^[0-9]+$ ]] || return 0
+    local i changed=0
+    for ((i = 0; i < count; i++)); do
+        local node tag uuid port listen skey live live_port live_uuid
+        node=$(echo "$nodes" | jq ".[$i]")
+        tag=$(echo "$node"    | jq -r '.tag')
+        uuid=$(echo "$node"   | jq -r '.uuid')
+        port=$(echo "$node"   | jq -r '.port')
+        listen=$(echo "$node" | jq -r '.listen_addr // "127.0.0.1"')
+        # SNI 路由键：普通模式是域名，reality-layer 模式是伪装 SNI
+        skey=$(echo "$node"   | jq -r 'if (.domain // "") != "" then .domain else (.server_name // "") end')
+        live=$(jq -c --arg t "$tag" 'first(.inbounds[]? | select(.tag == $t)) // empty' "$XRAY_CFG" 2>/dev/null || true)
+        [[ -z "$live" ]] && continue
+        live_port=$(echo "$live" | jq -r '.port')
+        live_uuid=$(echo "$live" | jq -r '.settings.clients[0].id // empty')
+        [[ -z "$live_uuid" ]] && live_uuid="$uuid"
+        [[ "$live_port" == "$port" && "$live_uuid" == "$uuid" ]] && continue
+        changed=1
+        if [[ "$listen" == "127.0.0.1" && "$live_port" != "$port" && -n "$skey" ]]; then
+            _sni_add_entry "$skey" "127.0.0.1:${live_port}" 2>/dev/null || true
+        fi
+        nodes=$(echo "$nodes" | jq --arg t "$tag" --arg p "$live_port" --arg u "$live_uuid" \
+            '(.[] | select(.tag == $t)) |= (.port = ($p|tonumber) | .uuid = $u
+             | (if (.listen_addr // "127.0.0.1") != "127.0.0.1" then .public_port = ($p|tonumber) else . end))')
+    done
+    if (( changed )); then
+        _xhttp_save "$nodes"
+        log_info "检测到 config.json 中的手动修改，已同步端口/UUID 到节点存储。"
+    fi
+    return 0
+}
+
 _show_node_list() {
     local lst; lst=$(_xhttp_list)
     [[ -z "$lst" ]] && { log_warn "暂无 XHTTP 节点。"; return; }
@@ -168,6 +207,7 @@ _xhttp_apply_all() {
 
 # ── Add node ──────────────────────────────────────────────────────────────────
 xhttp_add_node() {
+    _xhttp_sync_from_live
     local count; count=$(_xhttp_load | jq 'length')
     local tag port uuid domain path mode
 
@@ -322,9 +362,61 @@ xhttp_modify_path() {
     log_ok "路径已更新为 $new_path"
 }
 
+xhttp_modify_uuid() {
+    _xhttp_sync_from_live
+    _show_node_list
+    local tag; ask tag "节点标识"
+    local node; node=$(_xhttp_get_by_tag "$tag")
+    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    local new_uuid; ask new_uuid "新 UUID（留空自动生成）" ""
+    [[ -z "$new_uuid" ]] && new_uuid=$(uuid_gen)
+    node=$(echo "$node" | jq --arg v "$new_uuid" '.uuid=$v')
+    _xhttp_upsert "$node"
+    _xhttp_apply_all
+    log_ok "UUID 已更新：$new_uuid"
+}
+
+xhttp_modify_port() {
+    _xhttp_sync_from_live
+    _show_node_list
+    local tag; ask tag "节点标识"
+    local node; node=$(_xhttp_get_by_tag "$tag")
+    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    local old_port listen skey
+    old_port=$(echo "$node" | jq -r '.port')
+    listen=$(echo "$node"   | jq -r '.listen_addr // "127.0.0.1"')
+    skey=$(echo "$node"     | jq -r 'if (.domain // "") != "" then .domain else (.server_name // "") end')
+
+    local port
+    [[ "$listen" == "127.0.0.1" ]] \
+        && log_info "该节点经 Nginx 反代（公网端口保持 443），修改的是本机 Xray 监听端口。"
+    ask port "新端口" "$old_port"
+    [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        log_error "无效端口"; return 1
+    fi
+    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+
+    node=$(echo "$node" | jq --argjson p "$port" \
+        '.port = $p | (if (.listen_addr // "127.0.0.1") != "127.0.0.1" then .public_port = $p else . end)')
+    _xhttp_upsert "$node"
+    [[ "$listen" == "127.0.0.1" && -n "$skey" ]] && _sni_add_entry "$skey" "127.0.0.1:${port}" || true
+    _xhttp_apply_all
+    log_ok "节点 '$tag' 端口已更新：${old_port} → ${port}"
+
+    if [[ "$listen" != "127.0.0.1" ]]; then
+        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+            source "$LIB_DIR/system.sh"
+            firewall_open_port "$port" "tcp"
+        }
+        log_info "原端口 ${old_port}/tcp 若已在防火墙放行，不再使用时请手动关闭。"
+    fi
+}
+
 # ── Share URI ─────────────────────────────────────────────────────────────────
 xhttp_show_share() {
     local tag="$1"
+    _xhttp_sync_from_live
     [[ -z "$tag" ]] && { _show_node_list; ask tag "节点标识"; }
     local node; node=$(_xhttp_get_by_tag "$tag")
     [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
@@ -396,10 +488,15 @@ _xhttp_check_deps() {
 xhttp_menu() {
     _xhttp_check_deps || return
     while true; do
+        # 每轮菜单前同步一次，避免任何走 _xhttp_apply_all 的操作
+        # 用过期的节点存储覆盖 config.json 中的手动修改。
+        _xhttp_sync_from_live
         show_menu "XHTTP 管理" \
             "添加节点" \
             "删除节点" \
             "修改路径" \
+            "修改 UUID" \
+            "修改端口" \
             "显示分享链接 / URI" \
             "列出节点"
 
@@ -407,8 +504,10 @@ xhttp_menu() {
             1) xhttp_add_node ;;
             2) xhttp_delete_node ;;
             3) xhttp_modify_path ;;
-            4) xhttp_show_share "" ;;
-            5) _show_node_list ;;
+            4) xhttp_modify_uuid ;;
+            5) xhttp_modify_port ;;
+            6) xhttp_show_share "" ;;
+            7) _show_node_list ;;
             0) return ;;
         esac
         press_enter

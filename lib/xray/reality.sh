@@ -86,6 +86,62 @@ _reality_delete() {
     _reality_save "$nodes"
 }
 
+# ── Sync store from live config ───────────────────────────────────────────────
+# 节点存储是唯一事实源：手动编辑 config.json（改端口/UUID）后菜单仍显示旧值，
+# 且下一次 _reality_apply_all 会用旧值覆盖手动修改。查看/修改前先把 config.json
+# 中的端口和 UUID 同步回存储，使手动修改持久生效。匹配顺序：先按 tag，再按
+# 客户端 UUID（合并入站的 tag 只属于同端口组的第一个节点）。
+_reality_sync_from_live() {
+    [[ -f "$XRAY_CFG" ]] || return 0
+    local nodes; nodes=$(_reality_load)
+    local count; count=$(echo "$nodes" | jq 'length' 2>/dev/null) || return 0
+    [[ "$count" =~ ^[0-9]+$ ]] || return 0
+    local i changed=0
+    for ((i = 0; i < count; i++)); do
+        local node tag uuid port listen sn live
+        node=$(echo "$nodes" | jq ".[$i]")
+        tag=$(echo "$node"    | jq -r '.tag')
+        uuid=$(echo "$node"   | jq -r '.uuid')
+        port=$(echo "$node"   | jq -r '.port')
+        listen=$(echo "$node" | jq -r '.listen_addr // "0.0.0.0"')
+        sn=$(echo "$node"     | jq -r '.server_name')
+
+        live=$(jq -c --arg t "$tag" 'first(.inbounds[]? | select(.tag == $t)) // empty' "$XRAY_CFG" 2>/dev/null || true)
+        [[ -z "$live" ]] && live=$(jq -c --arg u "$uuid" \
+            'first(.inbounds[]? | select(.settings.clients[]?.id == $u)) // empty' "$XRAY_CFG" 2>/dev/null || true)
+        [[ -z "$live" ]] && continue
+
+        local live_port live_uuid nclients
+        live_port=$(echo "$live" | jq -r '.port')
+        nclients=$(echo "$live" | jq '.settings.clients | length' 2>/dev/null || echo 0)
+        live_uuid="$uuid"
+        if [[ "$nclients" == "1" ]]; then
+            live_uuid=$(echo "$live" | jq -r '.settings.clients[0].id')
+        elif ! echo "$live" | jq -e --arg u "$uuid" '.settings.clients[]? | select(.id == $u)' >/dev/null 2>&1; then
+            log_warn "节点 '$tag'：config.json 对应入站是多用户且不含其 UUID，无法自动同步，请通过菜单修改。"
+        fi
+
+        [[ "$live_port" == "$port" && "$live_uuid" == "$uuid" ]] && continue
+        changed=1
+        if [[ "$listen" == "127.0.0.1" && "$live_port" != "$port" ]]; then
+            source "$LIB_DIR/nginx.sh"
+            _sni_add_entry "$sn" "127.0.0.1:${live_port}" 2>/dev/null || true
+            if [[ "$(state_get reality_local_port)" == "$port" ]]; then
+                state_set reality_local_port "$live_port"
+                _sni_set_default_backend "127.0.0.1:${live_port}" 2>/dev/null || true
+            fi
+        fi
+        nodes=$(echo "$nodes" | jq --arg t "$tag" --arg p "$live_port" --arg u "$live_uuid" \
+            '(.[] | select(.tag == $t)) |= (.port = ($p|tonumber) | .uuid = $u
+             | (if (.listen_addr // "0.0.0.0") != "127.0.0.1" then .public_port = ($p|tonumber) else . end))')
+    done
+    if (( changed )); then
+        _reality_save "$nodes"
+        log_info "检测到 config.json 中的手动修改，已同步端口/UUID 到节点存储。"
+    fi
+    return 0
+}
+
 # ── Port selection ────────────────────────────────────────────────────────────
 _reality_port_is_risky() {
     local port="$1"
@@ -245,6 +301,7 @@ _reality_apply_all() {
 
 # ── Add node ──────────────────────────────────────────────────────────────────
 reality_add_node() {
+    _reality_sync_from_live
     log_step "正在配置 VLESS + Reality 节点..."
     echo -e "  ${YELLOW}Reality 使用 x25519 密钥认证，本身不需要 TLS 证书。"
     echo -e "  如果使用自己的域名，签发证书可让 Nginx 提供真实 HTTPS 伪装站点，"
@@ -483,6 +540,82 @@ reality_modify_uuid() {
     log_ok "UUID 已更新：$new_uuid"
 }
 
+reality_modify_port() {
+    _reality_sync_from_live
+    _show_node_list
+    local tag; ask tag "节点标识"
+    local node; node=$(_reality_get_by_tag "$tag")
+    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+
+    local old_port listen sn
+    old_port=$(echo "$node" | jq -r '.port')
+    listen=$(echo "$node"   | jq -r '.listen_addr // "0.0.0.0"')
+    sn=$(echo "$node"       | jq -r '.server_name')
+
+    local port
+    if [[ "$listen" == "127.0.0.1" ]]; then
+        log_info "该节点经 Nginx 反代（公网端口保持 443），修改的是本机 Xray 监听端口。"
+        ask port "新的本机 Xray 监听端口" "$old_port"
+        [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+        if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+            log_error "无效端口"; return 1
+        fi
+        _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    else
+        while true; do
+            ask port "新的监听端口" "$(_reality_suggest_direct_port)"
+            [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+            if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+                log_error "无效端口"; continue
+            fi
+            if _reality_port_is_risky "$port"; then
+                log_warn "端口 ${port} 是常见服务端口，许多云厂商/ISP 会在上游封锁或过滤它。"
+                ask_yn "仍要使用这个端口吗？" N || continue
+            fi
+            if _reality_port_in_use "$port"; then
+                log_warn "端口 ${port} 已被本机其它服务占用（当前正在监听）。"
+                ask_yn "仍要使用这个端口吗？" N || continue
+            fi
+            break
+        done
+        _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    fi
+
+    # 同端口+同 SNI 的节点共享一个入站（同一密钥对，仅 UUID 不同），必须整组迁移，
+    # 否则 SNI 路由指向新端口后组内其它节点全部失联。直连节点各占独立公网端口，只移动自己。
+    local nodes; nodes=$(_reality_load)
+    nodes=$(echo "$nodes" | jq \
+        --arg t "$tag" --arg l "$listen" --arg sn "$sn" \
+        --arg old "$old_port" --arg new "$port" \
+        'map(if (if $l == "127.0.0.1"
+                 then ((.listen_addr // "0.0.0.0") == $l and (.port|tostring) == $old and .server_name == $sn)
+                 else .tag == $t end)
+             then .port = ($new|tonumber)
+                  | (if $l != "127.0.0.1" then .public_port = ($new|tonumber) else . end)
+             else . end)')
+    _reality_save "$nodes"
+
+    if [[ "$listen" == "127.0.0.1" ]]; then
+        source "$LIB_DIR/nginx.sh"
+        _sni_add_entry "$sn" "127.0.0.1:${port}"
+        if [[ "$(state_get reality_local_port)" == "$old_port" ]]; then
+            state_set reality_local_port "$port"
+            _sni_set_default_backend "127.0.0.1:${port}"
+        fi
+    fi
+
+    _reality_apply_all
+    log_ok "节点 '$tag' 端口已更新：${old_port} → ${port}"
+
+    if [[ "$listen" != "127.0.0.1" ]]; then
+        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+            source "$LIB_DIR/system.sh"
+            firewall_open_port "$port" "tcp"
+        }
+        log_info "原端口 ${old_port}/tcp 若已在防火墙放行，不再使用时请手动关闭。"
+    fi
+}
+
 reality_rotate_keys() {
     _show_node_list
     local tag; ask tag "节点标识"
@@ -553,6 +686,7 @@ reality_modify_flow() {
 # ── Export / share ────────────────────────────────────────────────────────────
 reality_show_uri() {
     local tag="$1"
+    _reality_sync_from_live
     [[ -z "$tag" ]] && { _show_node_list; ask tag "节点标识"; }
     local node; node=$(_reality_get_by_tag "$tag")
     [[ -z "$node" ]] && { log_error "未找到：$tag"; return 1; }
@@ -598,6 +732,7 @@ reality_show_uri() {
 }
 
 reality_export_clash() {
+    _reality_sync_from_live
     _show_node_list
     local tag; ask tag "节点标识"
     local node; node=$(_reality_get_by_tag "$tag")
@@ -632,6 +767,7 @@ EOF
 }
 
 reality_export_singbox() {
+    _reality_sync_from_live
     _show_node_list
     local tag; ask tag "节点标识"
     local node; node=$(_reality_get_by_tag "$tag")
@@ -686,6 +822,7 @@ _show_node_list() {
 }
 
 reality_show_config() {
+    _reality_sync_from_live
     _show_node_list
     local tag; ask tag "节点标识"
     local node; node=$(_reality_get_by_tag "$tag")
@@ -708,10 +845,14 @@ _reality_check_deps() {
 reality_menu() {
     _reality_check_deps || return
     while true; do
+        # 每轮菜单前同步一次，避免任何走 _reality_apply_all 的操作
+        # 用过期的节点存储覆盖 config.json 中的手动修改。
+        _reality_sync_from_live
         show_menu "Reality 管理" \
             "添加节点" \
             "删除节点" \
             "修改 UUID" \
+            "修改端口" \
             "轮换密钥（私钥 / 公钥）" \
             "轮换 Short ID" \
             "修改伪装 SNI" \
@@ -728,17 +869,18 @@ reality_menu() {
             1)  reality_add_node ;;
             2)  reality_delete_node ;;
             3)  reality_modify_uuid ;;
-            4)  reality_rotate_keys ;;
-            5)  reality_rotate_shortid ;;
-            6)  reality_modify_servername ;;
-            7)  reality_modify_flow ;;
-            8)  reality_modify_dest ;;
-            9)  reality_show_uri "" ;;
-            10) reality_export_clash ;;
-            11) reality_export_singbox ;;
-            12) reality_show_config ;;
-            13) _show_node_list ;;
-            14)
+            4)  reality_modify_port ;;
+            5)  reality_rotate_keys ;;
+            6)  reality_rotate_shortid ;;
+            7)  reality_modify_servername ;;
+            8)  reality_modify_flow ;;
+            9)  reality_modify_dest ;;
+            10) reality_show_uri "" ;;
+            11) reality_export_clash ;;
+            12) reality_export_singbox ;;
+            13) reality_show_config ;;
+            14) _show_node_list ;;
+            15)
                 source "$(dirname "${BASH_SOURCE[0]}")/reality_watchdog.sh"
                 rwd_menu
                 continue ;;
