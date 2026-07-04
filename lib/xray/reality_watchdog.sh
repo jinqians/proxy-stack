@@ -164,16 +164,19 @@ _rwd_tls13_negotiated() {
     grep -Eq "New, TLSv1\.3|Protocol *: TLSv1\.3|Protocol version: TLSv1\.3" "$out_file"
 }
 
-# REALITY steals the dest's TLS handshake and embeds its own auth inside the
-# X25519 key share, so the dest MUST negotiate a pure X25519 group. A dest that
-# picks P-256, or a post-quantum hybrid like X25519MLKEM768, breaks REALITY auth
-# for real clients even though a plain openssl handshake succeeds. If openssl
-# didn't report the group at all (very old build), we can't judge — don't fail.
+# REALITY embeds its auth inside the dest handshake's X25519 key share, so the
+# dest must negotiate a group that CONTAINS X25519. Modern TLS 1.3 servers
+# (Cloudflare, Apple, iCloud, …) increasingly pick a post-quantum hybrid such as
+# X25519MLKEM768 / X25519Kyber768 — these are fine on current Xray, because the
+# hybrid still carries the X25519 component REALITY uses for auth. We therefore
+# accept any group whose name contains X25519 and only reject a group that has
+# no X25519 at all (e.g. pure P-256/P-384/secp*). If openssl didn't report the
+# group (very old build), we can't judge — don't fail.
 _rwd_x25519_negotiated() {
     local out_file="$1" line
     line=$(grep -Ei "Server Temp Key|Negotiated TLS1\.3 group" "$out_file")
     [[ -z "$line" ]] && return 0
-    printf '%s\n' "$line" | grep -Eqi "X25519(,| |$)"
+    printf '%s\n' "$line" | grep -qi "X25519"
 }
 
 # h2 ALPN is what browsers (and thus well-behaved REALITY clients) negotiate; a
