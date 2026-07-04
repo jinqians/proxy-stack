@@ -10,6 +10,14 @@ REALITY_DEFAULT_PORT=443
 REALITY_DEFAULT_DEST="www.cloudflare.com:443"
 REALITY_DEFAULT_SERVER_NAME="www.cloudflare.com"
 
+# Ports clouds/ISPs commonly block upstream, or well-known service ports unfit
+# for a public proxy listener. A direct-listen node landing on one builds fine
+# but stays unreachable from real clients — the old REALITY_DEFAULT_PORT+count
+# default could hit 445 (SMB/microsoft-ds), which virtually every cloud/ISP
+# blocks even when the security group is open. Used to steer the suggested
+# default away from them and to warn if the operator picks one anyway.
+REALITY_RISKY_PORTS="23 25 110 111 135 137 138 139 143 161 389 445 465 587 993 995 1433 2049 3306 3389 5432 6379 27017"
+
 # ── Key generation ────────────────────────────────────────────────────────────
 _reality_gen_keys() {
     local pair
@@ -76,6 +84,60 @@ _reality_delete() {
     local nodes; nodes=$(_reality_load)
     nodes=$(echo "$nodes" | jq --arg tag "$1" 'del(.[] | select(.tag == $tag))')
     _reality_save "$nodes"
+}
+
+# ── Port selection ────────────────────────────────────────────────────────────
+_reality_port_is_risky() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    echo " $REALITY_RISKY_PORTS " | grep -qF " ${port} "
+}
+
+# True (0) when some process is already LISTENING on this TCP port. Checks the
+# live socket table (ss, then netstat) rather than any config file, so a port
+# held by a non-PSM service is caught too. If neither tool exists we can't tell,
+# so we fail open (report "not in use") and let the add proceed.
+_reality_port_in_use() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    if command -v ss &>/dev/null; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"
+        return
+    fi
+    if command -v netstat &>/dev/null; then
+        netstat -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"
+        return
+    fi
+    return 1
+}
+
+# Suggest a sensible default public port for a new direct-listen node: a high
+# port that is not risky, not already used by an existing Reality node, not
+# reserved (honeypot/other services) when that check is available, and not
+# currently listening. Tries pseudo-random high ports (20000–60000) first, then
+# scans upward from a fixed base. Bash arithmetic only — no external dependency.
+_reality_suggest_direct_port() {
+    local used port i
+    used=" $(_reality_load | jq -r '.[].port' 2>/dev/null | tr '\n' ' ') "
+
+    for (( i = 0; i < 40; i++ )); do
+        port=$(( 20000 + RANDOM * 40001 / 32768 ))
+        _reality_port_is_risky "$port" && continue
+        [[ "$used" == *" $port "* ]] && continue
+        declare -f _hp_is_reserved_port &>/dev/null && _hp_is_reserved_port "$port" && continue
+        _reality_port_in_use "$port" && continue
+        printf '%s' "$port"; return 0
+    done
+
+    for (( port = 20000; port <= 60000; port++ )); do
+        _reality_port_is_risky "$port" && continue
+        [[ "$used" == *" $port "* ]] && continue
+        declare -f _hp_is_reserved_port &>/dev/null && _hp_is_reserved_port "$port" && continue
+        _reality_port_in_use "$port" && continue
+        printf '%s' "$port"; return 0
+    done
+
+    printf '%s' "20000"
 }
 
 # ── Build Xray inbound JSON ───────────────────────────────────────────────────
@@ -271,8 +333,27 @@ reality_add_node() {
         fi
         public_port=443
     else
-        # For direct-listen (no Nginx), each node needs its own public port.
-        ask port "监听端口" "$((REALITY_DEFAULT_PORT + count))"
+        # For direct-listen (no Nginx), each node needs its own public port. The
+        # suggested default avoids well-known/ISP-blocked ports; if the operator
+        # picks a risky one anyway (e.g. 445 = SMB), warn and re-ask until they
+        # give a safe port or explicitly confirm the risky one.
+        while true; do
+            ask port "监听端口" "$(_reality_suggest_direct_port)"
+            if _reality_port_is_risky "$port"; then
+                if [[ "$port" == "445" ]]; then
+                    log_warn "端口 445 是 SMB/microsoft-ds，几乎所有云厂商和 ISP 都会在上游封锁它，客户端通常完全连不上。"
+                else
+                    log_warn "端口 ${port} 是常见服务端口，许多云厂商/ISP 会在上游封锁或过滤它。"
+                fi
+                log_warn "即使实例安全组/防火墙已放行，客户端也可能无法从公网连接此端口的节点。"
+                ask_yn "仍要使用这个端口吗？" N || continue
+            fi
+            if _reality_port_in_use "$port"; then
+                log_warn "端口 ${port} 已被本机其它服务占用（当前正在监听）。"
+                ask_yn "仍要使用这个端口吗？" N || continue
+            fi
+            break
+        done
         _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
         public_port="$port"
     fi
