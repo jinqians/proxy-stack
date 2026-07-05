@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # common.sh — shared utilities, constants, and helpers
 
+# ── 加载守卫 ──────────────────────────────────────────────────────────────────
+# 本文件会被大量模块重复 source（每个模块头部各 source 一次，manager.sh 也先
+# source）。若无守卫，每次重复 source 都会把 CFG_DIR / PSM_STATE 等路径变量重置
+# 回默认值——上层（测试或自定义流程）一旦先覆盖过这些路径，随后任意模块再 source
+# 本文件就会把覆盖悄悄冲掉。首次加载后置位，后续 source 直接返回，保证变量与函数
+# 只初始化一次。（return 仅在被 source 时执行；首次加载因守卫未置位不会触发。）
+[[ -n "${_PSM_COMMON_LOADED:-}" ]] && return 0
+_PSM_COMMON_LOADED=1
+
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
