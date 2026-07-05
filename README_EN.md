@@ -170,6 +170,7 @@ The uninstaller cleans up PSM-owned shortcuts, cron entries, systemd timers/serv
 
 - **Xray** — Reality / Vision / XHTTP / SS2022, multi-node management, automatic key-pair generation, export VLESS URI (with QR code) / Clash Meta / Sing-box
 - **Reality multi-target auto-failover** — configure several candidate SNIs for the decoy target, run real TLS 1.3 handshake checks on a schedule, and auto-switch on failure while keeping existing client links working
+- **Reality decoy-domain discovery** — when configuring the Reality / XHTTP decoy SNI, auto-discover real TLS 1.3 sites in your VPS's **own ASN / datacenter** to use as the camouflage target, via cyberspace-search engines (Netlas / Quake / ZoomEye / FOFA, using your own API key — free tiers are enough): nearby, low-profile, and away from the over-used big-brand domains. Each candidate is verified locally with a real handshake (TLS 1.3 / X25519 / cert match) before use, and can be bulk-added to the failover candidate pool above. **No local port scanning at any point** (to avoid provider abuse flags) — discovery is done from the search engine's dataset; falls back to manual entry when no engine is configured
 - **Cloudflare WARP outbound unlock** — register a WARP identity and wire it into an Xray outbound with one click, then route traffic for Netflix/OpenAI-style domains through WARP via routing rules
 - **Outbound routing** — custom outbound nodes (VLESS-Reality / TLS / XHTTP, Shadowsocks, Trojan, SOCKS5), forwarded by domain / GeoIP / GeoSite rule to the outbound you choose
 - **Hysteria2** — UDP proxy, password auth, bandwidth limiting, masquerade
@@ -214,7 +215,7 @@ The uninstaller cleans up PSM-owned shortcuts, cron entries, systemd timers/serv
 ├── config/               # runtime state & config (gitignored)
 ├── lib/
 │   ├── common.sh         # shared utility functions
-│   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / outbound routing / health checks
+│   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / outbound routing / health checks / decoy-domain discovery
 │   ├── security/         # SSH hardening / Fail2ban / honeypot
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # Docker extensions such as volume backup

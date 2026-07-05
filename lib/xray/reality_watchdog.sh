@@ -663,6 +663,11 @@ rwd_setup_wizard() {
     echo -e "      （见文件头注释），从境外/客户端网络对节点做真实拨测。"
     echo ""
 
+    if ask_yn "是否用测绘引擎发现同网络的候选伪装目标并批量加入？" Y; then
+        source "$LIB_DIR/xray/sni_finder.sh"
+        sni_finder_pick_many "$tag" || true   # 内部逐个 rwd_add_candidate "$tag" "$sni" "$dest"
+    fi
+
     while ask_yn "是否再添加一个候选伪装目标？" Y; do
         local sn dest
         ask sn   "伪装 SNI（如 www.apple.com）"
@@ -695,7 +700,9 @@ rwd_menu() {
             "启用定时检测" \
             "停止定时检测" \
             "停用某节点的测活切换" \
-            "查看检测日志"
+            "查看检测日志" \
+            "发现伪装域名（测绘引擎）并批量加入候选" \
+            "配置 / 更换测绘引擎与 API Key"
 
         case "$MENU_CHOICE" in
             1) rwd_setup_wizard; press_enter ;;
@@ -710,6 +717,17 @@ rwd_menu() {
             5) _rwd_uninstall_timer; press_enter ;;
             6) rwd_disable_node;     press_enter ;;
             7) [[ -f "$RWD_LOG" ]] && tail -n 50 "$RWD_LOG" || log_warn "暂无日志"; press_enter ;;
+            8)
+                local tag; tag=$(_rwd_pick_reality_tag) && {
+                    source "$(dirname "${BASH_SOURCE[0]}")/sni_finder.sh"
+                    _rwd_ensure_node_enabled "$tag"
+                    sni_finder_pick_many "$tag" || true
+                }
+                press_enter ;;
+            9)
+                source "$(dirname "${BASH_SOURCE[0]}")/sni_finder.sh"
+                _sni_setup_engine || true
+                press_enter ;;
             0) return ;;
         esac
     done

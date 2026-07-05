@@ -297,7 +297,14 @@ xhttp_add_node() {
         local priv_key="${pair%%$'\t'*}"
         local pub_key="${pair#*$'\t'}"
         local sid; sid=$(openssl rand -hex 4)
-        local sn; ask sn "伪装 SNI（例如 www.apple.com）" "www.microsoft.com"
+        local sn=""
+        if ask_yn "是否用测绘引擎发现同网络/同机房的伪装 SNI？" N; then
+            source "$LIB_DIR/xray/sni_finder.sh"
+            local _picked; _picked=$(sni_finder_pick_one) || true
+            # reality-layer 的 dest 固定为 sn:443（见 _xhttp_build_inbound），此处只取 SNI
+            [[ -n "$_picked" ]] && { sn="${_picked%%|*}"; log_info "已选用发现的伪装 SNI：${sn}"; }
+        fi
+        [[ -z "$sn" ]] && ask sn "伪装 SNI（例如 www.apple.com）" "www.microsoft.com"
         node=$(echo "$node" | jq \
             --arg pk "$priv_key" --arg pub "$pub_key" \
             --arg sid "$sid" --arg sn "$sn" \

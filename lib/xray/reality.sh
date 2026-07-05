@@ -342,8 +342,19 @@ reality_add_node() {
         fi
     else
         own_domain=0
-        ask server_names_raw "伪装 SNI（例如 www.apple.com）"     "$REALITY_DEFAULT_SERVER_NAME"
-        ask dest             "伪装目标（例如 www.apple.com:443）"  "$REALITY_DEFAULT_DEST"
+        if ask_yn "是否用测绘引擎发现同网络/同机房的伪装域名？" N; then
+            source "$LIB_DIR/xray/sni_finder.sh"
+            local _picked; _picked=$(sni_finder_pick_one) || true
+            if [[ -n "$_picked" ]]; then
+                server_names_raw="${_picked%%|*}"
+                dest="${_picked#*|}"
+                log_info "已选用发现的伪装目标：SNI=${server_names_raw} dest=${dest}"
+            fi
+        fi
+        [[ -z "$server_names_raw" ]] && \
+            ask server_names_raw "伪装 SNI（例如 www.apple.com）"     "$REALITY_DEFAULT_SERVER_NAME"
+        [[ -z "$dest" ]] && \
+            ask dest             "伪装目标（例如 www.apple.com:443）"  "$REALITY_DEFAULT_DEST"
         domain="$server_names_raw"
     fi
 

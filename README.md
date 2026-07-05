@@ -162,6 +162,7 @@ bash /opt/psm/uninstall.sh
 
 - **Xray** — Reality / Vision / XHTTP / SS2022，多节点管理，自动生成密钥对，导出 VLESS URI（含二维码）/ Clash Meta / Sing-box
 - **Reality 多目标自动测活切换** — 为伪装目标配置多个候选 SNI，定期做真实 TLS 1.3 握手检测，挂了自动切换，旧客户端链接依然有效
+- **Reality 伪装域名智能发现** — 配置 Reality / XHTTP 伪装 SNI 时，可通过网络空间测绘引擎（Netlas / Quake / ZoomEye / FOFA，用你自己的 API Key，免费额度即可）自动发现与本机 **同 ASN / 同机房** 的真实 TLS 1.3 站点作为伪装目标：就近、冷门、避开被教程用烂的大厂域名。候选会在本地逐个做真实握手校验（TLS 1.3 / X25519 / 证书匹配）后才采用，并可一键批量加入上面的测活候选池。**全程不做本机端口扫描**（避免触发服务商 abuse），发现由测绘引擎的数据集完成；未配置引擎时回退为手动输入
 - **Cloudflare WARP 出站解锁** — 一键注册 WARP 身份并接入 Xray 出站，配合分流规则把 Netflix / OpenAI 等域名的流量导到 WARP
 - **出站分流** — 自定义出站节点（VLESS-Reality / TLS / XHTTP、Shadowsocks、Trojan、SOCKS5），按域名 / GeoIP / GeoSite 规则转发到指定出站
 - **Hysteria2** — UDP 代理，密码认证，带宽限制，masquerade 伪装
@@ -206,7 +207,7 @@ bash /opt/psm/uninstall.sh
 ├── config/               # 运行时状态与配置（gitignore）
 ├── lib/
 │   ├── common.sh         # 公共工具函数
-│   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / 出站分流 / 测活
+│   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / 出站分流 / 测活 / 伪装域名发现
 │   ├── security/         # SSH 加固 / Fail2ban / 蜜罐
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # 数据卷备份等 Docker 扩展
