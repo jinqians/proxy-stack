@@ -1,4 +1,25 @@
+<div align="center">
+
 # JQ's Proxy Stack Manager
+
+**一站式 Linux 代理服务器管理工具 · Xray / sing-box 双内核**
+
+<p>
+  <img src="https://img.shields.io/badge/Platform-Linux-1793D1?logo=linux&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnubash&logoColor=white" alt="Bash">
+  <img src="https://img.shields.io/badge/Arch-x86__64%20%C2%B7%20arm64-FF8C00" alt="Arch">
+  <img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="License">
+  <img src="https://img.shields.io/github/stars/jinqians/proxy-stack?style=flat&logo=github&color=yellow" alt="Stars">
+</p>
+
+<p>
+  <b>简体中文</b> ·
+  <a href="README_EN.md">English</a> ·
+  <a href="README_KO.md">한국어</a> ·
+  <a href="README_RU.md">Русский</a>
+</p>
+
+</div>
 
 ```
        _    ___          ____    ____    __  __
@@ -18,15 +39,19 @@
 
 ## 简介
 
-**Proxy Stack Manager（PSM）** 是一套基于 Bash 的 Linux 代理服务器一站式管理工具，通过 `psm` 命令一键安装 VLESS Reality / Vision / XHTTP、Shadowsocks、Hysteria2、Snell（v4 / v5 / v6）等多种代理协议，并统一管理 Nginx、SSL 证书、节点流量监控与 Telegram Bot 通知、VPS 安全防护、Docker 应用、Cloudflare 服务等。
+**Proxy Stack Manager（PSM）** 是一套基于 Bash 的 Linux 代理服务器一站式管理工具，通过 `psm` 命令一键安装 VLESS Reality / Vision / XHTTP、Shadowsocks、Hysteria2、Snell、AnyTLS 等多种代理协议，内置 **Xray 与 sing-box 双内核**，并统一管理 Nginx、SSL 证书、realm 中转转发、节点流量监控与 Telegram Bot 通知、VPS 安全防护、Docker 应用、Cloudflare 服务等。
 
-每个节点都能自动生成密钥对，导出分享链接与二维码，支持 Clash Meta / shadowrocket 配置导出；证书通过 acme.sh 自动签发续期，无需手动操作。多个协议节点还可以共用同一个 443 端口对外呈现（详见下文）。
+每个节点都能自动生成密钥对，导出分享链接与二维码，支持 Clash Meta / Shadowrocket / Surge 配置导出；证书通过 acme.sh 自动签发续期，无需手动操作。多个协议节点还可以共用同一个 443 端口对外呈现（详见下文）。
+
+界面支持 **简体中文 / English / 한국어 / Русский** 四种语言：安装时选择，主菜单里随时切换。
 
 ### 为什么选择 PSM
 
 - **一条命令进入完整管理菜单**：安装后只需要运行 `psm`，所有功能都在同一个 CLI 菜单内
-- **多协议统一管理**：Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 可以共存，不需要每个协议维护一套脚本
+- **双内核可选**：Xray 与 sing-box 两套内核并行管理，协议入站、路由分流、出站节点各自独立配置，互不干扰
+- **多协议统一管理**：Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 / AnyTLS 可以共存，不需要每个协议维护一套脚本
 - **适合长期维护的 VPS**：不是一次性安装脚本，而是把更新、备份、恢复、服务状态和安全加固放到同一套工具里
+- **四语言界面**：中 / 英 / 韩 / 俄随时切换，`PSM_LANG=en psm` 可临时覆盖
 - **透明可审计**：项目主体是 Bash 脚本，安装目录固定在 `/opt/psm`，系统写入路径在文档中明确列出
 
 ---
@@ -116,15 +141,16 @@ bash /opt/psm/install.sh
 ══════════════════════════════════════════════════════════════
                   JQ's Proxy Stack Manager
 ══════════════════════════════════════════════════════════════
-   1. 系统管理                    9. Cloudflare DDNS
-   2. Nginx 管理                 10. 网站管理
-   3. Xray 管理                  11. 查看所有节点
-   4. Hysteria2 管理             12. 备份管理
-   5. Snell 管理                 13. 恢复备份
-   6. SS 2022 管理               14. 更新 PSM
-   7. Docker 管理                15. 流量管理
-   8. SSL 证书管理               16. Telegram Bot
-  17. 安全加固
+   1. 系统管理              11. 中转管理 (realm)
+   2. sing-box 管理         12. Cloudflare DDNS
+   3. Xray 管理             13. Docker 管理
+   4. Snell 管理            14. 流量管理
+   5. ss-rust 管理          15. Telegram Bot
+   6. Hysteria2 管理        16. 备份管理
+   7. Nginx 管理            17. 恢复备份
+   8. 网站管理              18. 更新 PSM
+   9. SSL 证书管理          19. 安全加固
+  10. 查看所有节点          20. 语言 / Language
 ──────────────────────────────────────────────────────────────
    0. 退出
 ══════════════════════════════════════════════════════════════
@@ -152,22 +178,34 @@ manager.sh --health-report         # 发送一次每日体检报告
 bash /opt/psm/uninstall.sh
 ```
 
-卸载器会清理 PSM 自身创建的快捷命令、cron、systemd timer/service、PSM 防火墙/Fail2ban 规则，并默认询问是否删除 `/opt/psm` 程序目录及其中配置状态。Nginx、Xray、Hysteria2、Snell、ss-rust、acme.sh、证书和 Docker Compose 应用等组件会逐一确认，避免误删你手动维护的系统服务。
+卸载器会清理 PSM 自身创建的快捷命令、cron、systemd timer/service、PSM 防火墙/Fail2ban 规则，并默认询问是否删除 `/opt/psm` 程序目录及其中配置状态。Nginx、Xray、sing-box、Hysteria2、Snell、ss-rust、acme.sh、证书和 Docker Compose 应用等组件会逐一确认，避免误删你手动维护的系统服务。
 
 ---
 
 ## 项目功能特性
 
-### 代理协议
+### Xray 内核
 
 - **Xray** — Reality / Vision / XHTTP / SS2022，多节点管理，自动生成密钥对，导出 VLESS URI（含二维码）/ Clash Meta / Sing-box
 - **Reality 多目标自动测活切换** — 为伪装目标配置多个候选 SNI，定期做真实 TLS 1.3 握手检测，挂了自动切换，旧客户端链接依然有效
 - **Reality 伪装域名智能发现** — 配置 Reality / XHTTP 伪装 SNI 时，可通过网络空间测绘引擎（Netlas / Quake / ZoomEye / FOFA，用你自己的 API Key，免费额度即可）自动发现与本机 **同 ASN / 同机房** 的真实 TLS 1.3 站点作为伪装目标：就近、冷门、避开被教程用烂的大厂域名。候选会在本地逐个做真实握手校验（TLS 1.3 / X25519 / 证书匹配）后才采用，并可一键批量加入上面的测活候选池。**全程不做本机端口扫描**（避免触发服务商 abuse），发现由测绘引擎的数据集完成；未配置引擎时回退为手动输入
 - **Cloudflare WARP 出站解锁** — 一键注册 WARP 身份并接入 Xray 出站，配合分流规则把 Netflix / OpenAI 等域名的流量导到 WARP
 - **出站分流** — 自定义出站节点（VLESS-Reality / TLS / XHTTP、Shadowsocks、Trojan、SOCKS5），按域名 / GeoIP / GeoSite 规则转发到指定出站
+
+### sing-box 内核（第二内核）
+
+- **与 Xray 并行的完整协议栈** — VLESS Reality、SS2022、Hysteria2、AnyTLS（需 sing-box 1.12+）、Snell（需 sing-box 1.14+）多协议入站共用一个内核与配置文件
+- **路由分流管理** — geosite / geoip / 域名后缀 / IP CIDR / 入站标签 → 指定出站或拦截，内置一键去广告、禁 QUIC 预设
+- **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2（Salamander 混淆）/ tuic 共 10 种出站类型
+- **WARP 出站** — 复用 Xray 侧注册的 WARP 账户，一键接入 WireGuard endpoint
+- **事务化配置变更** — 每次变更前自动备份，`sing-box check` 校验失败自动回滚配置与节点存储，不会留下坏配置导致服务起不来
+
+### 独立协议与中转
+
 - **Hysteria2** — UDP 代理，密码认证，带宽限制，masquerade 伪装
 - **Snell** — v4 / v5 / v6，PSK 认证，Surge 格式导出
 - **SS 2022** — shadowsocks-rust 独立部署，`ss://` URI 导出（含二维码）
+- **realm 中转** — TCP / UDP 端口转发规则管理（中转机 → 落地机），中转服务器状态可通过 Telegram 推送报告
 
 ### 基础服务
 
@@ -192,6 +230,7 @@ bash /opt/psm/uninstall.sh
 - **Telegram Bot** — 查询节点流量、管理用户绑定、到期续费、体检报告，全部可在 Telegram 内完成，无需登录服务器
 - **备份与恢复** — 全量 / 选择性备份（含 Docker 数据卷），定时备份，一键恢复
 - **系统管理** — BBR 拥塞控制、sysctl 网络调优、防火墙、DNS、时区
+- **多语言界面** — 简体中文 / English / 한국어 / Русский，安装时选择、菜单随时切换，全部 2000+ 条界面文案完整翻译
 
 ---
 
@@ -205,18 +244,22 @@ bash /opt/psm/uninstall.sh
 ├── update.sh             # 自更新和组件升级
 ├── uninstall.sh          # 引导式卸载
 ├── config/               # 运行时状态与配置（gitignore）
+├── lang/                 # 语言表（zh / en / ko / ru）
 ├── lib/
 │   ├── common.sh         # 公共工具函数
+│   ├── i18n.sh           # 多语言框架
 │   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / 出站分流 / 测活 / 伪装域名发现
+│   ├── singbox/          # sing-box 第二内核（Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 路由分流）
 │   ├── security/         # SSH 加固 / Fail2ban / 蜜罐
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # 数据卷备份等 Docker 扩展
-│   ├── tgbot/            # Telegram 通知模板 / 每日体检报告
+│   ├── tgbot/            # Telegram 通知模板 / 每日体检报告 / 中转状态
 │   ├── expiry/           # 到期管理
-│   ├── hysteria2.sh / snell.sh / ssrust.sh
+│   ├── hysteria2.sh / snell.sh / ssrust.sh / realm.sh
 │   ├── nginx.sh / cert.sh / cloudflare.sh
 │   ├── docker.sh / system.sh / backup.sh / traffic.sh
 │   └── tg_bot.sh
+├── scripts/              # 开发辅助脚本（i18n 校验等）
 ├── templates/            # 配置模板（含 Docker 应用商店模板）
 └── backup/               # 备份归档
 ```
@@ -233,7 +276,9 @@ PSM 会尽量把项目自身状态集中在 `/opt/psm`，但部分功能需要�
 | `/usr/local/bin/psm`                                                      | 全局快捷命令                                         |
 | `/etc/systemd/system/psm-*.service` / `/etc/systemd/system/psm-*.timer` | PSM 定时任务和守护服务                               |
 | `/usr/local/etc/xray` / `/usr/local/bin/xray`                           | Xray 配置和二进制                                    |
+| `/etc/sing-box` / `/usr/local/bin/sing-box`                             | sing-box 配置和二进制                                |
 | `/etc/hysteria` / `/usr/local/bin/hysteria`                             | Hysteria2 配置和二进制                               |
+| `/etc/realm` / `/usr/local/bin/realm`                                   | realm 中转配置和二进制                               |
 | `/etc/nginx`                                                              | Nginx 站点、stream 分流和 SSL 文件                   |
 | `/root/.acme.sh`                                                          | acme.sh 账户和证书签发缓存                           |
 | `/etc/fail2ban` / `iptables`                                            | Fail2ban 规则、蜜罐和流量统计链                      |
@@ -245,9 +290,17 @@ PSM 会尽量把项目自身状态集中在 `/opt/psm`，但部分功能需要�
 
 ## 常见问题
 
+### 如何切换界面语言？
+
+主菜单选择「20. 语言 / Language」，即可在 简体中文 / English / 한국어 / Русский 之间切换并持久保存；也可以用 `PSM_LANG=en psm` 只对当次会话临时覆盖。
+
 ### 重复执行一键安装会怎样？
 
 如果 `/opt/psm` 已是完整安装，脚本会执行 `git pull` 更新。若检测到旧版卸载后残留的半安装状态（例如 `.git` 还在但 `psm` 命令或配置目录缺失），会自动重新运行安装流程修复。
+
+### Xray 和 sing-box 有什么区别？该用哪个？
+
+两者是并行的独立内核：Xray 侧功能最全（测活、伪装域名发现、流量统计等），sing-box 侧协议覆盖更广（AnyTLS、原生 Snell 入站等）且路由配置更现代。可以只用其一，也可以同时运行，各自管理各自的端口和节点。
 
 ### 卸载后为什么还能选择保留某些组件？
 
@@ -263,13 +316,13 @@ PSM 会管理自己的站点和 stream 分流配置。已有生产站点建议�
 
 ### 适合多服务器集中管理吗？
 
-当前 PSM 以单台 VPS 本地管理为主，暂不支持多服务器集中面板、状态同步或远程编排。
+当前 PSM 以单台 VPS 本地管理为主，暂不支持多服务器集中面板、状态同步或远程编排。realm 中转可以在多台机器间做流量转发，但各机器仍是独立管理。
 
 ---
 
 ## 项目资料
 
-- [英文 README](README_EN.md)
+- [English README](README_EN.md) · [한국어 README](README_KO.md) · [Русский README](README_RU.md)
 - [变更日志](CHANGELOG.md)
 
 ---

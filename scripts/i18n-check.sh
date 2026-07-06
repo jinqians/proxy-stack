@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# i18n-check.sh — 校验 zh/en 语言表键对齐 + 追踪已迁移文件里的残留中文。
+# i18n-check.sh — 校验全部语言表键对齐 + 追踪已迁移文件里的残留中文。
 # 纯 bash + coreutils（comm/grep/sort），无外部依赖。
 # 退出码：键集合不一致 → 1；一致 → 0（残留中文仅作追踪，不影响退出码）。
 
@@ -7,8 +7,20 @@ set -uo pipefail
 
 PSM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LANG_ROOT="$PSM_ROOT/lang"
+I18N_FILE="$PSM_ROOT/lib/i18n.sh"
 
 rc=0
+
+supported_langs() {
+    local langs
+    langs="$(grep -E '^PSM_LANG_SUPPORTED=' "$I18N_FILE" 2>/dev/null | head -n1 | cut -d= -f2-)"
+    langs="${langs%\"}"; langs="${langs#\"}"
+    if [[ -n "$langs" ]]; then
+        printf '%s\n' $langs
+    else
+        printf '%s\n' zh en
+    fi
+}
 
 # 提取一个语言目录里的全部 MSG[...] 键名（去重排序）。
 # 仅匹配真正的赋值行（行首可有缩进 + MSG[...]=），避免误匹配注释里的 MSG[...]。
@@ -35,25 +47,35 @@ cjk_lines() {
 }
 
 echo "== key 对齐 =="
-if [[ ! -f "$LANG_ROOT/zh.sh" || ! -f "$LANG_ROOT/en.sh" ]]; then
-    echo "  缺少语言表：$LANG_ROOT/zh.sh 或 $LANG_ROOT/en.sh" >&2
+if [[ ! -f "$LANG_ROOT/zh.sh" ]]; then
+    echo "  缺少基准语言表：$LANG_ROOT/zh.sh" >&2
     exit 1
 fi
 
-missing_en="$(comm -23 <(keys zh) <(keys en))"
-missing_zh="$(comm -13 <(keys zh) <(keys en))"
+zh_count="$(keys zh | grep -c .)"
+for lang in $(supported_langs); do
+    [[ "$lang" == "zh" ]] && continue
+    if [[ ! -f "$LANG_ROOT/${lang}.sh" ]]; then
+        echo "  缺少语言表：$LANG_ROOT/${lang}.sh" >&2
+        rc=1
+        continue
+    fi
 
-if [[ -n "$missing_en" ]]; then
-    echo "en.sh 缺失的键（zh 有 en 无）:"
-    echo "$missing_en" | sed 's/^/  /'
-    rc=1
-fi
-if [[ -n "$missing_zh" ]]; then
-    echo "zh.sh 缺失的键（en 有 zh 无）:"
-    echo "$missing_zh" | sed 's/^/  /'
-    rc=1
-fi
-[[ $rc -eq 0 ]] && echo "  OK：zh/en 键集合一致（$(keys zh | grep -c . ) 个键）"
+    missing_lang="$(comm -23 <(keys zh) <(keys "$lang"))"
+    extra_lang="$(comm -13 <(keys zh) <(keys "$lang"))"
+
+    if [[ -n "$missing_lang" ]]; then
+        echo "${lang}.sh 缺失的键（zh 有 ${lang} 无）:"
+        echo "$missing_lang" | sed 's/^/  /'
+        rc=1
+    fi
+    if [[ -n "$extra_lang" ]]; then
+        echo "${lang}.sh 多出的键（${lang} 有 zh 无）:"
+        echo "$extra_lang" | sed 's/^/  /'
+        rc=1
+    fi
+    [[ -z "$missing_lang" && -z "$extra_lang" ]] && echo "  OK：zh/${lang} 键集合一致（${zh_count} 个键）"
+done
 
 echo ""
 echo "== 源码文件残留中文（非注释行；0 = 该文件所有用户输出已可切换语言）=="

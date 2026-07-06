@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# i18n.sh — 轻量纯 Bash 多语言（中/英，可扩展）。依赖 common.sh 的 state_get/state_set。
+# i18n.sh — 轻量纯 Bash 多语言。依赖 common.sh 的 state_get/state_set。
 
 # ── bash 版本检测（关联数组需 bash 4+）─────────────────────────────────────────
 # 目标发行版（Ubuntu 20.04+/Debian 10+/EL8+）均满足；仅作友好提示，不硬退出。
@@ -8,7 +8,7 @@
 declare -gA MSG           # 全局消息表（bash 4+）
 
 PSM_LANG_DEFAULT="zh"
-PSM_LANG_SUPPORTED="zh en"
+PSM_LANG_SUPPORTED="zh en ko ru"
 LANG_DIR="${LANG_DIR:-$PSM_ROOT/lang}"
 
 # 解析当前语言：PSM_LANG 环境变量 > state_get psm_lang > 默认；非受支持则回退默认。
@@ -61,7 +61,12 @@ i18n_set_lang() {
 
 # 交互式语言选择器（菜单/安装共用）。
 i18n_pick_lang() {
-    echo -e "  1. 简体中文\n  2. English"
-    read -rp "$(echo -e "${CYAN}选择语言 / Select language [1]: ${NC}")" _c
-    case "${_c:-1}" in 2) i18n_set_lang en ;; *) i18n_set_lang zh ;; esac
+    echo -e "  1. 简体中文\n  2. English\n  3. 한국어\n  4. Русский"
+    read -rp "$(echo -e "${CYAN}选择语言 / Select language / 언어 선택 / Выберите язык [1]: ${NC}")" _c
+    case "${_c:-1}" in
+        2) i18n_set_lang en ;;
+        3) i18n_set_lang ko ;;
+        4) i18n_set_lang ru ;;
+        *) i18n_set_lang zh ;;
+    esac
 }
