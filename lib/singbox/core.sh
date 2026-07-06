@@ -250,17 +250,74 @@ _sb_write_cfg_checked() {
     mv -f "$candidate" "$SB_CFG"
 }
 
-# 校验并重启：先 sing-box check，通过再 restart。失败保留原配置并回显错误。
+# 事务化备份：协议模块 apply 前调用，把当前配置存为 ${SB_CFG}.prev。
+# 协议模块是「先改配置再校验」，坏配置会先落盘；此备份供 sb_test_restart 回滚。
+_sb_cfg_backup() {
+    [[ -f "$SB_CFG" ]] || return 0
+    cp -a "$SB_CFG" "${SB_CFG}.prev" 2>/dev/null || true
+}
+
+# 校验并重启：先 sing-box check。
+#  - 通过：删除 .prev 备份，再 restart（restart 失败维持原状返回 1）。
+#  - 失败：坏配置已落盘，若存在 .prev 则 mv 回去真正恢复变更前配置，再回显错误。
 sb_test_restart() {
     local test_out
     if test_out=$("$SB_BIN" check -c "$SB_CFG" 2>&1); then
+        rm -f "${SB_CFG}.prev"
         svc_restart sing-box && { log_ok "$(t sb.restarted)"; return 0; }
         log_error "$(t sb.restart_fail)"
         return 1
     fi
     log_error "$(t sb.test_fail)"
+    if [[ -f "${SB_CFG}.prev" ]]; then
+        mv -f "${SB_CFG}.prev" "$SB_CFG"
+        log_warn "$(t sb.rolled_back)"
+    fi
     echo "$test_out" >&2
     return 1
+}
+
+# ── Version gate ──────────────────────────────────────────────────────────────
+# 已安装 sing-box 的版本号（形如 1.13.14）；二进制缺失或无法解析时输出空串。
+# `sing-box version` 首行形如：sing-box version 1.13.14 (...)。
+_sb_installed_version() {
+    [[ -x "$SB_BIN" ]] || return 1
+    "$SB_BIN" version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+# 点分版本比较：$1 >= $2 返回 0，否则返回 1。纯 bash 实现，不依赖 GNU sort -V
+# （开发机 macOS 的 BSD sort 无 -V）。非数字后缀（如 1.14.0-beta）按 0 处理。
+_sb_version_ge() {
+    local a="$1" b="$2" i len x y
+    local -a av bv
+    IFS='.' read -ra av <<<"$a"
+    IFS='.' read -ra bv <<<"$b"
+    len=${#av[@]}; (( ${#bv[@]} > len )) && len=${#bv[@]}
+    for (( i=0; i<len; i++ )); do
+        x=${av[i]:-0}; y=${bv[i]:-0}
+        x=${x%%[!0-9]*}; y=${y%%[!0-9]*}
+        (( 10#${x:-0} > 10#${y:-0} )) && return 0
+        (( 10#${x:-0} < 10#${y:-0} )) && return 1
+    done
+    return 0
+}
+
+# 运行时功能门禁：已装版本 < min 时 log_error 并 return 1。
+# feature_key 是功能名的 i18n 键（如 sb.snell.feature），文案含当前版本与最低版本。
+# 安装装的是 GitHub 最新稳定版，新协议入站可能要等更高稳定版发布，故提示升级路径。
+_sb_require_version() {
+    local min="$1" feature_key="$2"
+    local feature; feature=$(t "$feature_key")
+    local cur; cur=$(_sb_installed_version)
+    if [[ -z "$cur" ]]; then
+        log_error "$(t sb.ver.unknown "$feature" "$min")"
+        return 1
+    fi
+    if ! _sb_version_ge "$cur" "$min"; then
+        log_error "$(t sb.ver.too_low "$feature" "$cur" "$min")"
+        return 1
+    fi
+    return 0
 }
 
 # ── Status & logs ─────────────────────────────────────────────────────────────

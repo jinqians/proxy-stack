@@ -113,6 +113,7 @@ _sb_ss_build_inbound() {
 
 # ── Apply all SS2022 nodes into sing-box config ───────────────────────────────
 _sb_ss_apply() {
+    _sb_cfg_backup   # 事务化：先备份，sb_test_restart 校验失败时回滚
     local nodes; nodes=$(_sb_ss_load)
     local count; count=$(echo "$nodes" | jq 'length')
 
@@ -128,6 +129,14 @@ _sb_ss_apply() {
     done
 
     sb_test_restart
+}
+
+# 事务化：apply 失败时把节点存储还原为快照 $1，并提示本次变更已撤销。
+_sb_ss_apply_or_revert() {
+    _sb_ss_apply && return 0
+    _sb_ss_save "$1"
+    log_error "$(t sb.change_reverted)"
+    return 1
 }
 
 # ── Share URI (SIP002) ────────────────────────────────────────────────────────
@@ -196,8 +205,9 @@ sb_ss_add_node() {
         --arg method "$method" --arg pass "$pass" --arg listen "$listen" \
         '{tag: $tag, port: $p, method: $method, password: $pass, listen: $listen}')
 
+    local _prev_store; _prev_store=$(_sb_ss_load)
     _sb_ss_upsert "$node_json"
-    _sb_ss_apply || return 1
+    _sb_ss_apply_or_revert "$_prev_store" || return 1
 
     log_ok "$(t sb.ss.added "$tag" "$port" "$method")"
 
@@ -227,8 +237,9 @@ sb_ss_modify_port() {
     _sb_check_port_conflict "$port" || { log_info "$(t sb.ss.cancelled)"; return 1; }
 
     node=$(echo "$node" | jq --argjson p "$port" '.port = $p')
+    local _prev_store; _prev_store=$(_sb_ss_load)
     _sb_ss_upsert "$node"
-    _sb_ss_apply
+    _sb_ss_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.ss.port_updated "$tag" "$old_port" "$port")"
 
     ask_yn "$(t sb.ss.ask_firewall "$port")" Y && {
@@ -262,8 +273,9 @@ sb_ss_modify_password() {
     fi
 
     node=$(echo "$node" | jq --arg v "$pass" '.password = $v')
+    local _prev_store; _prev_store=$(_sb_ss_load)
     _sb_ss_upsert "$node"
-    _sb_ss_apply
+    _sb_ss_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.ss.pass_updated "$tag")"
     _sb_ss_uri "$tag"
 }
@@ -278,8 +290,10 @@ sb_ss_delete_node() {
     local tag="$SB_SS_SEL_TAG"
     ask_yn "$(t sb.ss.ask_confirm_del "$tag")" N || return
 
+    # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
+    local _prev_store; _prev_store=$(_sb_ss_load)
     _sb_ss_delete "$tag"
-    _sb_ss_apply
+    _sb_ss_apply_or_revert "$_prev_store" || return 1
 
     declare -f _trf_cleanup_node &>/dev/null && \
         source "$LIB_DIR/traffic.sh" 2>/dev/null && \

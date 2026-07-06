@@ -91,6 +91,7 @@ _sb_hy2_build_inbound() {
 
 # ── Apply all Hysteria2 nodes into sing-box config ────────────────────────────
 _sb_hy2_apply() {
+    _sb_cfg_backup   # 事务化：先备份，sb_test_restart 校验失败时回滚
     local nodes; nodes=$(_sb_hy2_load)
     local count; count=$(echo "$nodes" | jq 'length')
 
@@ -104,6 +105,14 @@ _sb_hy2_apply() {
         sb_add_inbound "$(_sb_hy2_build_inbound "$node")"
     done
     sb_test_restart
+}
+
+# 事务化：apply 失败时把节点存储还原为快照 $1，并提示本次变更已撤销。
+_sb_hy2_apply_or_revert() {
+    _sb_hy2_apply && return 0
+    _sb_hy2_save "$1"
+    log_error "$(t sb.change_reverted)"
+    return 1
 }
 
 # ── Share URI ─────────────────────────────────────────────────────────────────
@@ -204,8 +213,9 @@ sb_hy2_add_node() {
           cert_path:$cert, key_path:$key, insecure:$insec, up:$up, down:$down,
           masquerade:$masq, obfs_pass:$obfs}')
 
+    local _prev_store; _prev_store=$(_sb_hy2_load)
     _sb_hy2_upsert "$node_json"
-    _sb_hy2_apply || return 1
+    _sb_hy2_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.hy2.added "$tag" "$port")"
 
     ask_yn "$(t sb.hy2.ask_firewall "$port")" Y && {
@@ -224,8 +234,9 @@ sb_hy2_modify_password() {
     local pass; ask pass "$(t sb.hy2.ask_new_pass)" ""
     [[ -z "$pass" ]] && pass=$(rand_str 24)
     node=$(echo "$node" | jq --arg v "$pass" '.password = $v')
+    local _prev_store; _prev_store=$(_sb_hy2_load)
     _sb_hy2_upsert "$node"
-    _sb_hy2_apply
+    _sb_hy2_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.hy2.pass_updated "$tag")"
     _sb_hy2_uri "$tag"
 }
@@ -236,8 +247,10 @@ sb_hy2_delete_node() {
     _sb_hy2_select_node || return
     local tag="$SB_HY2_SEL_TAG"
     ask_yn "$(t sb.hy2.ask_confirm_del "$tag")" N || return
+    # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
+    local _prev_store; _prev_store=$(_sb_hy2_load)
     _sb_hy2_delete "$tag"
-    _sb_hy2_apply
+    _sb_hy2_apply_or_revert "$_prev_store" || return 1
     declare -f _trf_cleanup_node &>/dev/null && \
         source "$LIB_DIR/traffic.sh" 2>/dev/null && _trf_cleanup_node "$tag" 2>/dev/null || true
     log_ok "$(t sb.hy2.deleted "$tag")"

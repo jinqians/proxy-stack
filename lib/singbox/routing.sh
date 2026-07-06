@@ -305,7 +305,9 @@ _sb_route_apply() {
     ' "$SB_CFG" > "$tmp"; then
         log_error "$(t sb.route.build_fail)"; rm -f "$tmp"; return 1
     fi
-    _sb_write_cfg_checked "$tmp" || return 1
+    _sb_cfg_backup   # 事务化：写回前备份，sb_test_restart 校验失败时回滚
+    # _sb_write_cfg_checked 失败时 SB_CFG 未变，清理多余的 .prev，避免残留
+    _sb_write_cfg_checked "$tmp" || { rm -f "${SB_CFG}.prev"; return 1; }
     sb_test_restart
 }
 

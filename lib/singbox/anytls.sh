@@ -76,6 +76,7 @@ _sb_anytls_build_inbound() {
 
 # ── Apply all AnyTLS nodes into sing-box config ───────────────────────────────
 _sb_anytls_apply() {
+    _sb_cfg_backup   # 事务化：先备份，sb_test_restart 校验失败时回滚
     local nodes; nodes=$(_sb_anytls_load)
     local count; count=$(echo "$nodes" | jq 'length')
 
@@ -89,6 +90,14 @@ _sb_anytls_apply() {
         sb_add_inbound "$(_sb_anytls_build_inbound "$node")"
     done
     sb_test_restart
+}
+
+# 事务化：apply 失败时把节点存储还原为快照 $1，并提示本次变更已撤销。
+_sb_anytls_apply_or_revert() {
+    _sb_anytls_apply && return 0
+    _sb_anytls_save "$1"
+    log_error "$(t sb.change_reverted)"
+    return 1
 }
 
 # ── Share URI ─────────────────────────────────────────────────────────────────
@@ -123,6 +132,8 @@ _sb_anytls_uri() {
 # ── Add node ──────────────────────────────────────────────────────────────────
 sb_anytls_add_node() {
     _sb_require_installed || return
+    # 版本门禁：AnyTLS 入站需 sing-box 1.12.0+，不满足则在填任何参数前拦截
+    _sb_require_version "1.12.0" "sb.anytls.feature" || return 1
     echo -e "\n${BOLD}$(t sb.anytls.add_title)${NC}"
     log_info "$(t sb.anytls.version_hint)"
 
@@ -155,8 +166,9 @@ sb_anytls_add_node() {
         '{tag:$tag, port:$port, password:$pass, domain:$domain, sni:$sni,
           cert_path:$cert, key_path:$key, insecure:$insec}')
 
+    local _prev_store; _prev_store=$(_sb_anytls_load)
     _sb_anytls_upsert "$node_json"
-    _sb_anytls_apply || return 1
+    _sb_anytls_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.anytls.added "$tag" "$port")"
 
     ask_yn "$(t sb.anytls.ask_firewall "$port")" Y && {
@@ -175,8 +187,9 @@ sb_anytls_modify_password() {
     local pass; ask pass "$(t sb.anytls.ask_new_pass)" ""
     [[ -z "$pass" ]] && pass=$(rand_str 20)
     node=$(echo "$node" | jq --arg v "$pass" '.password = $v')
+    local _prev_store; _prev_store=$(_sb_anytls_load)
     _sb_anytls_upsert "$node"
-    _sb_anytls_apply
+    _sb_anytls_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.anytls.pass_updated "$tag")"
     _sb_anytls_uri "$tag"
 }
@@ -187,8 +200,10 @@ sb_anytls_delete_node() {
     _sb_anytls_select_node || return
     local tag="$SB_ANYTLS_SEL_TAG"
     ask_yn "$(t sb.anytls.ask_confirm_del "$tag")" N || return
+    # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
+    local _prev_store; _prev_store=$(_sb_anytls_load)
     _sb_anytls_delete "$tag"
-    _sb_anytls_apply
+    _sb_anytls_apply_or_revert "$_prev_store" || return 1
     declare -f _trf_cleanup_node &>/dev/null && \
         source "$LIB_DIR/traffic.sh" 2>/dev/null && _trf_cleanup_node "$tag" 2>/dev/null || true
     log_ok "$(t sb.anytls.deleted "$tag")"

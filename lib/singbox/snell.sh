@@ -77,6 +77,7 @@ _sb_snell_build_inbound() {
 
 # ── Apply all Snell nodes into sing-box config ────────────────────────────────
 _sb_snell_apply() {
+    _sb_cfg_backup   # 事务化：先备份，sb_test_restart 校验失败时回滚
     local nodes; nodes=$(_sb_snell_load)
     local count; count=$(echo "$nodes" | jq 'length')
 
@@ -90,6 +91,14 @@ _sb_snell_apply() {
         sb_add_inbound "$(_sb_snell_build_inbound "$node")"
     done
     sb_test_restart
+}
+
+# 事务化：apply 失败时把节点存储还原为快照 $1，并提示本次变更已撤销。
+_sb_snell_apply_or_revert() {
+    _sb_snell_apply && return 0
+    _sb_snell_save "$1"
+    log_error "$(t sb.change_reverted)"
+    return 1
 }
 
 # ── Share (Surge / Clash Meta — Snell 无标准 URI) ─────────────────────────────
@@ -136,6 +145,8 @@ _sb_snell_share() {
 # ── Add node ──────────────────────────────────────────────────────────────────
 sb_snell_add_node() {
     _sb_require_installed || return
+    # 版本门禁：Snell 入站需 sing-box 1.14.0+，不满足则在填任何参数前拦截
+    _sb_require_version "1.14.0" "sb.snell.feature" || return 1
     echo -e "\n${BOLD}$(t sb.snell.add_title)${NC}"
     log_info "$(t sb.snell.version_hint)"
 
@@ -170,8 +181,9 @@ sb_snell_add_node() {
         --arg om "$obfs_mode" --arg oh "$obfs_host" \
         '{tag:$tag, port:$port, version:$ver, psk:$psk, listen:$listen, obfs_mode:$om, obfs_host:$oh}')
 
+    local _prev_store; _prev_store=$(_sb_snell_load)
     _sb_snell_upsert "$node_json"
-    _sb_snell_apply || return 1
+    _sb_snell_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.snell.added "$tag" "$port" "$version")"
 
     ask_yn "$(t sb.snell.ask_firewall "$port")" Y && {
@@ -190,8 +202,9 @@ sb_snell_modify_psk() {
     local psk; ask psk "$(t sb.snell.ask_new_psk)" ""
     [[ -z "$psk" ]] && psk=$(rand_str 24)
     node=$(echo "$node" | jq --arg v "$psk" '.psk = $v')
+    local _prev_store; _prev_store=$(_sb_snell_load)
     _sb_snell_upsert "$node"
-    _sb_snell_apply
+    _sb_snell_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.snell.psk_updated "$tag")"
     _sb_snell_share "$tag"
 }
@@ -202,8 +215,10 @@ sb_snell_delete_node() {
     _sb_snell_select_node || return
     local tag="$SB_SNELL_SEL_TAG"
     ask_yn "$(t sb.snell.ask_confirm_del "$tag")" N || return
+    # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
+    local _prev_store; _prev_store=$(_sb_snell_load)
     _sb_snell_delete "$tag"
-    _sb_snell_apply
+    _sb_snell_apply_or_revert "$_prev_store" || return 1
     declare -f _trf_cleanup_node &>/dev/null && \
         source "$LIB_DIR/traffic.sh" 2>/dev/null && _trf_cleanup_node "$tag" 2>/dev/null || true
     log_ok "$(t sb.snell.deleted "$tag")"

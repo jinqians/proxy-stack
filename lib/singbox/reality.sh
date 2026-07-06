@@ -166,6 +166,7 @@ _sb_reality_build_inbound() {
 
 # ── Apply all Reality nodes to sing-box config ────────────────────────────────
 _sb_reality_apply_all() {
+    _sb_cfg_backup   # 事务化：先备份，sb_test_restart 校验失败时回滚
     local nodes; nodes=$(_sb_reality_load)
     local count; count=$(echo "$nodes" | jq 'length')
 
@@ -183,6 +184,14 @@ _sb_reality_apply_all() {
     done
 
     sb_test_restart
+}
+
+# 事务化：apply 失败时把节点存储还原为快照 $1，并提示本次变更已撤销。
+_sb_reality_apply_or_revert() {
+    _sb_reality_apply_all && return 0
+    _sb_reality_save "$1"
+    log_error "$(t sb.change_reverted)"
+    return 1
 }
 
 # ── Add node ──────────────────────────────────────────────────────────────────
@@ -253,8 +262,9 @@ sb_reality_add_node() {
           short_ids: $short, listen_addr: $listen_addr
         }')
 
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node_json"
-    _sb_reality_apply_all || return 1
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
 
     echo ""
     log_ok "$(t sb.reality.added "$tag" "$port")"
@@ -276,8 +286,10 @@ sb_reality_delete_node() {
     [[ -z "$node" ]] && { log_error "$(t sb.reality.not_found "$tag")"; return 1; }
     ask_yn "$(t sb.reality.ask_confirm_del "$tag")" N || return 0
 
+    # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_delete "$tag"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     if [[ -f "${CFG_DIR}/traffic/state.json" ]]; then
         source "$LIB_DIR/traffic.sh"; _trf_init; _trf_cleanup_node "$tag"
     fi
@@ -293,8 +305,9 @@ sb_reality_modify_uuid() {
     local new_uuid; ask new_uuid "$(t sb.reality.ask_new_uuid)" ""
     [[ -z "$new_uuid" ]] && new_uuid=$("$SB_BIN" generate uuid 2>/dev/null || uuid_gen)
     node=$(echo "$node" | jq --arg v "$new_uuid" '.uuid = $v')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.uuid_updated "$new_uuid")"
 }
 
@@ -326,8 +339,9 @@ sb_reality_modify_port() {
     _sb_check_port_conflict "$port" || { log_info "$(t sb.reality.cancelled)"; return 1; }
 
     node=$(echo "$node" | jq --argjson p "$port" '.port = $p')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.port_updated "$tag" "$old_port" "$port")"
 
     ask_yn "$(t sb.reality.ask_firewall "$port")" Y && {
@@ -345,8 +359,9 @@ sb_reality_rotate_keys() {
     _sb_reality_gen_keys || return 1
     node=$(echo "$node" | jq --arg k "$SB_REALITY_PRIVATE_KEY" --arg p "$SB_REALITY_PUBLIC_KEY" \
         '.private_key=$k | .public_key=$p')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.keys_rotated "$SB_REALITY_PUBLIC_KEY")"
 }
 
@@ -357,8 +372,9 @@ sb_reality_rotate_shortid() {
     [[ -z "$node" ]] && { log_error "$(t sb.reality.not_found "$tag")"; return 1; }
     local sid; sid=$(_sb_reality_gen_shortid)
     node=$(echo "$node" | jq --argjson s "[\"$sid\"]" '.short_ids = $s')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.shortid_updated "$sid")"
 }
 
@@ -370,8 +386,9 @@ sb_reality_modify_servername() {
     local sn; ask sn "$(t sb.reality.ask_new_sni)"
     local primary; primary=$(echo "$sn" | cut -d',' -f1 | tr -d ' ')
     node=$(echo "$node" | jq --arg p "$primary" '.server_name=$p')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.sni_updated)"
 }
 
@@ -382,8 +399,9 @@ sb_reality_modify_dest() {
     [[ -z "$node" ]] && { log_error "$(t sb.reality.not_found "$tag")"; return 1; }
     local dest; ask dest "$(t sb.reality.ask_new_dest)"
     node=$(echo "$node" | jq --arg v "$dest" '.dest = $v')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.dest_updated)"
 }
 
@@ -396,8 +414,9 @@ sb_reality_modify_flow() {
     read -rp "$(echo -e "${CYAN}$(t sb.reality.ask_flow)${NC}")" fc
     local flow; [[ "$fc" == "2" ]] && flow="" || flow="xtls-rprx-vision"
     node=$(echo "$node" | jq --arg v "$flow" '.flow = $v')
+    local _prev_store; _prev_store=$(_sb_reality_load)
     _sb_reality_upsert "$node"
-    _sb_reality_apply_all
+    _sb_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.reality.flow_updated)"
 }
 
