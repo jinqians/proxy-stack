@@ -100,7 +100,7 @@ _ssh_has_pubkey() {
 # ── Rollback safety net ────────────────────────────────────────────────────
 _ssh_guard_no_pending() {
     if [[ -f "$SSH_ROLLBACK_STATE" ]]; then
-        log_error "存在尚未确认的 SSH 加固变更，请先在菜单中「确认加固生效」或等待其自动回滚，再进行下一步操作"
+        log_error "$(t security.ssh.pending_change)"
         return 1
     fi
     return 0
@@ -110,13 +110,14 @@ _ssh_schedule_rollback() {
     local backup="$1" reason="$2"
     _ssh_init
     local svc; svc=$(_ssh_svc_name)
+    local rollback_msg; rollback_msg="$(t security.ssh.rollback_executed "$reason")"
     nohup bash -c "
         sleep ${SSH_ROLLBACK_DELAY}
         if [[ -f '${SSH_ROLLBACK_STATE}' ]]; then
             cp -a '${backup}' '${SSHD_CFG}'
             if sshd -t 2>/dev/null; then systemctl reload ${svc} 2>/dev/null || systemctl restart ${svc} 2>/dev/null; fi
             rm -f '${SSH_ROLLBACK_STATE}'
-            echo \"\$(date '+%Y-%m-%d %H:%M:%S') 自动回滚已执行：${reason}\" >> '${SSH_ROLLBACK_LOG}'
+            echo \"\$(date '+%Y-%m-%d %H:%M:%S') ${rollback_msg}\" >> '${SSH_ROLLBACK_LOG}'
         fi
     " >/dev/null 2>&1 &
     disown
@@ -128,13 +129,13 @@ _ssh_schedule_rollback() {
 
 _ssh_confirm_hardening() {
     if [[ ! -f "$SSH_ROLLBACK_STATE" ]]; then
-        log_warn "当前没有待确认的 SSH 加固变更"
+        log_warn "$(t security.ssh.no_pending)"
         return 0
     fi
     local pid; pid=$(jq -r '.pid' "$SSH_ROLLBACK_STATE" 2>/dev/null)
     rm -f "$SSH_ROLLBACK_STATE"
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
-    log_ok "已确认加固生效，自动回滚已取消"
+    log_ok "$(t security.ssh.confirmed)"
 }
 
 _ssh_pending_rollback_info() {
@@ -154,15 +155,15 @@ _ssh_apply_and_protect() {
     local backup="$1" reason="$2"
     local test_out
     if ! test_out=$(_ssh_test_config); then
-        log_error "sshd 配置校验失败，已回滚到修改前的配置："
+        log_error "$(t security.ssh.config_test_fail)"
         echo "$test_out"
         cp -a "$backup" "$SSHD_CFG"
         return 1
     fi
     _ssh_reload
     _ssh_schedule_rollback "$backup" "$reason"
-    log_warn "变更已生效（reload，不影响当前已连接的会话），但 $((SSH_ROLLBACK_DELAY / 60)) 分钟内未确认将自动回滚。"
-    log_warn "请【保持当前会话不要关闭】，立即在新终端窗口验证连接，成功后回到本菜单选择「确认加固生效」。"
+    log_warn "$(t security.ssh.change_active_warn "$((SSH_ROLLBACK_DELAY / 60))")"
+    log_warn "$(t security.ssh.keep_session_warn)"
     return 0
 }
 
@@ -170,19 +171,19 @@ _ssh_apply_and_protect() {
 _ssh_add_pubkey_wizard() {
     local akfile; akfile=$(_ssh_authorized_keys_file)
     mkdir -p "$(dirname "$akfile")" && chmod 700 "$(dirname "$akfile")"
-    echo -e "\n${YELLOW}请粘贴你的 SSH 公钥整行内容（来自本机 ~/.ssh/id_ed25519.pub 等文件，以 ssh-ed25519 / ssh-rsa 开头）：${NC}"
+    echo -e "\n${YELLOW}$(t security.ssh.paste_key)${NC}"
     local key
     read -r key
     if ! [[ "$key" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-|sk-ssh-ed25519|sk-ecdsa-sha2-)[[:space:]] ]]; then
-        log_error "不是合法的公钥格式，已取消"
+        log_error "$(t security.ssh.invalid_pubkey)"
         return 1
     fi
     touch "$akfile"; chmod 600 "$akfile"
     if grep -qF "$key" "$akfile" 2>/dev/null; then
-        log_info "该公钥已存在于 $akfile，无需重复添加"
+        log_info "$(t security.ssh.key_exists "$akfile")"
     else
         echo "$key" >> "$akfile"
-        log_ok "公钥已添加到 $akfile"
+        log_ok "$(t security.ssh.key_added "$akfile")"
     fi
 }
 
@@ -192,14 +193,14 @@ ssh_disable_password() {
     _ssh_guard_no_pending || return 1
 
     if ! _ssh_has_pubkey; then
-        log_warn "未检测到 root 的任何 SSH 公钥（$(_ssh_authorized_keys_file) 为空）"
-        ask_yn "是否现在添加一个公钥？" Y && _ssh_add_pubkey_wizard
-        _ssh_has_pubkey || { log_error "没有可用公钥时禁用密码登录会导致无法登录，已取消"; return 1; }
+        log_warn "$(t security.ssh.no_root_key "$(_ssh_authorized_keys_file)")"
+        ask_yn "$(t security.ssh.ask_add_key)" Y && _ssh_add_pubkey_wizard
+        _ssh_has_pubkey || { log_error "$(t security.ssh.no_key_cancel)"; return 1; }
     fi
 
-    echo -e "\n${RED}${BOLD}警告：此操作会禁用密码登录，仅允许密钥登录。${NC}"
-    echo -e "${YELLOW}请不要关闭当前会话，操作后请立刻在新终端窗口测试密钥登录。${NC}"
-    ask_yn "确认继续？" N || return 0
+    echo -e "\n${RED}${BOLD}$(t security.ssh.disable_pw_warn)${NC}"
+    echo -e "${YELLOW}$(t security.ssh.test_key_warn)${NC}"
+    ask_yn "$(t security.ssh.confirm_continue)" N || return 0
 
     local backup; backup=$(_ssh_backup)
     _ssh_set_directive "PasswordAuthentication"      "no"
@@ -207,7 +208,7 @@ ssh_disable_password() {
     _ssh_set_directive "PubkeyAuthentication"         "yes"
     _ssh_set_directive "PermitRootLogin"              "prohibit-password"
 
-    _ssh_apply_and_protect "$backup" "密码登录禁用未在时限内确认"
+    _ssh_apply_and_protect "$backup" "$(t security.ssh.reason_disable_pw)"
 }
 
 # ── Change / add SSH port ────────────────────────────────────────────────────
@@ -215,21 +216,21 @@ ssh_change_port() {
     _ssh_guard_no_pending || return 1
 
     local cur; cur=$(_ssh_ports)
-    log_info "当前监听端口：${cur:-22}"
+    log_info "$(t security.ssh.current_ports "${cur:-22}")"
     local new_port
-    ask new_port "新的 SSH 端口（1-65535）" ""
+    ask new_port "$(t security.ssh.ask_new_port)" ""
     if ! [[ "$new_port" =~ ^[0-9]+$ ]] || (( new_port < 1 || new_port > 65535 )); then
-        log_error "端口无效"; return 1
+        log_error "$(t security.ssh.invalid_port)"; return 1
     fi
     if echo ",${cur}," | grep -qF ",${new_port},"; then
-        log_warn "端口 ${new_port} 已经是当前监听端口"; return 0
+        log_warn "$(t security.ssh.port_already_current "$new_port")"; return 0
     fi
 
-    echo -e "\n${RED}${BOLD}警告：此操作会直接切换 SSH 端口，不再监听旧端口（${cur}）。${NC}"
-    echo -e "${YELLOW}请不要关闭当前会话，操作后请立刻在新终端窗口用新端口测试连接。${NC}"
-    echo -e "${YELLOW}$((SSH_ROLLBACK_DELAY / 60)) 分钟内未确认会自动回滚回旧端口——这就是安全网，${NC}"
-    echo -e "${YELLOW}不需要靠新旧端口同时开着来兜底。${NC}"
-    ask_yn "确认切换到端口 ${new_port}？" N || return 0
+    echo -e "\n${RED}${BOLD}$(t security.ssh.change_port_warn "$cur")${NC}"
+    echo -e "${YELLOW}$(t security.ssh.test_new_port_warn)${NC}"
+    echo -e "${YELLOW}$(t security.ssh.rollback_port_warn "$((SSH_ROLLBACK_DELAY / 60))")${NC}"
+    echo -e "${YELLOW}$(t security.ssh.no_dual_port_warn)${NC}"
+    ask_yn "$(t security.ssh.ask_switch_port "$new_port")" N || return 0
 
     local backup; backup=$(_ssh_backup)
     source "$LIB_DIR/system.sh" 2>/dev/null || true
@@ -237,25 +238,25 @@ ssh_change_port() {
 
     _ssh_set_ports "$new_port"
 
-    _ssh_apply_and_protect "$backup" "SSH 端口切换至 ${new_port} 未在时限内确认"
+    _ssh_apply_and_protect "$backup" "$(t security.ssh.reason_change_port "$new_port")"
 }
 
 # ── One-click wizard (key + disable password only; port change is separate) ──
 ssh_harden_wizard() {
-    echo -e "\n${BOLD}${BLUE}══ SSH 一键加固向导 ══════════════════${NC}"
-    echo "依次完成：1) 确保已有可用公钥  2) 禁用密码登录"
-    echo -e "${YELLOW}如需改端口，请在本向导确认生效后，再到菜单单独执行「修改/新增端口」——${NC}"
-    echo -e "${YELLOW}两个高风险变更不会同时挂起，避免叠加风险导致更难排查。${NC}\n"
+    echo -e "\n${BOLD}${BLUE}══ $(t security.ssh.wizard_title) ══════════════════${NC}"
+    echo "$(t security.ssh.wizard_steps)"
+    echo -e "${YELLOW}$(t security.ssh.wizard_port_note)${NC}"
+    echo -e "${YELLOW}$(t security.ssh.wizard_risk_note)${NC}\n"
 
     if _ssh_has_pubkey; then
-        log_info "已检测到公钥，跳过添加步骤"
+        log_info "$(t security.ssh.key_detected)"
     else
-        log_step "第 1 步：添加 SSH 公钥"
+        log_step "$(t security.ssh.step_add_key)"
         _ssh_add_pubkey_wizard || return 1
-        _ssh_has_pubkey || { log_error "未成功添加公钥，向导已中止"; return 1; }
+        _ssh_has_pubkey || { log_error "$(t security.ssh.key_add_failed)"; return 1; }
     fi
 
-    log_step "第 2 步：禁用密码登录"
+    log_step "$(t security.ssh.step_disable_pw)"
     ssh_disable_password
 }
 
@@ -265,59 +266,59 @@ ssh_restore_backup_menu() {
     local -a files=()
     while IFS= read -r f; do files+=("$f"); done < <(ls -1t "$SSH_BACKUP_DIR"/sshd_config.* 2>/dev/null)
     if (( ${#files[@]} == 0 )); then
-        log_warn "没有可用的历史备份"; return 0
+        log_warn "$(t security.ssh.no_backups)"; return 0
     fi
-    echo -e "\n${BOLD}历史 sshd_config 备份（新→旧）：${NC}"
+    echo -e "\n${BOLD}$(t security.ssh.backup_title)${NC}"
     local i=0
     for f in "${files[@]}"; do i=$((i+1)); printf "  %2d. %s\n" "$i" "$(basename "$f")"; done
 
     local sel
-    read -rp "$(echo -e "${CYAN}选择要恢复的备份（0=取消）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t security.ssh.ask_restore_backup): ${NC}")" sel
     [[ -z "$sel" || "$sel" == "0" ]] && return 0
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项"; return 1
+        log_warn "$(t security.ssh.invalid_option)"; return 1
     fi
     local chosen="${files[$((sel-1))]}"
-    ask_yn "确认恢复到 $(basename "$chosen")？" N || return 0
+    ask_yn "$(t security.ssh.ask_confirm_restore "$(basename "$chosen")")" N || return 0
 
     _ssh_backup >/dev/null   # snapshot current config first, just in case
     cp -a "$chosen" "$SSHD_CFG"
     local test_out
     if ! test_out=$(_ssh_test_config); then
-        log_error "备份中的配置校验失败，未应用："; echo "$test_out"; return 1
+        log_error "$(t security.ssh.backup_test_fail)"; echo "$test_out"; return 1
     fi
     _ssh_reload
     rm -f "$SSH_ROLLBACK_STATE"
-    log_ok "已恢复到备份：$(basename "$chosen")"
+    log_ok "$(t security.ssh.restored "$(basename "$chosen")")"
 }
 
 # ── Status ────────────────────────────────────────────────────────────────────
 ssh_status() {
-    echo -e "\n${BOLD}${BLUE}══ SSH 状态 ══════════════════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t security.ssh.status_title) ══════════════════════════════════${NC}"
     local ports pwauth pubkeyauth rootlogin
     ports=$(_ssh_ports)
     pwauth=$(_ssh_get passwordauthentication)
     pubkeyauth=$(_ssh_get pubkeyauthentication)
     rootlogin=$(_ssh_get permitrootlogin)
 
-    echo -e "  监听端口：${ports:-22}"
+    echo -e "  $(t security.ssh.status_ports "${ports:-22}")"
     if [[ "$pwauth" == "no" ]]; then
-        echo -e "  密码登录：${GREEN}已禁用（仅密钥）${NC}"
+        echo -e "  $(t security.ssh.password_login)${GREEN}$(t security.ssh.disabled_key_only)${NC}"
     else
-        echo -e "  密码登录：${RED}仍启用${NC}"
+        echo -e "  $(t security.ssh.password_login)${RED}$(t security.ssh.still_enabled)${NC}"
     fi
-    echo -e "  密钥登录：${pubkeyauth:-未知}"
-    echo -e "  Root 登录策略：${rootlogin:-未知}"
+    echo -e "  $(t security.ssh.pubkey_login "${pubkeyauth:-$(t common.not_configured)}")"
+    echo -e "  $(t security.ssh.root_policy "${rootlogin:-$(t common.not_configured)}")"
     if _ssh_has_pubkey; then
-        echo -e "  已配置公钥：${GREEN}是${NC}"
+        echo -e "  $(t security.ssh.key_configured)${GREEN}$(t security.ssh.yes)${NC}"
     else
-        echo -e "  已配置公钥：${RED}否${NC}"
+        echo -e "  $(t security.ssh.key_configured)${RED}$(t security.ssh.no)${NC}"
     fi
 
     local remaining
     if remaining=$(_ssh_pending_rollback_info); then
         local reason; reason=$(jq -r '.reason' "$SSH_ROLLBACK_STATE" 2>/dev/null)
-        echo -e "  ${YELLOW}⚠ 有未确认的变更：${reason}（约 ${remaining} 秒后自动回滚）${NC}"
+        echo -e "  ${YELLOW}$(t security.ssh.pending_status "$reason" "$remaining")${NC}"
     fi
     echo -e "${BOLD}${BLUE}════════════════════════════════════════════════${NC}"
 }
@@ -325,18 +326,18 @@ ssh_status() {
 # ── Menu ──────────────────────────────────────────────────────────────────────
 ssh_menu() {
     if ! command -v sshd &>/dev/null; then
-        log_warn "未检测到 sshd，无法管理 SSH 配置"
+        log_warn "$(t security.ssh.no_sshd)"
         return 1
     fi
     while true; do
         ssh_status
-        show_menu "SSH 安全加固" \
-            "一键加固向导（推荐：添加公钥 + 禁用密码登录）" \
-            "确认加固生效（取消自动回滚）" \
-            "添加 SSH 公钥" \
-            "禁用密码登录（仅密钥登录）" \
-            "更改 SSH 端口" \
-            "恢复历史备份"
+        show_menu "$(t security.ssh.menu.title)" \
+            "$(t security.ssh.menu.wizard)" \
+            "$(t security.ssh.menu.confirm)" \
+            "$(t security.ssh.menu.add_key)" \
+            "$(t security.ssh.menu.disable_pw)" \
+            "$(t security.ssh.menu.change_port)" \
+            "$(t security.ssh.menu.restore)"
 
         case "$MENU_CHOICE" in
             1) ssh_harden_wizard;       press_enter ;;

@@ -227,7 +227,7 @@ _outb_apply_to_xray() {
     # with // "" — a tagless outbound (e.g. a "dns" outbound) would otherwise
     # crash jq (startswith needs a string) and blank out the whole config.
     if ! jq 'del(.outbounds[] | select((.tag // "") | startswith("out-")))' "$XRAY_CFG" > "$tmp"; then
-        log_error "读取 Xray 出站配置失败，已放弃写入（保留原配置）。"; rm -f "$tmp"; return 1
+        log_error "$(t xray.outbound.read_fail)"; rm -f "$tmp"; return 1
     fi
 
     local i
@@ -250,38 +250,38 @@ _outb_apply_to_xray() {
 # ── Interactive: add outbound ─────────────────────────────────────────────────
 outb_add_wizard() {
     _xray_require_installed || return
-    echo -e "\n${BOLD}添加出站节点（Outbound）${NC}"
+    echo -e "\n${BOLD}$(t xray.outbound.add_title)${NC}"
     echo ""
-    echo "  协议选择："
-    echo "    1. VLESS + Reality  （推荐，直连 IP）"
-    echo "    2. VLESS + TLS      （需要域名）"
-    echo "    3. VLESS + XHTTP    （需要域名，适合 CDN 中转）"
-    echo "    4. Shadowsocks      （任意加密算法）"
-    echo "    5. Trojan           （需要域名）"
-    echo "    6. SOCKS5           （简单代理）"
+    echo "  $(t xray.outbound.protocol_title)"
+    echo "    $(t xray.outbound.protocol1)"
+    echo "    $(t xray.outbound.protocol2)"
+    echo "    $(t xray.outbound.protocol3)"
+    echo "    $(t xray.outbound.protocol4)"
+    echo "    $(t xray.outbound.protocol5)"
+    echo "    $(t xray.outbound.protocol6)"
     echo ""
     local proto_sel
-    read -rp "$(echo -e "${CYAN}选择协议 [1]: ${NC}")" proto_sel
+    read -rp "$(echo -e "${CYAN}$(t xray.outbound.ask_protocol)${NC}")" proto_sel
     proto_sel="${proto_sel:-1}"
 
     local remark addr port tag
-    ask remark "备注（如: VPS-B 美国）" "VPS-B"
+    ask remark "$(t xray.outbound.ask_remark)" "VPS-B"
     tag="out-$(echo "$remark" | tr '[:upper:] ' '[:lower:]-' | tr -dc 'a-z0-9-' | head -c12)"
-    ask tag "出站标签 (tag)" "$tag"
+    ask tag "$(t xray.outbound.ask_tag)" "$tag"
     [[ "$tag" != out-* ]] && tag="out-${tag}"
 
     case "$proto_sel" in
     1)  # VLESS + Reality
-        ask addr "VPS B 地址（IP 或域名）" ""
-        ask port "端口"                     "443"
+        ask addr "$(t xray.outbound.ask_addr)" ""
+        ask port "$(t xray.outbound.ask_port)" "443"
         local uuid sni pk sid flow fp
         ask uuid "UUID"                     "$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
-        ask sni  "SNI（伪装域名）"          "www.cloudflare.com"
+        ask sni  "$(t xray.outbound.ask_sni)" "www.cloudflare.com"
         ask pk   "Public Key"               ""
         ask sid  "Short ID"                 ""
         ask fp   "Fingerprint"              "chrome"
         ask flow "Flow"                     "xtls-rprx-vision"
-        [[ -z "$addr" || -z "$pk" ]] && { log_error "地址和 Public Key 不能为空"; return 1; }
+        [[ -z "$addr" || -z "$pk" ]] && { log_error "$(t xray.outbound.addr_pk_required)"; return 1; }
         local entry
         entry=$(jq -n --arg tag "$tag" --arg remark "$remark" \
                        --arg proto "vless-reality" --arg addr "$addr" --argjson port "$port" \
@@ -291,14 +291,14 @@ outb_add_wizard() {
               uuid:$uuid,sni:$sni,public_key:$pk,short_id:$sid,fingerprint:$fp,flow:$flow}')
         ;;
     2)  # VLESS + TLS
-        ask addr   "VPS B 域名"   ""
-        ask port   "端口"         "443"
+        ask addr   "$(t xray.outbound.ask_domain)" ""
+        ask port   "$(t xray.outbound.ask_port)" "443"
         local uuid domain fp flow
         ask uuid   "UUID"         "$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
-        ask domain "SNI/域名"     "$addr"
+        ask domain "$(t xray.outbound.sni_domain)" "$addr"
         ask fp     "Fingerprint"  "chrome"
         ask flow   "Flow"         "xtls-rprx-vision"
-        [[ -z "$addr" ]] && { log_error "域名不能为空"; return 1; }
+        [[ -z "$addr" ]] && { log_error "$(t xray.outbound.domain_required)"; return 1; }
         local entry
         entry=$(jq -n --arg tag "$tag" --arg remark "$remark" \
                        --arg proto "vless-tls" --arg addr "$addr" --argjson port "$port" \
@@ -307,14 +307,14 @@ outb_add_wizard() {
               uuid:$uuid,domain:$domain,fingerprint:$fp,flow:$flow}')
         ;;
     3)  # VLESS + XHTTP
-        ask addr   "VPS B 域名"   ""
-        ask port   "端口"         "443"
+        ask addr   "$(t xray.outbound.ask_domain)" ""
+        ask port   "$(t xray.outbound.ask_port)" "443"
         local uuid domain fp path
         ask uuid   "UUID"         "$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
-        ask domain "SNI/域名"     "$addr"
+        ask domain "$(t xray.outbound.sni_domain)" "$addr"
         ask fp     "Fingerprint"  "chrome"
         ask path   "Path"         "/"
-        [[ -z "$addr" ]] && { log_error "域名不能为空"; return 1; }
+        [[ -z "$addr" ]] && { log_error "$(t xray.outbound.domain_required)"; return 1; }
         local entry
         entry=$(jq -n --arg tag "$tag" --arg remark "$remark" \
                        --arg proto "vless-xhttp" --arg addr "$addr" --argjson port "$port" \
@@ -323,13 +323,13 @@ outb_add_wizard() {
               uuid:$uuid,domain:$domain,fingerprint:$fp,path:$path}')
         ;;
     4)  # Shadowsocks
-        ask addr   "VPS B 地址"   ""
-        ask port   "端口"         "8388"
+        ask addr   "$(t xray.outbound.ask_addr_short)" ""
+        ask port   "$(t xray.outbound.ask_port)" "8388"
         local method pass
-        echo "  加密方式："
-        echo "    1. 2022-blake3-aes-128-gcm  2. 2022-blake3-aes-256-gcm"
-        echo "    3. 2022-blake3-chacha20-poly1305  4. aes-256-gcm  5. chacha20-ietf-poly1305"
-        local ms; read -rp "$(echo -e "${CYAN}选择 [1]: ${NC}")" ms
+        echo "  $(t xray.outbound.cipher_title)"
+        echo "    $(t xray.outbound.cipher_line1)"
+        echo "    $(t xray.outbound.cipher_line2)"
+        local ms; read -rp "$(echo -e "${CYAN}$(t docker.ask_select_1)${NC}")" ms
         case "${ms:-1}" in
             2) method="2022-blake3-aes-256-gcm" ;;
             3) method="2022-blake3-chacha20-poly1305" ;;
@@ -337,8 +337,8 @@ outb_add_wizard() {
             5) method="chacha20-ietf-poly1305" ;;
             *) method="2022-blake3-aes-128-gcm" ;;
         esac
-        ask pass "密码" ""
-        [[ -z "$addr" || -z "$pass" ]] && { log_error "地址和密码不能为空"; return 1; }
+        ask pass "$(t xray.outbound.ask_password)" ""
+        [[ -z "$addr" || -z "$pass" ]] && { log_error "$(t xray.outbound.addr_password_required)"; return 1; }
         local entry
         entry=$(jq -n --arg tag "$tag" --arg remark "$remark" \
                        --arg proto "shadowsocks" --arg addr "$addr" --argjson port "$port" \
@@ -347,13 +347,13 @@ outb_add_wizard() {
               method:$method,password:$pass}')
         ;;
     5)  # Trojan
-        ask addr   "VPS B 域名"   ""
-        ask port   "端口"         "443"
+        ask addr   "$(t xray.outbound.ask_domain)" ""
+        ask port   "$(t xray.outbound.ask_port)" "443"
         local pass domain fp
-        ask pass   "密码"         ""
-        ask domain "SNI/域名"     "$addr"
+        ask pass   "$(t xray.outbound.ask_password)" ""
+        ask domain "$(t xray.outbound.sni_domain)" "$addr"
         ask fp     "Fingerprint"  "chrome"
-        [[ -z "$addr" || -z "$pass" ]] && { log_error "域名和密码不能为空"; return 1; }
+        [[ -z "$addr" || -z "$pass" ]] && { log_error "$(t xray.outbound.domain_password_required)"; return 1; }
         local entry
         entry=$(jq -n --arg tag "$tag" --arg remark "$remark" \
                        --arg proto "trojan" --arg addr "$addr" --argjson port "$port" \
@@ -362,12 +362,12 @@ outb_add_wizard() {
               password:$pass,domain:$domain,fingerprint:$fp}')
         ;;
     6)  # SOCKS5
-        ask addr "VPS B 地址"   ""
-        ask port "端口"         "1080"
+        ask addr "$(t xray.outbound.ask_addr_short)" ""
+        ask port "$(t xray.outbound.ask_port)" "1080"
         local user pass
-        ask user "用户名（无认证留空）" ""
-        [[ -n "$user" ]] && ask pass "密码" ""
-        [[ -z "$addr" ]] && { log_error "地址不能为空"; return 1; }
+        ask user "$(t xray.outbound.ask_user)" ""
+        [[ -n "$user" ]] && ask pass "$(t xray.outbound.ask_password)" ""
+        [[ -z "$addr" ]] && { log_error "$(t xray.outbound.addr_required)"; return 1; }
         local entry
         entry=$(jq -n --arg tag "$tag" --arg remark "$remark" \
                        --arg proto "socks5" --arg addr "$addr" --argjson port "$port" \
@@ -376,21 +376,21 @@ outb_add_wizard() {
               username:$user,password:$pass}')
         ;;
     *)
-        log_warn "无效选项"; return ;;
+        log_warn "$(t xray.invalid_option)"; return ;;
     esac
 
     _outb_upsert "$entry"
     _outb_apply_to_xray
     xray_test_restart   # config on disk is useless until Xray reloads it
-    log_ok "出站节点 ${tag}（${remark}）已添加并应用"
+    log_ok "$(t xray.outbound.added "$tag" "$remark")"
 }
 
 # ── Interactive: delete outbound ──────────────────────────────────────────────
 outb_delete() {
     local count; count=$(_outb_count)
-    (( count == 0 )) && { log_warn "没有自定义出站节点"; return; }
+    (( count == 0 )) && { log_warn "$(t xray.outbound.no_nodes)"; return; }
 
-    echo -e "\n${BOLD}删除出站节点${NC}"
+    echo -e "\n${BOLD}$(t xray.outbound.delete_title)${NC}"
     local tags_arr=() i=0
     while IFS=$'\t' read -r tag proto addr remark; do
         i=$((i+1)); tags_arr+=("$tag")
@@ -399,28 +399,28 @@ outb_delete() {
     done < <(_outb_list)
 
     local sel
-    read -rp "$(echo -e "${CYAN}选择序号（0=取消）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t xray.select_index_cancel)${NC}")" sel
     [[ -z "$sel" || "$sel" == "0" ]] && return
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项"; return; fi
+        log_warn "$(t xray.invalid_option)"; return; fi
 
     local tag="${tags_arr[$((sel-1))]}"
-    ask_yn "确认删除出站 ${tag}？（同时需手动删除引用该出站的路由规则）" N || return
+    ask_yn "$(t xray.outbound.ask_delete "$tag")" N || return
 
     _outb_delete "$tag"
     _outb_apply_to_xray
     xray_test_restart
-    log_ok "出站节点 ${tag} 已删除"
-    log_warn "提示：请进入「路由分流管理」检查并删除引用此出站的路由规则"
+    log_ok "$(t xray.outbound.deleted "$tag")"
+    log_warn "$(t xray.outbound.delete_route_hint)"
 }
 
 # ── Display ───────────────────────────────────────────────────────────────────
 outb_show() {
     local count; count=$(_outb_count)
-    echo -e "\n${BOLD}${BLUE}══ 自定义出站节点 ════════════════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}$(t xray.outbound.list_title)${NC}"
     if (( count == 0 )); then
-        echo -e "  ${YELLOW}尚未配置出站节点${NC}"
-        echo -e "  提示：添加出站后，在「路由分流管理」中指定哪些流量走该出站。"
+        echo -e "  ${YELLOW}$(t xray.outbound.none)${NC}"
+        echo -e "  $(t xray.outbound.hint)"
     else
         while IFS=$'\t' read -r tag proto addr remark; do
             printf "  ${CYAN}%-20s${NC} %-16s %-26s %s\n" "$tag" "$proto" "$addr" "$remark"
@@ -433,10 +433,10 @@ outb_show() {
 outb_menu() {
     _xray_require_installed || return
     while true; do
-        show_menu "出站节点管理 (Outbound)" \
-            "查看出站节点" \
-            "添加出站节点" \
-            "删除出站节点"
+        show_menu "$(t xray.outbound.menu.title)" \
+            "$(t xray.outbound.menu.view)" \
+            "$(t xray.outbound.menu.add)" \
+            "$(t xray.outbound.menu.delete)"
 
         case "$MENU_CHOICE" in
             1) outb_show;         press_enter ;;

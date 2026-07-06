@@ -32,6 +32,8 @@ NGINX_HTTP_DIR="/etc/nginx/conf.d"
 NGINX_SSL_DIR="/etc/nginx/ssl"
 XRAY_CFG_DIR="/usr/local/etc/xray"
 XRAY_BIN="/usr/local/bin/xray"
+SINGBOX_CFG_DIR="/etc/sing-box"
+SINGBOX_BIN="/usr/local/bin/sing-box"
 HYSTERIA_CFG="/etc/hysteria/config.yaml"
 HYSTERIA_BIN="/usr/local/bin/hysteria"
 ACME_HOME="/root/.acme.sh"
@@ -39,17 +41,17 @@ ACME_HOME="/root/.acme.sh"
 PSM_STATE="$CFG_DIR/psm.state"   # key=value runtime state
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-log_info()    { echo -e "${GREEN}[信息]${NC}  $*"; }
-log_warn()    { echo -e "${YELLOW}[警告]${NC}  $*"; }
-log_error()   { echo -e "${RED}[错误]${NC}  $*" >&2; }
-log_step()    { echo -e "${CYAN}[步骤]${NC}  $*"; }
-log_ok()      { echo -e "${GREEN}[完成]${NC}  $*"; }
+log_info()    { echo -e "${GREEN}[$(t log.info)]${NC}  $*"; }
+log_warn()    { echo -e "${YELLOW}[$(t log.warn)]${NC}  $*"; }
+log_error()   { echo -e "${RED}[$(t log.error)]${NC}  $*" >&2; }
+log_step()    { echo -e "${CYAN}[$(t log.step)]${NC}  $*"; }
+log_ok()      { echo -e "${GREEN}[$(t log.ok)]${NC}  $*"; }
 
 die() { log_error "$*"; exit 1; }
 
 # ── Privilege ─────────────────────────────────────────────────────────────────
 require_root() {
-    [[ $EUID -eq 0 ]] || die "请使用 root 权限运行此脚本。"
+    [[ $EUID -eq 0 ]] || die "$(t common.err.need_root)"
 }
 
 # ── OS detection ──────────────────────────────────────────────────────────────
@@ -63,7 +65,7 @@ detect_os() {
     elif [[ -f /etc/redhat-release ]]; then
         OS_ID="centos"
     else
-        die "不支持的操作系统"
+        die "$(t common.err.unsupported_os)"
     fi
 
     case "$OS_ID" in
@@ -76,7 +78,7 @@ detect_os() {
             case "${ID_LIKE:-}" in
                 *debian*|*ubuntu*) PKG_MGR="apt-get" ;;
                 *rhel*|*centos*|*fedora*) PKG_MGR="yum" ;;
-            *) die "不支持的发行版：$OS_ID" ;;
+            *) die "$(t common.err.unsupported_distro "$OS_ID")" ;;
             esac
             ;;
     esac
@@ -128,13 +130,13 @@ ensure_epel() {
     rhel_ver=$(rpm -E %rhel 2>/dev/null)
     [[ "$rhel_ver" =~ ^[0-9]+$ ]] || rhel_ver="${OS_VERSION%%.*}"
 
-    log_step "正在启用 EPEL 仓库..."
+    log_step "$(t common.epel.enabling)"
     case "$OS_ID" in
         amzn)
             if command -v amazon-linux-extras &>/dev/null; then
                 amazon-linux-extras install -y epel 2>/dev/null && return 0   # AL2
             fi
-            log_warn "Amazon Linux 2023 不支持 EPEL，部分软件包（qrencode/fail2ban 等）可能无法安装。"
+            log_warn "$(t common.epel.amzn_unsupported)"
             return 1
             ;;
         ol)
@@ -156,7 +158,7 @@ ensure_epel() {
                 2>/dev/null && return 0
             ;;
     esac
-    log_warn "EPEL 仓库启用失败，依赖 EPEL 的软件包可能装不上。"
+    log_warn "$(t common.epel.failed)"
     return 1
 }
 
@@ -171,7 +173,7 @@ ensure_cron() {
         return 0
     fi
     detect_os
-    log_step "正在安装 cron 定时服务..."
+    log_step "$(t common.cron.installing)"
     case "$PKG_MGR" in
         apt-get) pkg_install cron   2>/dev/null || true ;;
         yum)     pkg_install cronie 2>/dev/null || true ;;
@@ -180,12 +182,12 @@ ensure_cron() {
     for svc in cron crond cronie; do
         if systemctl list-unit-files "${svc}.service" &>/dev/null \
             && systemctl enable --now "$svc" &>/dev/null; then
-            log_ok "cron 服务（${svc}）已启用"
+            log_ok "$(t common.cron.enabled "$svc")"
             return 0
         fi
     done
     command -v crontab &>/dev/null && return 0
-    log_warn "未能安装/启动 cron 服务，/etc/cron.d 中的定时任务将不会执行。"
+    log_warn "$(t common.cron.failed)"
     return 1
 }
 
@@ -195,7 +197,7 @@ get_arch() {
         x86_64)  echo "amd64" ;;
         aarch64) echo "arm64" ;;
         armv7l)  echo "arm32" ;;
-        *)       die "不支持的系统架构：$(uname -m)" ;;
+        *)       die "$(t common.err.unsupported_arch "$(uname -m)")" ;;
     esac
 }
 
@@ -244,7 +246,7 @@ ask_yn() {
     esac
 }
 
-press_enter() { read -rp "$(echo -e "${YELLOW}按回车继续...${NC}")"; }
+press_enter() { read -rp "$(echo -e "${YELLOW}$(t common.press_enter)${NC}")"; }
 
 # ── Menu builder ──────────────────────────────────────────────────────────────
 show_menu() {
@@ -258,16 +260,16 @@ show_menu() {
         printf "  ${CYAN}%2d.${NC} %s\n" "$i" "$opt"
         ((i++))
     done
-    echo -e "  ${CYAN} 0.${NC} 返回 / 退出"
+    echo -e "  ${CYAN} 0.${NC} $(t common.back_exit)"
     echo -e "${BOLD}${BLUE}══════════════════════════════════════${NC}"
-    read -rp "$(echo -e "${CYAN}请选择: ${NC}")" MENU_CHOICE
+    read -rp "$(echo -e "${CYAN}$(t common.select)${NC}")" MENU_CHOICE
 }
 
 # ── Template rendering ────────────────────────────────────────────────────────
 render_tpl() {
     # render_tpl <template_file> <output_file> <VAR=val> ...
     local tpl="$1" out="$2"; shift 2
-    [[ -f "$tpl" ]] || die "模板不存在：$tpl"
+    [[ -f "$tpl" ]] || die "$(t common.err.tpl_missing "$tpl")"
     local content; content="$(cat "$tpl")"
     for kv in "$@"; do
         local k="${kv%%=*}" v="${kv#*=}"
@@ -337,12 +339,12 @@ nginx_test_reload() {
     local test_out
     if test_out=$(nginx -t 2>&1); then
         svc_reload nginx || svc_restart nginx || {
-            log_error "Nginx 重新加载/重启失败。"
+            log_error "$(t common.nginx.reload_fail)"
             return 1
         }
-        log_ok "Nginx 已重新加载"
+        log_ok "$(t common.nginx.reloaded)"
     else
-        log_error "Nginx 配置测试失败，已取消重新加载"
+        log_error "$(t common.nginx.test_fail)"
         echo "$test_out" >&2
         return 1
     fi
@@ -353,14 +355,14 @@ xray_test_restart() {
     if test_out=$("$XRAY_BIN" run -test -config "$XRAY_CFG_DIR/config.json" 2>&1) \
         || test_out=$("$XRAY_BIN" -test -config "$XRAY_CFG_DIR/config.json" 2>&1); then
         svc_restart xray && {
-            log_ok "Xray 已重启"
+            log_ok "$(t common.xray.restarted)"
             return 0
         }
-        log_error "Xray 重启失败。"
+        log_error "$(t common.xray.restart_fail)"
         return 1
     fi
 
-    log_error "Xray 配置测试失败，已取消重启"
+    log_error "$(t common.xray.test_fail)"
     echo "$test_out" >&2
     return 1
 }
@@ -368,7 +370,7 @@ xray_test_restart() {
 # ── Dependency check ──────────────────────────────────────────────────────────
 require_cmd() {
     for cmd in "$@"; do
-        command -v "$cmd" &>/dev/null || die "缺少必需命令：$cmd"
+        command -v "$cmd" &>/dev/null || die "$(t common.err.missing_cmd "$cmd")"
     done
 }
 
@@ -387,7 +389,7 @@ ensure_pkg_deps() {
     done
     (( ${#missing[@]} == 0 )) && return 0
 
-    log_step "正在安装缺少的软件包：${missing[*]}"
+    log_step "$(t common.pkg.installing "${missing[*]}")"
     local failed=() epel_tried=0
     for pkg in "${missing[@]}"; do
         pkg_install "$pkg" &>/dev/null && continue
@@ -401,11 +403,11 @@ ensure_pkg_deps() {
     done
 
     if (( ${#failed[@]} == 0 )); then
-        log_ok "已安装：${missing[*]}"
+        log_ok "$(t common.pkg.installed "${missing[*]}")"
     else
         # Warn but do NOT return non-zero: callers run under `set -e` and treat
         # this as best-effort; hard requirements are enforced via require_cmd.
-        log_warn "以下软件包未能安装：${failed[*]}（相关功能可能受限）"
+        log_warn "$(t common.pkg.install_fail "${failed[*]}")"
     fi
     return 0
 }
@@ -440,3 +442,7 @@ with_backup() {
     [[ -f "$LIB_DIR/backup.sh" ]] && source "$LIB_DIR/backup.sh" && do_quick_backup "$desc"
     "$@"
 }
+
+# ── i18n 初始化（放在文件末尾，state_get / 路径就绪之后）──────────────────────
+source "$LIB_DIR/i18n.sh"
+i18n_init

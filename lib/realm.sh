@@ -58,8 +58,8 @@ _realm_gen_toml() {
     mkdir -p "$REALM_CFG_DIR"
 
     {
-        echo "# 由 PSM 自动生成，请勿手动编辑；改动会在下次操作时被覆盖。"
-        echo "# 增删改中转规则请使用 PSM「中转管理」菜单。"
+        echo "# $(t realm.config.header1)"
+        echo "# $(t realm.config.header2)"
         echo ""
         echo "[network]"
         echo "no_tcp = false"
@@ -92,21 +92,21 @@ _realm_apply() {
     local count; count=$(_realm_count)
     if [[ "$count" == "0" ]]; then
         svc_stop realm 2>/dev/null || true
-        log_info "已无中转规则，realm 服务已停止。"
+        log_info "$(t realm.no_rules_stopped)"
         return 0
     fi
     svc_enable realm 2>/dev/null || true
     if svc_restart realm; then
         sleep 1
         if svc_is_active realm; then
-            log_ok "realm 中转服务已生效（共 ${count} 条规则）。"
+            log_ok "$(t realm.service_applied "$count")"
         else
-            log_error "realm 启动后未处于运行状态，请用「查看日志」排查。"
+            log_error "$(t realm.service_not_active)"
             journalctl -u realm -n 15 --no-pager 2>/dev/null || true
             return 1
         fi
     else
-        log_error "realm 服务重启失败，请用「查看日志」排查。"
+        log_error "$(t realm.restart_failed)"
         return 1
     fi
 }
@@ -117,8 +117,8 @@ realm_install() {
     require_cmd curl tar jq
 
     if [[ -f "$REALM_BIN" ]]; then
-        log_info "realm 已安装：$("$REALM_BIN" --version 2>/dev/null | head -1)"
-        ask_yn "是否重新安装 realm 二进制文件？" N || return 0
+        log_info "$(t realm.installed "$("$REALM_BIN" --version 2>/dev/null | head -1)")"
+        ask_yn "$(t realm.ask_reinstall)" N || return 0
     fi
 
     local arch; arch=$(get_arch)
@@ -127,26 +127,26 @@ realm_install() {
         amd64) realm_arch="x86_64-unknown-linux-musl" ;;
         arm64) realm_arch="aarch64-unknown-linux-musl" ;;
         arm32) realm_arch="armv7-unknown-linux-musleabihf" ;;
-        *)     die "realm 不支持此架构：$arch" ;;
+        *)     die "$(t realm.unsupported_arch "$arch")" ;;
     esac
 
     local tag
-    log_step "正在获取 realm 最新版本..."
+    log_step "$(t realm.fetching_latest)"
     tag=$(curl -fsSL "https://api.github.com/repos/zhboner/realm/releases/latest" 2>/dev/null \
           | jq -r '.tag_name // empty' || true)
-    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "无法获取最新版本，使用备用版本 ${REALM_FALLBACK_TAG}"; tag="$REALM_FALLBACK_TAG"; }
+    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t realm.latest_fallback "$REALM_FALLBACK_TAG")"; tag="$REALM_FALLBACK_TAG"; }
 
     local file="realm-${realm_arch}.tar.gz"
     local url="${REALM_RELEASES}/download/${tag}/${file}"
     local tmp_dir; tmp_dir=$(mktemp -d)
 
-    log_step "正在下载 realm ${tag}（${realm_arch}）..."
+    log_step "$(t realm.downloading "$tag" "$realm_arch")"
     if ! curl -fsSL -o "$tmp_dir/$file" "$url"; then
-        rm -rf "$tmp_dir"; die "下载失败：$url"
+        rm -rf "$tmp_dir"; die "$(t realm.download_fail "$url")"
     fi
-    tar -xzf "$tmp_dir/$file" -C "$tmp_dir" || { rm -rf "$tmp_dir"; die "解压失败：$file"; }
+    tar -xzf "$tmp_dir/$file" -C "$tmp_dir" || { rm -rf "$tmp_dir"; die "$(t realm.extract_fail "$file")"; }
     if [[ ! -f "$tmp_dir/realm" ]]; then
-        rm -rf "$tmp_dir"; die "压缩包中未找到 realm 可执行文件。"
+        rm -rf "$tmp_dir"; die "$(t realm.binary_missing)"
     fi
     install -m 755 "$tmp_dir/realm" "$REALM_BIN"
     rm -rf "$tmp_dir"
@@ -154,13 +154,13 @@ realm_install() {
     mkdir -p "$REALM_CFG_DIR"
     _realm_write_service
     systemctl daemon-reload
-    log_ok "realm ${tag} 已安装。"
+    log_ok "$(t realm.install_done "$tag")"
 
     # 保留已有规则；仅在存储为空时提示新增第一条。
     local count; count=$(_realm_count)
     if [[ "$count" == "0" ]]; then
         echo ""
-        ask_yn "是否现在添加一条中转规则？" Y && realm_add_rule
+        ask_yn "$(t realm.ask_add_first)" Y && realm_add_rule
     else
         _realm_apply
     fi
@@ -190,31 +190,31 @@ _realm_valid_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
 
 # ── 添加中转规则 ──────────────────────────────────────────────────────────────
 realm_add_rule() {
-    log_step "正在添加中转规则..."
-    echo -e "  ${YELLOW}中转机监听「本机端口」，把流量转发到「落地机地址:端口」。"
-    echo -e "  例如：客户端连本机 5000 → 转发到落地机 1.2.3.4:443（Reality 端口）。${NC}\n"
+    log_step "$(t realm.adding)"
+    echo -e "  ${YELLOW}$(t realm.add.desc1)"
+    echo -e "  $(t realm.add.desc2)${NC}\n"
 
     local count; count=$(_realm_count)
     local tag listen_port remote_host remote_port
-    ask tag "规则标识" "relay-$((count + 1))"
+    ask tag "$(t realm.ask.tag)" "relay-$((count + 1))"
     local exist; exist=$(_realm_get_by_tag "$tag")
-    [[ -n "$exist" ]] && { log_error "标识 '$tag' 已存在，请换一个。"; return 1; }
+    [[ -n "$exist" ]] && { log_error "$(t realm.tag_exists "$tag")"; return 1; }
 
-    ask listen_port "本机监听端口" "$(rand_port 20000 60000)"
-    _realm_valid_port "$listen_port" || { log_error "无效端口"; return 1; }
+    ask listen_port "$(t realm.ask.listen_port)" "$(rand_port 20000 60000)"
+    _realm_valid_port "$listen_port" || { log_error "$(t realm.invalid_port)"; return 1; }
     # 与已有规则的监听端口冲突会导致 realm 整体起不来，提前拦截。
     if _realm_load | jq -e --argjson p "$listen_port" 'any(.[]; .listen_port == $p)' >/dev/null 2>&1; then
-        log_error "本机端口 ${listen_port} 已被其它中转规则占用。"; return 1
+        log_error "$(t realm.listen_port_used "$listen_port")"; return 1
     fi
     _realm_port_conflict_warn "$listen_port"
 
-    ask remote_host "落地机地址（IP 或域名）"
-    [[ -z "$remote_host" ]] && { log_error "落地机地址不能为空。"; return 1; }
-    ask remote_port "落地机端口" "443"
-    _realm_valid_port "$remote_port" || { log_error "无效端口"; return 1; }
+    ask remote_host "$(t realm.ask.remote_host)"
+    [[ -z "$remote_host" ]] && { log_error "$(t realm.remote_host_empty)"; return 1; }
+    ask remote_port "$(t realm.ask.remote_port)" "443"
+    _realm_valid_port "$remote_port" || { log_error "$(t realm.invalid_port)"; return 1; }
 
     local udp=false
-    ask_yn "是否同时转发 UDP？（如落地为 Hysteria2/QUIC 需要）" N && udp=true
+    ask_yn "$(t realm.ask.udp)" N && udp=true
 
     local rule
     rule=$(jq -n \
@@ -228,10 +228,10 @@ realm_add_rule() {
     _realm_apply || return 1
 
     echo ""
-    log_ok "中转规则 '$tag'：本机 ${listen_port} → ${remote_host}:${remote_port}"
+    log_ok "$(t realm.rule_added "$tag" "$listen_port" "$remote_host" "$remote_port")"
 
     local proto; [[ "$udp" == "true" ]] && proto="both" || proto="tcp"
-    ask_yn "是否现在放行防火墙端口 ${listen_port}/${proto}？" Y && {
+    ask_yn "$(t realm.ask.open_firewall "$listen_port" "$proto")" Y && {
         source "$LIB_DIR/system.sh"
         firewall_open_port "$listen_port" "$proto"
     }
@@ -242,7 +242,7 @@ _realm_port_probe_warn() {
     local port="$1"
     if command -v ss &>/dev/null; then
         ss -ltnu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]${port}$" \
-            && log_warn "端口 ${port} 当前已被本机某服务监听，可能与中转规则冲突。"
+            && log_warn "$(t realm.port_listening_warn "$port")"
     fi
 }
 
@@ -252,7 +252,7 @@ _realm_port_conflict_warn() {
     if source "$LIB_DIR/security/honeypot.sh" 2>/dev/null \
        && declare -f _hp_is_reserved_port &>/dev/null \
        && _hp_is_reserved_port "$port"; then
-        log_warn "端口 ${port} 似乎已被本机服务、防火墙已放行端口或已配置的节点/蜜罐占用。"
+        log_warn "$(t realm.port_reserved_warn "$port")"
     fi
     _realm_port_probe_warn "$port"
 }
@@ -262,14 +262,14 @@ realm_delete_rule() {
     _realm_show_rules
     local count; count=$(_realm_count)
     (( count == 0 )) && return 0
-    local tag; ask tag "要删除的规则标识"
+    local tag; ask tag "$(t realm.ask.delete_tag)"
     local rule; rule=$(_realm_get_by_tag "$tag")
-    [[ -z "$rule" ]] && { log_error "未找到规则：$tag"; return 1; }
+    [[ -z "$rule" ]] && { log_error "$(t realm.rule_not_found "$tag")"; return 1; }
     local lp; lp=$(echo "$rule" | jq -r '.listen_port')
-    ask_yn "确认删除规则 '$tag'（本机端口 ${lp}）？" N || return 0
+    ask_yn "$(t realm.ask.delete_rule "$tag" "$lp")" N || return 0
     _realm_delete "$tag"
     _realm_apply
-    log_info "规则 '$tag' 已删除。原监听端口 ${lp} 若已放行防火墙，不再使用时请手动关闭。"
+    log_info "$(t realm.rule_deleted "$tag" "$lp")"
 }
 
 # ── 修改中转规则 ──────────────────────────────────────────────────────────────
@@ -277,9 +277,9 @@ realm_modify_rule() {
     _realm_show_rules
     local count; count=$(_realm_count)
     (( count == 0 )) && return 0
-    local tag; ask tag "要修改的规则标识"
+    local tag; ask tag "$(t realm.ask.modify_tag)"
     local rule; rule=$(_realm_get_by_tag "$tag")
-    [[ -z "$rule" ]] && { log_error "未找到规则：$tag"; return 1; }
+    [[ -z "$rule" ]] && { log_error "$(t realm.rule_not_found "$tag")"; return 1; }
 
     local old_lp old_rh old_rp old_udp
     old_lp=$(echo "$rule"  | jq -r '.listen_port')
@@ -288,23 +288,23 @@ realm_modify_rule() {
     old_udp=$(echo "$rule" | jq -r '.udp')
 
     local listen_port remote_host remote_port
-    ask listen_port "本机监听端口" "$old_lp"
-    _realm_valid_port "$listen_port" || { log_error "无效端口"; return 1; }
+    ask listen_port "$(t realm.ask.listen_port)" "$old_lp"
+    _realm_valid_port "$listen_port" || { log_error "$(t realm.invalid_port)"; return 1; }
     if [[ "$listen_port" != "$old_lp" ]] \
        && _realm_load | jq -e --arg t "$tag" --argjson p "$listen_port" \
             'any(.[]; .tag != $t and .listen_port == $p)' >/dev/null 2>&1; then
-        log_error "本机端口 ${listen_port} 已被其它中转规则占用。"; return 1
+        log_error "$(t realm.listen_port_used "$listen_port")"; return 1
     fi
-    ask remote_host "落地机地址（IP 或域名）" "$old_rh"
-    [[ -z "$remote_host" ]] && { log_error "落地机地址不能为空。"; return 1; }
-    ask remote_port "落地机端口" "$old_rp"
-    _realm_valid_port "$remote_port" || { log_error "无效端口"; return 1; }
+    ask remote_host "$(t realm.ask.remote_host)" "$old_rh"
+    [[ -z "$remote_host" ]] && { log_error "$(t realm.remote_host_empty)"; return 1; }
+    ask remote_port "$(t realm.ask.remote_port)" "$old_rp"
+    _realm_valid_port "$remote_port" || { log_error "$(t realm.invalid_port)"; return 1; }
 
     local udp="$old_udp"
     if [[ "$old_udp" == "true" ]]; then
-        ask_yn "是否继续转发 UDP？" Y && udp=true || udp=false
+        ask_yn "$(t realm.ask.keep_udp)" Y && udp=true || udp=false
     else
-        ask_yn "是否同时转发 UDP？" N && udp=true || udp=false
+        ask_yn "$(t realm.ask.udp)" N && udp=true || udp=false
     fi
 
     rule=$(echo "$rule" | jq \
@@ -313,15 +313,15 @@ realm_modify_rule() {
         '.listen_port=$lp | .remote_host=$rh | .remote_port=$rp | .udp=$udp')
     _realm_upsert "$rule"
     _realm_apply || return 1
-    log_ok "规则 '$tag' 已更新：本机 ${listen_port} → ${remote_host}:${remote_port}"
+    log_ok "$(t realm.rule_updated "$tag" "$listen_port" "$remote_host" "$remote_port")"
 
     if [[ "$listen_port" != "$old_lp" ]]; then
         local proto; [[ "$udp" == "true" ]] && proto="both" || proto="tcp"
-        ask_yn "监听端口已变更，是否放行新端口 ${listen_port}/${proto}？" Y && {
+        ask_yn "$(t realm.ask.open_new_port "$listen_port" "$proto")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$listen_port" "$proto"
         }
-        log_info "原端口 ${old_lp} 若已放行防火墙，不再使用时请手动关闭。"
+        log_info "$(t realm.old_port_note "$old_lp")"
     fi
 }
 
@@ -329,12 +329,12 @@ realm_modify_rule() {
 _realm_show_rules() {
     local lst; lst=$(_realm_list)
     if [[ -z "$lst" ]]; then
-        log_warn "尚未配置任何中转规则。"
+        log_warn "$(t realm.no_rules)"
         return 1
     fi
     local ip; ip=$(get_ipv4 2>/dev/null || echo "?")
-    echo -e "\n${BOLD}中转规则（本机 ${ip}）：${NC}"
-    printf "  %-16s %-10s %-28s %s\n" "标识" "本机端口" "落地目标" "协议"
+    echo -e "\n${BOLD}$(t realm.rules_title "$ip")${NC}"
+    printf "  %-16s %-10s %-28s %s\n" "$(t realm.header.tag)" "$(t realm.header.local_port)" "$(t realm.header.remote)" "$(t realm.header.proto)"
     echo "$lst" | while IFS=$'\t' read -r tag lp rh rp proto; do
         printf "  %-16s %-10s %-28s %s\n" "$tag" "$lp" "${rh}:${rp}" "$proto"
     done
@@ -342,10 +342,10 @@ _realm_show_rules() {
 
 # ── 供 manager.sh 节点总览调用 ────────────────────────────────────────────────
 _realm_show_node_list() {
-    echo -e "\n${BOLD}中转（realm）：${NC}"
+    echo -e "\n${BOLD}$(t realm.node_title)${NC}"
     local count; count=$(_realm_count 2>/dev/null || echo 0)
     if [[ "$count" == "0" || -z "$count" ]]; then
-        echo "  未配置"
+        echo "  $(t common.not_configured)"
         return
     fi
     local ip; ip=$(get_ipv4 2>/dev/null || echo "?")
@@ -356,14 +356,14 @@ _realm_show_node_list() {
 
 # ── 卸载 ──────────────────────────────────────────────────────────────────────
 realm_uninstall() {
-    ask_yn "是否卸载 realm（程序 + 服务 + 所有中转规则）？" N || return 0
+    ask_yn "$(t realm.ask_uninstall)" N || return 0
     svc_stop realm 2>/dev/null || true
     systemctl disable realm --quiet 2>/dev/null || true
     rm -f "$REALM_BIN" "$REALM_SERVICE"
     rm -rf "$REALM_CFG_DIR"
     rm -f "$REALM_STORE"
     systemctl daemon-reload
-    log_ok "realm 及所有中转规则已删除。"
+    log_ok "$(t realm.uninstalled)"
 }
 
 realm_logs() { journalctl -u realm -f --no-pager; }
@@ -371,20 +371,20 @@ realm_logs() { journalctl -u realm -f --no-pager; }
 # ── 状态报告（资源 / 网速 / 延迟；与 Telegram /relay 同源）────────────────────
 realm_status_report() {
     source "$LIB_DIR/tgbot/relay_status.sh" 2>/dev/null \
-        || { log_error "状态报告模块加载失败"; return 1; }
-    log_step "正在采集状态（CPU/网速采样 1 秒 + 逐规则延迟探测），请稍候..."
+        || { log_error "$(t realm.report_load_fail)"; return 1; }
+    log_step "$(t realm.report.collecting)"
     local report; report=$(rs_build_report)
     # 终端显示时剥掉 Telegram Markdown 标记
     echo ""
     printf '%s\n' "$report" | sed -e 's/[*`]//g' -e 's/\\\[/[/g'
     echo ""
     if [[ -f "$CFG_DIR/tg_bot.conf" ]]; then
-        ask_yn "是否将此报告推送到 Telegram 管理员？" N || return 0
+        ask_yn "$(t realm.report.ask_push)" N || return 0
         source "$LIB_DIR/tgbot/notify.sh" 2>/dev/null || return 0
         tg_notify_admins "$report"
-        log_ok "已推送。也可在 Telegram 中直接发送 /relay 随时查看。"
+        log_ok "$(t realm.report.pushed)"
     else
-        log_info "提示：配置 Telegram Bot（主菜单 16）后，可在 Telegram 发送 /relay 随时查看此报告。"
+        log_info "$(t realm.report.tg_hint)"
     fi
 }
 
@@ -392,27 +392,27 @@ realm_status_report() {
 _realm_check_deps() {
     ensure_pkg_deps curl tar jq
     [[ -f "$REALM_BIN" ]] && return 0
-    log_warn "realm 未安装。"
-    ask_yn "是否现在安装 realm？" Y \
+    log_warn "$(t realm.not_installed)"
+    ask_yn "$(t realm.ask_install_now)" Y \
         && realm_install \
-        || { log_error "此菜单需要 realm。"; return 1; }
+        || { log_error "$(t realm.menu_required)"; return 1; }
 }
 
 # ── 菜单 ──────────────────────────────────────────────────────────────────────
 realm_menu() {
     _realm_check_deps || return
     while true; do
-        show_menu "中转管理（realm）" \
-            "安装 / 重新安装" \
-            "添加中转规则" \
-            "修改中转规则" \
-            "删除中转规则" \
-            "列出中转规则" \
-            "状态报告（资源 / 网速 / 延迟，可推送 TG）" \
-            "服务状态" \
-            "重启服务" \
-            "查看日志" \
-            "卸载"
+        show_menu "$(t realm.menu.title)" \
+            "$(t realm.menu.install)" \
+            "$(t realm.menu.add)" \
+            "$(t realm.menu.modify)" \
+            "$(t realm.menu.delete)" \
+            "$(t realm.menu.list)" \
+            "$(t realm.menu.report)" \
+            "$(t realm.menu.status)" \
+            "$(t realm.menu.restart)" \
+            "$(t realm.menu.logs)" \
+            "$(t realm.menu.uninstall)"
 
         case "$MENU_CHOICE" in
             1)  realm_install ;;
@@ -422,7 +422,7 @@ realm_menu() {
             5)  _realm_show_rules ;;
             6)  realm_status_report ;;
             7)  svc_status realm ;;
-            8)  svc_restart realm && log_ok "realm 已重启。" ;;
+            8)  svc_restart realm && log_ok "$(t realm.restarted)" ;;
             9)  realm_logs ;;
             10) realm_uninstall ;;
             0)  return ;;

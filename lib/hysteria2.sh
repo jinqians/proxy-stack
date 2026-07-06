@@ -17,33 +17,33 @@ hy2_install() {
     require_cmd curl jq
 
     if [[ -f "$HY2_BIN" ]]; then
-        log_info "Hysteria2 已安装：$($HY2_BIN version 2>/dev/null | head -1)"
+        log_info "$(t hysteria2.installed "$($HY2_BIN version 2>/dev/null | head -1)")"
         if [[ ! -f "$HY2_CFG" ]]; then
-            log_warn "未找到 Hysteria2 配置文件，启动配置向导。"
+            log_warn "$(t hysteria2.config_missing_wizard)"
             _hy2_setup_wizard
             return $?
         fi
-        ask_yn "是否重新配置 Hysteria2？" N && {
+        ask_yn "$(t hysteria2.ask_reconfigure)" N && {
             _hy2_setup_wizard
             return $?
         }
-        ask_yn "是否重新安装二进制文件？" N || return 0
+        ask_yn "$(t hysteria2.ask_reinstall_bin)" N || return 0
     fi
 
     local arch; arch=$(get_arch)
     local tag
 
-    log_step "正在获取 Hysteria2 最新版本..."
+    log_step "$(t hysteria2.fetching_latest)"
     tag=$(curl -fsSL "https://api.github.com/repos/apernet/hysteria/releases/latest" 2>/dev/null \
           | jq -r '.tag_name // empty' || true)
-    [[ "$tag" =~ ^app/v[0-9] ]] || { log_warn "无法获取最新版本，使用备用版本 app/v2.6.0"; tag="app/v2.6.0"; }
+    [[ "$tag" =~ ^app/v[0-9] ]] || { log_warn "$(t hysteria2.latest_fallback)"; tag="app/v2.6.0"; }
 
     local hy2_arch
     case "$arch" in
         amd64) hy2_arch="amd64" ;;
         arm64) hy2_arch="arm64" ;;
         arm32) hy2_arch="arm" ;;
-        *)     die "Hysteria2 不支持此架构：$arch" ;;
+        *)     die "$(t hysteria2.unsupported_arch "$arch")" ;;
     esac
 
     local filename="hysteria-linux-${hy2_arch}"
@@ -51,8 +51,8 @@ hy2_install() {
     local url="${HY2_RELEASES}/download/${tag_url}/${filename}"
     local tmp; tmp=$(mktemp)
 
-    log_step "正在下载 Hysteria2 ${tag}（${hy2_arch}）..."
-    curl -fsSL -o "$tmp" "$url" || die "下载失败：$url"
+    log_step "$(t hysteria2.downloading "$tag" "$hy2_arch")"
+    curl -fsSL -o "$tmp" "$url" || die "$(t hysteria2.download_fail "$url")"
     install -m 755 "$tmp" "$HY2_BIN"
     rm -f "$tmp"
 
@@ -61,7 +61,7 @@ hy2_install() {
     _hy2_write_service
     systemctl daemon-reload
 
-    log_ok "Hysteria2 ${tag} 已安装。"
+    log_ok "$(t hysteria2.install_done "$tag")"
 
     # Configure immediately if no config exists
     if [[ ! -f "$HY2_CFG" ]]; then
@@ -71,18 +71,18 @@ hy2_install() {
 
 # ── Setup wizard (called after fresh install) ─────────────────────────────────
 _hy2_setup_wizard() {
-    log_step "正在配置 Hysteria2..."
+    log_step "$(t hysteria2.configuring)"
     mkdir -p /etc/hysteria
 
-    local port; ask port "监听端口（UDP）" "443"
+    local port; ask port "$(t hysteria2.ask_port)" "443"
     local password; password=$(rand_str 24)
-    ask password "密码（留空自动生成）" "$password"
+    ask password "$(t hysteria2.ask_password)" "$password"
 
     local domain="" cert_block="" masquerade_block=""
 
     echo ""
-    if ask_yn "你是否有解析到本机的域名？" Y; then
-        ask domain "你的域名"
+    if ask_yn "$(t hysteria2.ask_has_domain)" Y; then
+        ask domain "$(t hysteria2.ask_domain)"
         source "$LIB_DIR/cert.sh"
         if cert_ensure_domain "$domain"; then
             local cert_dir="$NGINX_SSL_DIR/$domain"
@@ -95,13 +95,13 @@ _hy2_setup_wizard() {
     url: https://${domain}
     rewriteHost: true"
         else
-            log_warn "证书不可用，将使用自签名证书。"
+            log_warn "$(t hysteria2.cert_unavailable_self)"
             domain=""
         fi
     fi
 
     if [[ -z "$domain" ]]; then
-        log_step "正在生成自签名证书..."
+        log_step "$(t hysteria2.generating_self_cert)"
         openssl req -x509 -nodes -newkey ec \
             -pkeyopt ec_paramgen_curve:P-256 \
             -keyout "$HY2_SELF_SIGNED_KEY" \
@@ -111,7 +111,7 @@ _hy2_setup_wizard() {
         cert_block="tls:
   cert: ${HY2_SELF_SIGNED_CERT}
   key:  ${HY2_SELF_SIGNED_KEY}"
-        log_warn "自签名证书——客户端需设置 insecure=true（或 skip-cert-verify: true）。"
+        log_warn "$(t hysteria2.self_cert_warn)"
     fi
 
     cat > "$HY2_CFG" <<EOF
@@ -149,12 +149,12 @@ EOF
 
     svc_enable hysteria-server
     svc_start  hysteria-server
-    log_ok "Hysteria2 配置完成。"
-    log_info "密码：$password"
-    [[ -n "$domain" ]] && log_info "域名：$domain" || log_info "模式：自签名证书（无域名）"
+    log_ok "$(t hysteria2.config_done)"
+    log_info "$(t hysteria2.password_line "$password")"
+    [[ -n "$domain" ]] && log_info "$(t hysteria2.domain_line "$domain")" || log_info "$(t hysteria2.mode_self_cert)"
 
     echo ""
-    ask_yn "是否现在放行防火墙端口 ${port}/udp？" Y && {
+    ask_yn "$(t hysteria2.ask_open_firewall "$port")" Y && {
         source "$LIB_DIR/system.sh"
         firewall_open_port "$port" "udp"
     }
@@ -184,44 +184,44 @@ EOF
 
 # ── Modify ────────────────────────────────────────────────────────────────────
 hy2_modify_password() {
-    [[ -f "$HY2_CFG" ]] || { log_error "未找到配置文件"; return 1; }
+    [[ -f "$HY2_CFG" ]] || { log_error "$(t hysteria2.conf_missing)"; return 1; }
     local cur; cur=$(state_get "hy2_password")
-    log_info "当前密码：$cur"
-    local new_pw; ask new_pw "新密码（留空自动生成）" ""
+    log_info "$(t hysteria2.current_password "$cur")"
+    local new_pw; ask new_pw "$(t hysteria2.ask_new_password)" ""
     [[ -z "$new_pw" ]] && new_pw=$(rand_str 24)
     sed -i "s/  password:.*/  password: \"$new_pw\"/" "$HY2_CFG"
     state_set "hy2_password" "$new_pw"
     svc_restart hysteria-server
-    log_ok "密码已更新：$new_pw"
+    log_ok "$(t hysteria2.password_updated "$new_pw")"
 }
 
 hy2_modify_bandwidth() {
-    [[ -f "$HY2_CFG" ]] || { log_error "未找到配置文件"; return 1; }
+    [[ -f "$HY2_CFG" ]] || { log_error "$(t hysteria2.conf_missing)"; return 1; }
     local up down
-    ask up   "上行限速（例如 100 mbps）"  "100 mbps"
-    ask down "下行限速（例如 300 mbps）"  "300 mbps"
+    ask up   "$(t hysteria2.ask_up)"  "100 mbps"
+    ask down "$(t hysteria2.ask_down)"  "300 mbps"
     sed -i "s/  up:.*/  up: $up/"     "$HY2_CFG"
     sed -i "s/  down:.*/  down: $down/" "$HY2_CFG"
     svc_restart hysteria-server
-    log_ok "带宽限速——上行：$up，下行：$down"
+    log_ok "$(t hysteria2.bandwidth_updated "$up" "$down")"
 }
 
 hy2_modify_cert() {
-    [[ -f "$HY2_CFG" ]] || { log_error "未找到配置文件"; return 1; }
-    local domain; ask domain "域名（证书须在 $NGINX_SSL_DIR/域名/ 目录下）"
+    [[ -f "$HY2_CFG" ]] || { log_error "$(t hysteria2.conf_missing)"; return 1; }
+    local domain; ask domain "$(t hysteria2.ask_cert_domain "$NGINX_SSL_DIR")"
     source "$LIB_DIR/cert.sh"
-    cert_ensure_domain "$domain" || { log_warn "证书不可用。"; return 1; }
+    cert_ensure_domain "$domain" || { log_warn "$(t hysteria2.cert_unavailable)"; return 1; }
     local cert_dir="$NGINX_SSL_DIR/$domain"
     sed -i "s|  cert:.*|  cert: $cert_dir/fullchain.pem|" "$HY2_CFG"
     sed -i "s|  key:.*|  key:  $cert_dir/privkey.pem|"    "$HY2_CFG"
     state_set "hy2_domain" "$domain"
     svc_restart hysteria-server
-    log_ok "已更新 $domain 的证书"
+    log_ok "$(t hysteria2.cert_updated "$domain")"
 }
 
 # ── Show share ────────────────────────────────────────────────────────────────
 hy2_show_share() {
-    [[ -f "$HY2_CFG" ]] || { log_error "未找到配置文件"; return 1; }
+    [[ -f "$HY2_CFG" ]] || { log_error "$(t hysteria2.conf_missing)"; return 1; }
 
     local domain;   domain=$(state_get "hy2_domain")
     local password; password=$(state_get "hy2_password")
@@ -237,13 +237,13 @@ hy2_show_share() {
     local sni="${domain:-${ip}}"
     local uri="hysteria2://${password}@${ip}:${port}?insecure=${insecure}&sni=${sni}#PSM-Hysteria2"
 
-    echo -e "\n${BOLD}${GREEN}── Hysteria2 分享链接 ──${NC}"
-    [[ $insecure -eq 1 ]] && echo -e "  ${YELLOW}（自签名证书——客户端需设置 insecure=1）${NC}"
+    echo -e "\n${BOLD}${GREEN}── $(t hysteria2.share_title) ──${NC}"
+    [[ $insecure -eq 1 ]] && echo -e "  ${YELLOW}$(t hysteria2.share_self_cert)${NC}"
     echo "  $uri"
     echo ""
     echo "$uri" | qrencode -t ANSIUTF8 2>/dev/null || true
 
-    echo -e "\n${BOLD}Clash Meta：${NC}"
+    echo -e "\n${BOLD}$(t hysteria2.clash_title)${NC}"
     cat <<EOF
 proxies:
   - name: PSM-Hysteria2
@@ -258,12 +258,12 @@ EOF
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 hy2_uninstall() {
-    ask_yn "是否删除 Hysteria2 程序和服务？（保留配置）" N || return 0
+    ask_yn "$(t hysteria2.ask_uninstall)" N || return 0
     svc_stop hysteria-server
     systemctl disable hysteria-server --quiet 2>/dev/null
     rm -f "$HY2_BIN" "$HY2_SERVICE"
     systemctl daemon-reload
-    log_ok "Hysteria2 已删除。"
+    log_ok "$(t hysteria2.uninstalled)"
 }
 
 hy2_logs() {
@@ -274,26 +274,26 @@ hy2_logs() {
 _hy2_check_deps() {
     ensure_pkg_deps curl qrencode openssl
     [[ -f "$HY2_BIN" ]] && return 0
-    log_warn "Hysteria2 未安装。"
-    ask_yn "是否现在安装 Hysteria2？" Y \
+    log_warn "$(t hysteria2.not_installed)"
+    ask_yn "$(t hysteria2.ask_install)" Y \
         && hy2_install \
-        || { log_error "此菜单需要 Hysteria2。"; return 1; }
+        || { log_error "$(t hysteria2.need)"; return 1; }
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────
 hysteria2_menu() {
     _hy2_check_deps || return
     while true; do
-        show_menu "Hysteria2 管理" \
-            "安装 / 重新配置" \
-            "卸载" \
-            "修改密码" \
-            "修改带宽限速" \
-            "修改证书" \
-            "显示分享链接 / URI" \
-            "服务状态" \
-            "查看日志" \
-            "重启服务"
+        show_menu "$(t hysteria2.menu.title)" \
+            "$(t hysteria2.menu.install)" \
+            "$(t hysteria2.menu.uninstall)" \
+            "$(t hysteria2.menu.password)" \
+            "$(t hysteria2.menu.bandwidth)" \
+            "$(t hysteria2.menu.cert)" \
+            "$(t hysteria2.menu.share)" \
+            "$(t hysteria2.menu.status)" \
+            "$(t hysteria2.menu.logs)" \
+            "$(t hysteria2.menu.restart)"
 
         case "$MENU_CHOICE" in
             1) hy2_install ;;

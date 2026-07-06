@@ -22,14 +22,14 @@ WARP_FAMILY="4"   # egress family: 4 | 6 | 46 (set by _warp_choose_family)
 _warp_ensure_deps() {
     ensure_pkg_deps curl jq
     if ! command -v wg &>/dev/null; then
-        log_step "正在安装 wireguard-tools（生成密钥对需要）..."
+        log_step "$(t xray.warp.install_wg)"
         detect_os
         # EL8/9（CentOS/Rocky/Alma/RHEL/Oracle）的 wireguard-tools 在 EPEL；
         # AL2023/Fedora 在基础仓库。ensure_epel 会按发行版正确启用。
         [[ "$PKG_MGR" == "yum" ]] && ensure_epel 2>/dev/null || true
         pkg_install wireguard-tools \
-            && log_ok "wireguard-tools 已安装" \
-            || { log_error "wireguard-tools 安装失败，无法生成密钥对"; return 1; }
+            && log_ok "$(t xray.warp.wg_installed)" \
+            || { log_error "$(t xray.warp.wg_install_fail)"; return 1; }
     fi
     require_cmd wg curl jq
 }
@@ -43,13 +43,13 @@ _warp_registered() {
 _warp_register() {
     _warp_ensure_deps || return 1
 
-    log_step "正在生成 WireGuard 密钥对..."
+    log_step "$(t xray.warp.gen_keys)"
     local priv pub
     priv=$(wg genkey)
     pub=$(echo "$priv" | wg pubkey)
-    [[ -z "$priv" || -z "$pub" ]] && { log_error "密钥对生成失败"; return 1; }
+    [[ -z "$priv" || -z "$pub" ]] && { log_error "$(t xray.warp.key_fail)"; return 1; }
 
-    log_step "正在向 Cloudflare 注册 WARP 账号..."
+    log_step "$(t xray.warp.registering)"
     local tos body resp http_code
     tos=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
     body=$(jq -n --arg key "$pub" --arg tos "$tos" \
@@ -65,7 +65,7 @@ _warp_register() {
     resp=$(echo "$resp" | sed '$d')
 
     if [[ "$http_code" != "200" ]] || ! echo "$resp" | jq -e '.config' &>/dev/null; then
-        log_error "WARP 注册失败（HTTP ${http_code}）："
+        log_error "$(t xray.warp.register_fail "$http_code")"
         echo "$resp" | jq -r '.errors[]? // .' 2>/dev/null || echo "$resp"
         return 1
     fi
@@ -80,7 +80,7 @@ _warp_register() {
         | tr -s ' ' '\n' | grep -v '^$' | jq -sc '.')
 
     if [[ -z "$peer_pk" || -z "$v4" || "$reserved" == "[]" ]]; then
-        log_error "WARP 注册响应解析失败，字段缺失"
+        log_error "$(t xray.warp.parse_fail)"
         return 1
     fi
 
@@ -98,12 +98,12 @@ _warp_register() {
     # NOTE: ${v4} here (e.g. 172.16.0.2) is the INTERNAL tunnel address Cloudflare
     # gives every free-WARP client — NOT the exit IP. The real egress IP is only
     # known once traffic flows; use "查看 WARP 实际出口 IP" to probe it.
-    log_ok "WARP 账号注册成功（隧道内网地址: ${v4}，这不是出口 IP）"
+    log_ok "$(t xray.warp.registered "$v4")"
 }
 
 # ── Egress address-family selection ──────────────────────────────────────────
 _warp_family_label() {
-    case "$1" in 4) echo "仅 IPv4";; 6) echo "仅 IPv6";; 46) echo "IPv4 + IPv6";; *) echo "$1";; esac
+    case "$1" in 4) t xray.warp.family.v4;; 6) t xray.warp.family.v6;; 46) t xray.warp.family.dual;; *) echo "$1";; esac
 }
 
 # Sets WARP_FAMILY to 4|6|46. WARP hands out both a v4 and v6 egress regardless
@@ -117,7 +117,7 @@ _warp_choose_family() {
 
     if (( has6 && ! has4 )); then
         WARP_FAMILY="4"
-        log_info "本机为 IPv6-only，WARP 出口固定使用 IPv4（以获得访问 IPv4 服务的能力）"
+        log_info "$(t xray.warp.ipv6_only)"
         return
     fi
 
@@ -126,11 +126,11 @@ _warp_choose_family() {
     case "$cur" in 6) def=2 ;; 46) def=3 ;; esac
 
     echo ""
-    echo -e "  ${BOLD}选择 WARP 出口 IP（分流走 WARP 时对外呈现的地址族）：${NC}"
-    echo -e "    1. 仅 IPv4（兼容性最好，推荐）"
-    echo -e "    2. 仅 IPv6"
-    echo -e "    3. 同时 IPv4 + IPv6（按目标自动选择）"
-    local sel; read -rp "$(echo -e "${CYAN}请选择 [${def}]: ${NC}")" sel
+    echo -e "  ${BOLD}$(t xray.warp.choose_family)${NC}"
+    echo -e "    $(t xray.warp.family_opt1)"
+    echo -e "    $(t xray.warp.family_opt2)"
+    echo -e "    $(t xray.warp.family_opt3)"
+    local sel; read -rp "$(echo -e "${CYAN}$(t xray.warp.ask_select "$def")${NC}")" sel
     case "${sel:-$def}" in
         2) WARP_FAMILY="6" ;;
         3) WARP_FAMILY="46" ;;
@@ -165,10 +165,10 @@ _warp_add_default_rules() {
     local presets=("netflix" "openai" "disney" "hbo" "spotify")
     local p
     for p in "${presets[@]}"; do
-        ask_yn "  是否将 ${p} 流量路由到 WARP？" N || continue
+        ask_yn "$(t xray.warp.ask_route "$p")" N || continue
         local id; id=$(_route_next_id)
         local entry
-        entry=$(jq -n --arg id "$id" --arg remark "${p} → WARP 解锁" \
+        entry=$(jq -n --arg id "$id" --arg remark "$(t xray.warp.rule_remark "$p")" \
                        --arg val "$p" --arg ot "$WARP_OUTBOUND_TAG" \
             '{id:$id,remark:$remark,rule_type:"geosite",value:$val,outbound_tag:$ot}')
         local rules; rules=$(_route_load)
@@ -184,18 +184,18 @@ warp_setup() {
     _xray_require_installed || return
 
     if _warp_registered; then
-        log_info "已注册 WARP 账号（$(jq -r '.registered_at' "$WARP_ACCOUNT")）"
-        ask_yn "是否重新注册（会丢弃当前 WARP 身份）？" N && { _warp_register || return 1; }
+        log_info "$(t xray.warp.already_registered "$(jq -r '.registered_at' "$WARP_ACCOUNT")")"
+        ask_yn "$(t xray.warp.ask_reregister)" N && { _warp_register || return 1; }
     else
         _warp_register || return 1
     fi
 
     _warp_choose_family
 
-    log_step "正在写入 Xray 出站配置..."
+    log_step "$(t xray.warp.writing_outbound)"
     _warp_apply_outbound "$WARP_FAMILY"
     xray_test_restart
-    log_ok "WARP 出站（tag: ${WARP_OUTBOUND_TAG}，出口：$(_warp_family_label "$WARP_FAMILY")）已写入"
+    log_ok "$(t xray.warp.outbound_written "$WARP_OUTBOUND_TAG" "$(_warp_family_label "$WARP_FAMILY")")"
 
     # Prerequisite: WARP shunting only makes sense if the tunnel actually reaches
     # the public internet. Verify the real exit IP FIRST and gate everything on
@@ -203,51 +203,51 @@ warp_setup() {
     echo ""
     if ! warp_check_exit_ip; then
         echo ""
-        log_warn "WARP 隧道未能正常出网，已暂停配置分流规则。"
-        log_warn "请先排查 WARP 连通性（provider 是否放行 UDP 2408、握手是否成功），"
-        log_warn "确认能拿到公网出口 IP 后，再回到本菜单添加解锁分流。"
+        log_warn "$(t xray.warp.tunnel_bad1)"
+        log_warn "$(t xray.warp.tunnel_bad2)"
+        log_warn "$(t xray.warp.tunnel_bad3)"
         return 1
     fi
 
     echo ""
-    echo -e "${YELLOW}WARP 已确认可正常出网，接下来可将部分流量路由到 WARP 解锁：${NC}"
+    echo -e "${YELLOW}$(t xray.warp.ready_unlock)${NC}"
     _warp_add_default_rules
-    log_ok "WARP 配置完成。如需自定义更多分流规则，请前往「路由分流管理」。"
+    log_ok "$(t xray.warp.setup_done)"
 }
 
 warp_status() {
-    echo -e "\n${BOLD}${BLUE}══ WARP 出站状态 ══════════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}$(t xray.warp.status_title)${NC}"
     if ! _warp_registered; then
-        echo -e "  ${YELLOW}尚未注册 WARP 账号${NC}"
+        echo -e "  ${YELLOW}$(t xray.warp.not_registered)${NC}"
         echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
         return
     fi
     local acc; acc=$(cat "$WARP_ACCOUNT")
-    echo -e "  注册时间：$(echo "$acc" | jq -r '.registered_at')"
-    echo -e "  隧道内网 IPv4：$(echo "$acc" | jq -r '.local_v4') ${YELLOW}(内网地址，非出口 IP)${NC}"
-    echo -e "  隧道内网 IPv6：$(echo "$acc" | jq -r '.local_v6 // "（无）"')"
+    echo -e "  $(t xray.warp.registered_at "$(echo "$acc" | jq -r '.registered_at')")"
+    echo -e "  $(t xray.warp.local_v4 "$(echo "$acc" | jq -r '.local_v4')" "${YELLOW}$(t xray.warp.internal_not_exit)${NC}")"
+    echo -e "  $(t xray.warp.local_v6 "$(echo "$acc" | jq -r ".local_v6 // \"$(t xray.warp.none)\"")")"
     echo -e "  Endpoint ：$(echo "$acc" | jq -r '.endpoint')"
 
     local ob_json; ob_json=$(_outb_get_by_tag "$WARP_OUTBOUND_TAG" 2>/dev/null)
     if echo "$ob_json" | jq -e '.tag' &>/dev/null; then
-        echo -e "  出站状态：${GREEN}已应用（${WARP_OUTBOUND_TAG}）${NC}"
+        echo -e "  ${GREEN}$(t xray.warp.applied "$WARP_OUTBOUND_TAG")${NC}"
         local fam; fam=$(echo "$ob_json" | jq -r '.family // "4"')
-        echo -e "  出口地址族：${GREEN}$(_warp_family_label "$fam")${NC}"
+        echo -e "  ${GREEN}$(t xray.warp.egress_family "$(_warp_family_label "$fam")")${NC}"
     else
-        echo -e "  出站状态：${YELLOW}未应用，请选择「注册 / 配置 WARP 出站」${NC}"
+        echo -e "  ${YELLOW}$(t xray.warp.not_applied)${NC}"
     fi
 
     local rule_count
     rule_count=$(_route_load | jq --arg ot "$WARP_OUTBOUND_TAG" '[.[] | select(.outbound_tag == $ot)] | length')
-    echo -e "  分流规则：${rule_count} 条指向 WARP"
+    echo -e "  $(t xray.warp.rule_count "$rule_count")"
     echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
 }
 
 warp_remove() {
     if ! _outb_get_by_tag "$WARP_OUTBOUND_TAG" | jq -e '.tag' &>/dev/null; then
-        log_warn "WARP 出站尚未配置"; return
+        log_warn "$(t xray.warp.not_configured)"; return
     fi
-    ask_yn "确认移除 WARP 出站？（引用它的分流规则也会一并删除）" N || return
+    ask_yn "$(t xray.warp.ask_remove)" N || return
 
     local rules; rules=$(_route_load | jq --arg ot "$WARP_OUTBOUND_TAG" '[.[] | select(.outbound_tag != $ot)]')
     _route_save "$rules"
@@ -257,24 +257,24 @@ warp_remove() {
     _outb_apply_to_xray
     xray_test_restart
 
-    ask_yn "是否同时删除本机保存的 WARP 账号身份？（下次将重新注册新账号）" N \
+    ask_yn "$(t xray.warp.ask_delete_identity)" N \
         && rm -f "$WARP_ACCOUNT"
 
-    log_ok "WARP 出站及关联分流规则已移除"
+    log_ok "$(t xray.warp.removed)"
 }
 
 # ── Switch egress family without re-registering ───────────────────────────────
 warp_switch_family() {
-    _warp_registered || { log_warn "尚未注册 WARP 账号"; return 1; }
+    _warp_registered || { log_warn "$(t xray.warp.not_registered)"; return 1; }
     if ! _outb_get_by_tag "$WARP_OUTBOUND_TAG" | jq -e '.tag' &>/dev/null; then
-        log_warn "请先「注册 / 配置 WARP 出站」"; return 1
+        log_warn "$(t xray.warp.configure_first)"; return 1
     fi
     _warp_choose_family
     _warp_apply_outbound "$WARP_FAMILY"
     xray_test_restart
-    log_ok "WARP 出口 IP 已切换为：$(_warp_family_label "$WARP_FAMILY")"
+    log_ok "$(t xray.warp.family_switched "$(_warp_family_label "$WARP_FAMILY")")"
     echo ""
-    ask_yn "是否立即验证出口 IP？" Y && { warp_check_exit_ip || true; }
+    ask_yn "$(t xray.warp.ask_verify)" Y && { warp_check_exit_ip || true; }
 }
 
 # ── Probe the REAL exit IP ────────────────────────────────────────────────────
@@ -285,16 +285,16 @@ warp_switch_family() {
 # on localhost, curl Cloudflare's trace endpoint through it, then tear it down —
 # without touching the production Xray.
 warp_check_exit_ip() {
-    _warp_registered || { log_warn "尚未注册 WARP 账号"; return 1; }
-    command -v curl &>/dev/null || { log_error "缺少 curl，无法探测出口 IP"; return 1; }
+    _warp_registered || { log_warn "$(t xray.warp.not_registered)"; return 1; }
+    command -v curl &>/dev/null || { log_error "$(t xray.warp.no_curl)"; return 1; }
 
     local ob; ob=$(_outb_get_by_tag "$WARP_OUTBOUND_TAG")
     if ! echo "$ob" | jq -e '.tag' &>/dev/null; then
-        log_warn "WARP 出站未配置，请先执行「注册 / 配置 WARP 出站」"
+        log_warn "$(t xray.warp.not_configured_run_setup)"
         return 1
     fi
     local xray_ob; xray_ob=$(_outb_build_xray "$ob")
-    [[ -n "$xray_ob" ]] || { log_error "构建 WARP 出站配置失败"; return 1; }
+    [[ -n "$xray_ob" ]] || { log_error "$(t xray.warp.build_fail)"; return 1; }
 
     # Pick a free localhost port for the throwaway socks inbound.
     local port=47100
@@ -318,7 +318,7 @@ warp_check_exit_ip() {
         outbounds: [$ob]
     }' > "$tmpcfg"
 
-    log_step "正在通过 WARP 隧道探测实际出口 IP（约需十几秒）..."
+    log_step "$(t xray.warp.probing)"
     "$XRAY_BIN" run -c "$tmpcfg" >"$tmplog" 2>&1 &
     xpid=$!
 
@@ -348,16 +348,16 @@ warp_check_exit_ip() {
     rm -rf "$tmpdir"
 
     if (( ! up )); then
-        log_error "临时 Xray 未能启动（无法监听 127.0.0.1:${port}），无法探测"
-        echo -e "${YELLOW}Xray 输出（便于排查）：${NC}"
+        log_error "$(t xray.warp.temp_start_fail "$port")"
+        echo -e "${YELLOW}$(t xray.warp.xray_output)${NC}"
         sed 's/^/    /' <<<"$logtail"
         return 1
     fi
 
     if [[ -z "$trace" ]]; then
-        log_error "探测失败：临时代理已就绪，但无法经 WARP 访问外网"
-        echo -e "${YELLOW}常见原因：UDP 2408 出站被封 / WARP 握手失败 / 本机 IP 段被 Cloudflare 限制${NC}"
-        echo -e "${YELLOW}Xray 输出（便于排查）：${NC}"
+        log_error "$(t xray.warp.probe_fail)"
+        echo -e "${YELLOW}$(t xray.warp.common_reasons)${NC}"
+        echo -e "${YELLOW}$(t xray.warp.xray_output)${NC}"
         sed 's/^/    /' <<<"$logtail"
         return 1
     fi
@@ -368,18 +368,18 @@ warp_check_exit_ip() {
     warp_state=$(awk -F= '/^warp=/{print $2}' <<<"$trace")
 
     echo ""
-    echo -e "${BOLD}${BLUE}══ WARP 实际出口 ══════════════════════════${NC}"
-    echo -e "  出口 IP ：${GREEN}${exit_ip:-未知}${NC}"
-    echo -e "  出口地区：${loc:-未知}"
+    echo -e "${BOLD}${BLUE}$(t xray.warp.exit_title)${NC}"
+    echo -e "  ${GREEN}$(t xray.warp.exit_ip "${exit_ip:-$(t xray.warp.unknown)}")${NC}"
+    echo -e "  $(t xray.warp.exit_loc "${loc:-$(t xray.warp.unknown)}")"
     if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
-        echo -e "  WARP 状态：${GREEN}已生效（warp=${warp_state}）${NC}"
+        echo -e "  ${GREEN}$(t xray.warp.state_on "$warp_state")${NC}"
         echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
         return 0
     fi
     # Got a public IP but warp=off → traffic reached the internet WITHOUT the
     # tunnel. WARP is not actually carrying traffic, so this counts as a failure.
-    echo -e "  WARP 状态：${YELLOW}未走 WARP（warp=${warp_state:-off}）${NC}"
-    echo -e "  ${YELLOW}提示：流量没有真正经过 WARP 隧道，解锁分流不会生效。${NC}"
+    echo -e "  ${YELLOW}$(t xray.warp.state_off "${warp_state:-off}")${NC}"
+    echo -e "  ${YELLOW}$(t xray.warp.off_hint)${NC}"
     echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
     return 1
 }
@@ -389,13 +389,13 @@ warp_menu() {
     _xray_require_installed || return
     while true; do
         warp_status
-        show_menu "WARP 解锁出站" \
-            "注册 / 配置 WARP 出站（一键）" \
-            "查看 WARP 实际出口 IP" \
-            "切换 WARP 出口 IP（IPv4 / IPv6 / 双栈）" \
-            "添加常用解锁分流规则" \
-            "查看 / 编辑分流规则" \
-            "移除 WARP 出站"
+        show_menu "$(t xray.warp.menu.title)" \
+            "$(t xray.warp.menu.setup)" \
+            "$(t xray.warp.menu.check)" \
+            "$(t xray.warp.menu.switch)" \
+            "$(t xray.warp.menu.rules)" \
+            "$(t xray.warp.menu.routing)" \
+            "$(t xray.warp.menu.remove)"
 
         case "$MENU_CHOICE" in
             1) warp_setup;             press_enter ;;
@@ -405,7 +405,7 @@ warp_menu() {
                 if _outb_get_by_tag "$WARP_OUTBOUND_TAG" | jq -e '.tag' &>/dev/null; then
                     _warp_add_default_rules
                 else
-                    log_warn "请先注册 / 配置 WARP 出站"
+                    log_warn "$(t xray.warp.configure_first)"
                 fi
                 press_enter ;;
             5) route_show;             press_enter ;;

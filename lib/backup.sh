@@ -30,7 +30,7 @@ do_quick_backup() {
     [[ -d "$NGINX_SSL_DIR" ]] && cp -a "$NGINX_SSL_DIR" "$bak/ssl" 2>/dev/null
 
     _rotate_backups
-    log_ok "快速备份已保存：$bak"
+    log_ok "$(t backup.quick_saved "$bak")"
     echo "$bak"
 }
 
@@ -41,7 +41,7 @@ do_full_backup() {
     local bak="$BAK_ROOT/$name"
     mkdir -p "$bak"
 
-    log_step "正在创建完整备份 → $bak"
+    log_step "$(t backup.full_creating "$bak")"
 
     # All PSM components
     [[ -d /etc/nginx      ]] && cp -a /etc/nginx      "$bak/nginx"
@@ -62,21 +62,21 @@ do_full_backup() {
     local archive="$BAK_ROOT/${name}.tar.gz"
     tar -czf "$archive" -C "$BAK_ROOT" "$name" && rm -rf "$bak"
     _rotate_backups
-    log_ok "完整备份：$archive"
+    log_ok "$(t backup.full_done "$archive")"
     echo "$archive"
 }
 
 # ── Selective backup ──────────────────────────────────────────────────────────
 do_selective_backup() {
-    echo -e "\n  选择要备份的组件（用空格分隔多个序号）："
-    echo    "  1. Nginx 配置"
-    echo    "  2. Xray 配置"
-    echo    "  3. Hysteria2 配置"
-    echo    "  4. PSM 状态 / 节点配置"
-    echo    "  5. SSL 证书"
-    echo    "  6. Docker Compose 文件"
-    echo    "  7. Docker 数据卷（Portainer/Vaultwarden 等应用商店应用的数据）"
-    read -rp "$(echo -e "${CYAN}请选择: ${NC}")" choices
+    echo -e "\n  $(t backup.select_prompt)"
+    echo    "  1. $(t backup.item.nginx)"
+    echo    "  2. $(t backup.item.xray)"
+    echo    "  3. $(t backup.item.hysteria)"
+    echo    "  4. $(t backup.item.psm)"
+    echo    "  5. $(t backup.item.ssl)"
+    echo    "  6. $(t backup.item.docker_compose)"
+    echo    "  7. $(t backup.item.docker_volumes)"
+    read -rp "$(echo -e "${CYAN}$(t common.select)${NC}")" choices
 
     local ts; ts=$(date '+%Y%m%d_%H%M%S')
     local bak="$BAK_ROOT/${ts}_selective"
@@ -98,12 +98,12 @@ do_selective_backup() {
 
     local archive="$BAK_ROOT/${ts}_selective.tar.gz"
     tar -czf "$archive" -C "$BAK_ROOT" "${ts}_selective" && rm -rf "$bak"
-    log_ok "选择性备份：$archive"
+    log_ok "$(t backup.select_done "$archive")"
 }
 
 # ── List backups ──────────────────────────────────────────────────────────────
 list_backups() {
-    echo -e "\n${BOLD}可用备份：${NC}"
+    echo -e "\n${BOLD}$(t backup.available)${NC}"
     local i=1
     find "$BAK_ROOT" -maxdepth 1 \( -name "*.tar.gz" -o -type d \) \
         | sort -r | while read -r f; do
@@ -116,25 +116,25 @@ list_backups() {
 # ── Restore ───────────────────────────────────────────────────────────────────
 do_restore() {
     list_backups
-    local archive; ask archive "备份文件名（从上方列表选择）"
+    local archive; ask archive "$(t backup.ask_archive)"
     local full_path="$BAK_ROOT/$archive"
-    [[ -f "$full_path" ]] || { log_error "未找到：$full_path"; return 1; }
+    [[ -f "$full_path" ]] || { log_error "$(t backup.not_found "$full_path")"; return 1; }
 
-    ask_yn "是否从 $archive 恢复？（当前配置将被覆盖）" N || return 0
+    ask_yn "$(t backup.ask_restore "$archive")" N || return 0
 
     local tmp_dir; tmp_dir=$(mktemp -d)
     tar -xzf "$full_path" -C "$tmp_dir"
     local bak_dir; bak_dir=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)
 
-    echo -e "\n  选择要恢复的组件："
-    echo    "  1. Nginx 配置"
-    echo    "  2. Xray 配置"
-    echo    "  3. Hysteria2 配置"
-    echo    "  4. PSM 状态 / 节点配置"
-    echo    "  5. SSL 证书"
-    echo    "  6. Docker Compose 项目 / 数据卷"
-    echo    "  7. 全部（完整恢复）"
-    read -rp "$(echo -e "${CYAN}请选择 [7]: ${NC}")" rc; rc="${rc:-7}"
+    echo -e "\n  $(t backup.restore_prompt)"
+    echo    "  1. $(t backup.item.nginx)"
+    echo    "  2. $(t backup.item.xray)"
+    echo    "  3. $(t backup.item.hysteria)"
+    echo    "  4. $(t backup.item.psm)"
+    echo    "  5. $(t backup.item.ssl)"
+    echo    "  6. $(t backup.item.docker_restore)"
+    echo    "  7. $(t backup.item.all)"
+    read -rp "$(echo -e "${CYAN}$(t backup.select_default7)${NC}")" rc; rc="${rc:-7}"
     # 选 7（全部恢复）时展开为全部组件；否则保留用户输入的多个数字（空格分隔）
     [[ "$rc" == *7* ]] && rc="1 2 3 4 5 6"
 
@@ -143,17 +143,17 @@ do_restore() {
     for c in $rc; do
         case "$c" in
             1)
-                [[ -d "$bak_dir/nginx"      ]] && { rm -rf /etc/nginx && cp -a "$bak_dir/nginx" /etc/nginx; log_ok "Nginx 已恢复。"; } ;;
+                [[ -d "$bak_dir/nginx"      ]] && { rm -rf /etc/nginx && cp -a "$bak_dir/nginx" /etc/nginx; log_ok "$(t backup.restored.nginx)"; } ;;
             2)
-                [[ -d "$bak_dir/xray"       ]] && { rm -rf "$XRAY_CFG_DIR" && cp -a "$bak_dir/xray" "$XRAY_CFG_DIR"; log_ok "Xray 已恢复。"; } ;;
+                [[ -d "$bak_dir/xray"       ]] && { rm -rf "$XRAY_CFG_DIR" && cp -a "$bak_dir/xray" "$XRAY_CFG_DIR"; log_ok "$(t backup.restored.xray)"; } ;;
             3)
-                [[ -d "$bak_dir/hysteria"   ]] && { rm -rf /etc/hysteria && cp -a "$bak_dir/hysteria" /etc/hysteria; log_ok "Hysteria2 已恢复。"; } ;;
+                [[ -d "$bak_dir/hysteria"   ]] && { rm -rf /etc/hysteria && cp -a "$bak_dir/hysteria" /etc/hysteria; log_ok "$(t backup.restored.hysteria)"; } ;;
             4)
-                [[ -d "$bak_dir/psm_config" ]] && { rm -rf "$CFG_DIR" && cp -a "$bak_dir/psm_config" "$CFG_DIR"; log_ok "PSM 配置已恢复。"; } ;;
+                [[ -d "$bak_dir/psm_config" ]] && { rm -rf "$CFG_DIR" && cp -a "$bak_dir/psm_config" "$CFG_DIR"; log_ok "$(t backup.restored.psm)"; } ;;
             5)
-                [[ -d "$bak_dir/ssl"        ]] && { rm -rf "$NGINX_SSL_DIR" && cp -a "$bak_dir/ssl" "$NGINX_SSL_DIR"; log_ok "SSL 证书已恢复。"; } ;;
+                [[ -d "$bak_dir/ssl"        ]] && { rm -rf "$NGINX_SSL_DIR" && cp -a "$bak_dir/ssl" "$NGINX_SSL_DIR"; log_ok "$(t backup.restored.ssl)"; } ;;
             6)
-                [[ -d "$bak_dir/docker_compose" ]] && { rm -rf /opt/psm/compose && cp -a "$bak_dir/docker_compose" /opt/psm/compose; log_ok "Docker Compose 项目已恢复。"; }
+                [[ -d "$bak_dir/docker_compose" ]] && { rm -rf /opt/psm/compose && cp -a "$bak_dir/docker_compose" /opt/psm/compose; log_ok "$(t backup.restored.docker)"; }
                 source "$LIB_DIR/docker/backup.sh" 2>/dev/null \
                     && declare -f docker_restore_volumes &>/dev/null \
                     && docker_restore_volumes "$bak_dir"
@@ -163,7 +163,7 @@ do_restore() {
 
     rm -rf "$tmp_dir"
     _start_services
-    log_ok "恢复完成。"
+    log_ok "$(t backup.restore_done)"
 }
 
 _stop_services() {
@@ -185,23 +185,23 @@ _rotate_backups() {
         find "$BAK_ROOT" -maxdepth 1 -name "*.tar.gz" \
             | sort | head -$((count - MAX_BACKUPS)) \
             | xargs rm -f
-        log_info "已轮换旧备份（保留最近 $MAX_BACKUPS 个）。"
+        log_info "$(t backup.rotated "$MAX_BACKUPS")"
     fi
 }
 
 # ── Schedule auto-backup ──────────────────────────────────────────────────────
 auto_backup_enable() {
-    local hour; ask hour "每日备份执行时刻（0-23）" "3"
+    local hour; ask hour "$(t backup.ask_hour)" "3"
     ensure_cron || true   # RHEL 系最小安装没有 cronie，/etc/cron.d 会被无声忽略
     cat > /etc/cron.d/psm-backup <<EOF
 0 ${hour} * * * root $PSM_ROOT/manager.sh --backup-full >> $LOG_DIR/backup.log 2>&1
 EOF
-    log_ok "自动备份已设置，每日 ${hour}:00 执行。"
+    log_ok "$(t backup.auto_enabled "$hour")"
 }
 
 auto_backup_disable() {
     rm -f /etc/cron.d/psm-backup
-    log_ok "自动备份定时任务已删除。"
+    log_ok "$(t backup.auto_disabled)"
 }
 
 # ── Dependency check ─────────────────────────────────────────────────────────
@@ -213,13 +213,13 @@ _backup_check_deps() {
 backup_menu() {
     _backup_check_deps
     while true; do
-        show_menu "备份与恢复" \
-            "完整备份（所有组件）" \
-            "选择性备份" \
-            "从备份恢复" \
-            "列出备份" \
-            "启用自动备份（每日定时）" \
-            "禁用自动备份"
+        show_menu "$(t backup.menu.title)" \
+            "$(t backup.menu.full)" \
+            "$(t backup.menu.selective)" \
+            "$(t backup.menu.restore)" \
+            "$(t backup.menu.list)" \
+            "$(t backup.menu.auto_enable)" \
+            "$(t backup.menu.auto_disable)"
 
         case "$MENU_CHOICE" in
             1) do_full_backup ;;

@@ -39,12 +39,12 @@ _sni_mask_key() {
 # 所有交互输出走 stderr，保证从 pick_one 命令替换里调用时 stdout 洁净。
 _sni_setup_engine() {
     _sni_check_deps
-    echo -e "\n  ${BOLD}测绘引擎选择${NC}" >&2
-    echo -e "  1. Netlas     （免费额度实用，推荐）" >&2
+    echo -e "\n  ${BOLD}$(t xray.sni.engine_title)${NC}" >&2
+    echo -e "  $(t xray.sni.netlas)" >&2
     echo -e "  2. Quake(360)" >&2
     echo -e "  3. ZoomEye" >&2
     echo -e "  4. FOFA" >&2
-    local e; read -rp "$(echo -e "${CYAN}请选择 [1]: ${NC}")" e
+    local e; read -rp "$(echo -e "${CYAN}$(t xray.sni.ask_select_1)${NC}")" e
     local engine
     case "${e:-1}" in
         2) engine=quake ;;
@@ -54,11 +54,11 @@ _sni_setup_engine() {
     esac
 
     local key; ask key "${engine} API Key"
-    [[ -z "$key" ]] && { log_warn "未输入 API Key，已取消。" >&2; return 1; }
+    [[ -z "$key" ]] && { log_warn "$(t xray.sni.no_key)" >&2; return 1; }
 
     state_set "sni_engine"    "$engine"
     state_set "${engine}_key" "$key"
-    log_ok "已保存测绘引擎：${engine}（Key：$(_sni_mask_key "$key")）" >&2
+    log_ok "$(t xray.sni.saved_engine "$engine" "$(_sni_mask_key "$key")")" >&2
 
     # 立即预检额度（best-effort，字段以各引擎文档为准，取不到不阻断）
     _sni_engine_quota "$engine" || true
@@ -78,7 +78,7 @@ _sni_self_asn_country() {
     SNI_SELF_COUNTRY=""
     local ip asn="" cc="" resp=""
     ip=$(get_ipv4) || true
-    [[ -z "$ip" ]] && { log_warn "无法获取本机公网 IP。" >&2; return 1; }
+    [[ -z "$ip" ]] && { log_warn "$(t xray.sni.no_public_ip)" >&2; return 1; }
 
     # 1. ip-api.com（.as = "AS24940 Hetzner ..."，取 AS 后数字；.countryCode）
     resp=$(curl -s --max-time 8 "http://ip-api.com/json/${ip}?fields=as,countryCode" 2>/dev/null) || true
@@ -103,9 +103,9 @@ _sni_self_asn_country() {
 
     # 三源都失败 → 让用户手输 ASN（留空则由上层退回手输 SNI）
     if ! [[ "$asn" =~ ^[0-9]+$ ]]; then
-        log_warn "无法自动识别本机 ASN（ip-api / ipinfo / BGPView 均失败）。" >&2
+        log_warn "$(t xray.sni.no_asn)" >&2
         local manual=""
-        ask manual "请手输本机 ASN 号（纯数字，留空放弃）"
+        ask manual "$(t xray.sni.ask_manual_asn)"
         manual=$(printf '%s' "$manual" | tr -dc '0-9')
         [[ -z "$manual" ]] && return 1
         asn="$manual"
@@ -113,7 +113,7 @@ _sni_self_asn_country() {
 
     SNI_SELF_ASN="$asn"
     SNI_SELF_COUNTRY="$cc"
-    log_info "本机归属：ASN=AS${SNI_SELF_ASN}${cc:+  国家=${cc}}" >&2
+    log_info "$(t xray.sni.self_asn "$SNI_SELF_ASN" "${cc:+$(t xray.sni.country_suffix "$cc")}")" >&2
     return 0
 }
 
@@ -149,10 +149,10 @@ _sni_engine_quota() {
             ;;
     esac
     if [[ "$remain" =~ ^[0-9]+$ ]]; then
-        log_info "测绘引擎 ${engine} 剩余额度：${remain}" >&2
-        (( remain == 0 )) && { log_warn "引擎 ${engine} 额度已耗尽。" >&2; return 1; }
+        log_info "$(t xray.sni.quota "$engine" "$remain")" >&2
+        (( remain == 0 )) && { log_warn "$(t xray.sni.quota_empty "$engine")" >&2; return 1; }
     else
-        log_info "测绘引擎 ${engine} 额度信息不可用（继续尝试查询）。" >&2
+        log_info "$(t xray.sni.quota_unknown "$engine")" >&2
     fi
     return 0
 }
@@ -208,7 +208,7 @@ _netlas_discover_pairs() {
     # responses 索引的 ASN 字段是 whois.asn.number（asn.number / asn 都取不到结果，实测确认）。
     rows=$(_netlas_query "whois.asn.number:${asn} AND port:443 AND protocol:https") || true
     if [[ -z "$rows" && -n "$country" ]]; then
-        log_info "Netlas：ASN 过滤无结果，改用国家(${country})过滤。" >&2
+        log_info "$(t xray.sni.asn_empty_country "Netlas" "$country")" >&2
         rows=$(_netlas_query "geo.country:${country} AND port:443 AND protocol:https") || true
     fi
     printf '%s\n' "$rows" | _sni_normalize_pairs "$max"
@@ -234,7 +234,7 @@ _quake_discover_pairs() {
     local asn="$1" country="$2" max="$3" rows=""
     rows=$(_quake_query "asn:\"${asn}\" AND service:\"http/ssl\"" "$max") || true
     if [[ -z "$rows" && -n "$country" ]]; then
-        log_info "Quake：ASN 过滤无结果，改用国家(${country})过滤。" >&2
+        log_info "$(t xray.sni.asn_empty_country "Quake" "$country")" >&2
         rows=$(_quake_query "country:\"${country}\" AND service:\"http/ssl\"" "$max") || true
     fi
     printf '%s\n' "$rows" | _sni_normalize_pairs "$max"
@@ -250,7 +250,7 @@ _zoomeye_query() {
         --data "$(jq -nc --arg q "$b64" --argjson n "$max" '{qbase64:$q, page:1, pagesize:$n}')" 2>/dev/null) || true
     [[ -z "$resp" ]] && return 0
     if printf '%s' "$resp" | jq -e '.code? and (.code != 60000)' >/dev/null 2>&1; then
-        log_warn "ZoomEye 查询失败：$(printf '%s' "$resp" | jq -r '.message // .error // "unknown"' 2>/dev/null)" >&2
+        log_warn "$(t xray.sni.query_fail "ZoomEye" "$(printf '%s' "$resp" | jq -r '.message // .error // "unknown"' 2>/dev/null)")" >&2
         return 0
     fi
     printf '%s' "$resp" | jq -r '
@@ -269,7 +269,7 @@ _zoomeye_discover_pairs() {
     local asn="$1" country="$2" max="$3" rows=""
     rows=$(_zoomeye_query "asn=${asn} && service=\"https\"" "$max") || true
     if [[ -z "$rows" && -n "$country" ]]; then
-        log_info "ZoomEye：ASN 过滤无结果，改用国家(${country})过滤。" >&2
+        log_info "$(t xray.sni.asn_empty_country "ZoomEye" "$country")" >&2
         rows=$(_zoomeye_query "country=\"${country}\" && service=\"https\"" "$max") || true
     fi
     printf '%s\n' "$rows" | _sni_normalize_pairs "$max"
@@ -286,7 +286,7 @@ _fofa_query() {
         --data "size=${max}" 2>/dev/null) || true
     [[ -z "$resp" ]] && return 0
     if printf '%s' "$resp" | jq -e '.error == true' >/dev/null 2>&1; then
-        log_warn "FOFA 查询失败：$(printf '%s' "$resp" | jq -r '.errmsg // "unknown"' 2>/dev/null)" >&2
+        log_warn "$(t xray.sni.query_fail "FOFA" "$(printf '%s' "$resp" | jq -r '.errmsg // "unknown"' 2>/dev/null)")" >&2
         return 0
     fi
     # results 每行是 [ip, port, domain, host, as_number]（顺序对应 fields）
@@ -297,7 +297,7 @@ _fofa_discover_pairs() {
     local asn="$1" country="$2" max="$3" rows=""
     rows=$(_fofa_query "asn=\"${asn}\" && port=\"443\" && protocol=\"https\" && domain!=\"\"" "$max") || true
     if [[ -z "$rows" && -n "$country" ]]; then
-        log_info "FOFA：ASN 过滤无结果，改用国家(${country})过滤。" >&2
+        log_info "$(t xray.sni.asn_empty_country "FOFA" "$country")" >&2
         rows=$(_fofa_query "country=\"${country}\" && port=\"443\" && protocol=\"https\" && domain!=\"\"" "$max") || true
     fi
     printf '%s\n' "$rows" | _sni_normalize_pairs "$max"
@@ -342,13 +342,13 @@ _sni_discover_pairs() {
 
     local cached; cached=$(_sni_cache_get "$SNI_SELF_ASN" "$engine") || true
     if [[ -n "$cached" ]]; then
-        log_info "命中 24h 缓存（AS${SNI_SELF_ASN} / ${engine}），跳过引擎查询（SNI_FORCE_REFRESH=1 可强制刷新）。" >&2
+        log_info "$(t xray.sni.cache_hit "$SNI_SELF_ASN" "$engine")" >&2
         printf '%s\n' "$cached"
         return 0
     fi
 
     # 查询前预检额度，明确为 0 则退回手输
-    _sni_engine_quota "$engine" || { log_warn "引擎额度不足，退回手输 SNI。" >&2; return 1; }
+    _sni_engine_quota "$engine" || { log_warn "$(t xray.sni.quota_insufficient)" >&2; return 1; }
 
     local pairs=""
     case "$engine" in
@@ -381,14 +381,14 @@ _sni_validate_pairs() {
         dest="${line#*|}"
         [[ -z "$sni" || -z "$dest" || "$sni" == "$dest" ]] && continue
         attempts=$((attempts + 1))
-        printf '  [%d/%d] 校验 %s → %s ... ' "$attempts" "$SNI_VALIDATE_CAP" "$sni" "$dest" >&2
+        printf "$(t xray.sni.validating)" "$attempts" "$SNI_VALIDATE_CAP" "$sni" "$dest" >&2
         if _rwd_check_dest "$dest" "$sni"; then
             healthy=$((healthy + 1))
-            printf '%b健康%b %sms%s\n' "$GREEN" "$NC" "${RWD_CHECK_RTT_MS:-?}" \
+            printf '%b%s%b %sms%s\n' "$GREEN" "$(t xray.sni.healthy)" "$NC" "${RWD_CHECK_RTT_MS:-?}" \
                 "${RWD_CHECK_WARN:+ [${RWD_CHECK_WARN}]}" >&2
             printf '%s\t%s\t%s\t%s\n' "$sni" "$dest" "${RWD_CHECK_RTT_MS:-0}" "${RWD_CHECK_WARN:-}"
         else
-            printf '%b不合格%b（%s）\n' "$YELLOW" "$NC" "${RWD_CHECK_REASON:-unknown}" >&2
+            printf '%b%s%b (%s)\n' "$YELLOW" "$(t xray.sni.bad)" "$NC" "${RWD_CHECK_REASON:-unknown}" >&2
         fi
     done <<< "$pairs"
     return 0
@@ -396,22 +396,22 @@ _sni_validate_pairs() {
 
 # ── 对外入口 1：交互挑 1 个，stdout 只回显最终 "sni|dest" ──────────────────────
 sni_finder_pick_one() {
-    _sni_have_engine || { _sni_setup_engine || { log_warn "未配置测绘引擎，请手动输入 SNI。" >&2; return 1; }; }
-    _sni_self_asn_country || { log_warn "无法自动识别本机 ASN，请手动输入 SNI。" >&2; return 1; }
+    _sni_have_engine || { _sni_setup_engine || { log_warn "$(t xray.sni.no_engine_manual)" >&2; return 1; }; }
+    _sni_self_asn_country || { log_warn "$(t xray.sni.no_asn_manual)" >&2; return 1; }
 
-    log_step "正在从 $(state_get sni_engine) 查询同 ASN(AS${SNI_SELF_ASN}) 的候选伪装目标..." >&2
+    log_step "$(t xray.sni.querying "$(state_get sni_engine)" "$SNI_SELF_ASN")" >&2
     local pairs; pairs=$(_sni_discover_pairs 40) || true
-    [[ -z "$pairs" ]] && { log_warn "未发现候选伪装目标，请手动输入 SNI。" >&2; return 1; }
+    [[ -z "$pairs" ]] && { log_warn "$(t xray.sni.no_candidates_manual)" >&2; return 1; }
 
     local n_found; n_found=$(printf '%s\n' "$pairs" | grep -c '|' || true)
-    log_step "发现 ${n_found} 个候选，正在本地校验（TLS1.3 / X25519 / 证书匹配，逐个握手，稍候）..." >&2
+    log_step "$(t xray.sni.validating_found "$n_found")" >&2
 
     local healthy; healthy=$(_sni_validate_pairs "$pairs") || true
-    [[ -z "$healthy" ]] && { log_warn "候选均未通过 Reality 合规校验，请手动输入 SNI。" >&2; return 1; }
+    [[ -z "$healthy" ]] && { log_warn "$(t xray.sni.no_healthy_manual)" >&2; return 1; }
     healthy=$(printf '%s\n' "$healthy" | sort -t"$(printf '\t')" -k3,3n) || true
 
-    echo -e "\n  ${BOLD}通过校验的候选伪装目标（按握手延迟升序）：${NC}" >&2
-    printf "  %-3s %-30s %-26s %-9s %s\n" "#" "SNI" "dest" "RTT" "警告" >&2
+    echo -e "\n  ${BOLD}$(t xray.sni.healthy_title)${NC}" >&2
+    printf "  %-3s %-30s %-26s %-9s %s\n" "#" "SNI" "dest" "RTT" "$(t xray.sni.warn_header)" >&2
     local -a _snis=() _dests=()
     local idx=0 sni dest rtt warn
     while IFS=$'\t' read -r sni dest rtt warn; do
@@ -419,16 +419,16 @@ sni_finder_pick_one() {
         idx=$((idx + 1))
         _snis+=("$sni"); _dests+=("$dest")
         local note=""
-        [[ "$dest" == "${sni}:443" ]] && note="非IP钉定"
+        [[ "$dest" == "${sni}:443" ]] && note="$(t xray.sni.not_ip_pinned)"
         printf "  %-3s %-30s %-26s %-9s %s\n" "$idx" "$sni" "$dest" "${rtt}ms" "${warn}${note:+ ${note}}" >&2
     done <<< "$healthy"
-    (( idx == 0 )) && { log_warn "无可用候选，请手动输入 SNI。" >&2; return 1; }
+    (( idx == 0 )) && { log_warn "$(t xray.sni.no_usable_manual)" >&2; return 1; }
 
-    local sel; read -rp "$(echo -e "${CYAN}选择要使用的伪装目标编号 [1]（0 = 放弃并手输）: ${NC}")" sel
+    local sel; read -rp "$(echo -e "${CYAN}$(t xray.sni.ask_pick)${NC}")" sel
     sel="${sel:-1}"
-    [[ "$sel" == "0" ]] && { log_info "已放弃自动发现，请手动输入 SNI。" >&2; return 1; }
+    [[ "$sel" == "0" ]] && { log_info "$(t xray.sni.abandoned)" >&2; return 1; }
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > idx )); then
-        log_warn "无效选择，请手动输入 SNI。" >&2
+        log_warn "$(t xray.sni.invalid_manual)" >&2
         return 1
     fi
     printf '%s|%s' "${_snis[$((sel - 1))]}" "${_dests[$((sel - 1))]}"
@@ -437,20 +437,20 @@ sni_finder_pick_one() {
 # ── 对外入口 2：批量校验并逐个 rwd_add_candidate 到某 tag 候选池 ──────────────
 sni_finder_pick_many() {
     local tag="$1"
-    [[ -z "$tag" ]] && { log_error "sni_finder_pick_many：缺少节点标识。"; return 1; }
+    [[ -z "$tag" ]] && { log_error "$(t xray.sni.missing_tag)"; return 1; }
 
-    _sni_have_engine || { _sni_setup_engine || { log_warn "未配置测绘引擎，跳过自动发现。"; return 1; }; }
-    _sni_self_asn_country || { log_warn "无法自动识别本机 ASN，跳过自动发现。"; return 1; }
+    _sni_have_engine || { _sni_setup_engine || { log_warn "$(t xray.sni.no_engine_skip)"; return 1; }; }
+    _sni_self_asn_country || { log_warn "$(t xray.sni.no_asn_skip)"; return 1; }
 
-    log_step "正在从 $(state_get sni_engine) 查询同 ASN(AS${SNI_SELF_ASN}) 的候选伪装目标..."
+    log_step "$(t xray.sni.querying "$(state_get sni_engine)" "$SNI_SELF_ASN")"
     local pairs; pairs=$(_sni_discover_pairs 40) || true
-    [[ -z "$pairs" ]] && { log_warn "未发现候选伪装目标。"; return 1; }
+    [[ -z "$pairs" ]] && { log_warn "$(t xray.sni.no_candidates)"; return 1; }
 
     local n_found; n_found=$(printf '%s\n' "$pairs" | grep -c '|' || true)
-    log_step "发现 ${n_found} 个候选，正在本地校验（逐个 TLS 握手，稍候）..."
+    log_step "$(t xray.sni.validating_found_short "$n_found")"
 
     local healthy; healthy=$(_sni_validate_pairs "$pairs") || true
-    [[ -z "$healthy" ]] && { log_warn "候选均未通过 Reality 合规校验，未加入任何候选。"; return 1; }
+    [[ -z "$healthy" ]] && { log_warn "$(t xray.sni.no_healthy_added)"; return 1; }
     healthy=$(printf '%s\n' "$healthy" | sort -t"$(printf '\t')" -k3,3n) || true
 
     local added=0 sni dest rtt warn
@@ -458,6 +458,6 @@ sni_finder_pick_many() {
         [[ -z "$sni" || -z "$dest" ]] && continue
         rwd_add_candidate "$tag" "$sni" "$dest" && added=$((added + 1))
     done <<< "$healthy"
-    log_ok "已批量加入 ${added} 个通过校验的候选伪装目标到节点 ${tag}。"
+    log_ok "$(t xray.sni.added_many "$added" "$tag")"
     return 0
 }

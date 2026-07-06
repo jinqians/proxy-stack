@@ -38,28 +38,28 @@ docker_backup_volumes() {
         [[ -z "$vol" ]] && continue
         docker volume inspect "$vol" &>/dev/null || continue
         if (( found == 0 )); then mkdir -p "$dest/docker_volumes"; found=1; fi
-        log_step "正在备份数据卷：$vol"
+        log_step "$(t docker.backup.volume_backuping "$vol")"
         docker run --rm \
             -v "${vol}:/vol_data:ro" \
             -v "${dest}/docker_volumes:/backup" \
             alpine sh -c "tar -czf /backup/${vol}.tar.gz -C /vol_data ." \
-            2>/dev/null || log_warn "数据卷 ${vol} 备份失败"
+            2>/dev/null || log_warn "$(t docker.backup.volume_backup_fail "$vol")"
     done < <(_dkb_list_named_volumes)
-    (( found )) && log_ok "Docker 数据卷备份完成" || log_info "未发现需要备份的 Docker 数据卷"
+    (( found )) && log_ok "$(t docker.backup.done)" || log_info "$(t docker.backup.none_found)"
 }
 
 # Usage: docker_restore_volumes <src_dir>  (reads <src_dir>/docker_volumes/*.tar.gz)
 docker_restore_volumes() {
     local src="$1"
-    [[ -d "$src/docker_volumes" ]] || { log_info "备份中没有 Docker 数据卷"; return 0; }
-    command -v docker &>/dev/null || { log_warn "Docker 未安装，跳过数据卷恢复"; return 0; }
+    [[ -d "$src/docker_volumes" ]] || { log_info "$(t docker.restore.no_volumes)"; return 0; }
+    command -v docker &>/dev/null || { log_warn "$(t docker.restore.no_docker)"; return 0; }
 
     local f vol restored=0
     for f in "$src/docker_volumes"/*.tar.gz; do
         [[ -f "$f" ]] || continue
         vol=$(basename "$f" .tar.gz)
         docker volume create "$vol" >/dev/null 2>&1
-        log_step "正在恢复数据卷：$vol"
+        log_step "$(t docker.restore.volume_restoring "$vol")"
         if docker run --rm \
             -v "${vol}:/vol_data" \
             -v "${src}/docker_volumes:/backup:ro" \
@@ -67,16 +67,16 @@ docker_restore_volumes() {
             2>/dev/null; then
             restored=$(( restored + 1 ))
         else
-            log_warn "数据卷 ${vol} 恢复失败"
+            log_warn "$(t docker.restore.volume_restore_fail "$vol")"
         fi
     done
-    (( restored > 0 )) && log_ok "已恢复 ${restored} 个 Docker 数据卷（对应容器需要重启才能看到新数据）"
+    (( restored > 0 )) && log_ok "$(t docker.restore.done "$restored")"
 }
 
 docker_list_volume_backups() {
     local dest="$1"
-    [[ -d "$dest/docker_volumes" ]] || { log_info "该备份不含 Docker 数据卷"; return 0; }
-    echo -e "\n${BOLD}备份内的 Docker 数据卷：${NC}"
+    [[ -d "$dest/docker_volumes" ]] || { log_info "$(t docker.backup.no_volumes)"; return 0; }
+    echo -e "\n${BOLD}$(t docker.backup.list_title)${NC}"
     local f
     for f in "$dest/docker_volumes"/*.tar.gz; do
         [[ -f "$f" ]] || continue

@@ -9,10 +9,10 @@ fi
 
 security_menu() {
     while true; do
-        show_menu "安全加固" \
-            "SSH 安全加固（密钥登录 / 改端口）" \
-            "Fail2ban 防爆破" \
-            "蜜罐诱捕"
+        show_menu "$(t security.menu.title)" \
+            "$(t security.menu.ssh)" \
+            "$(t security.menu.fail2ban)" \
+            "$(t security.menu.honeypot)"
 
         case "$MENU_CHOICE" in
             1) source "$(dirname "${BASH_SOURCE[0]}")/ssh.sh";      ssh_menu ;;

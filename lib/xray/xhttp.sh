@@ -60,16 +60,16 @@ _xhttp_sync_from_live() {
     done
     if (( changed )); then
         _xhttp_save "$nodes"
-        log_info "检测到 config.json 中的手动修改，已同步端口/UUID 到节点存储。"
+        log_info "$(t xray.manual_sync_port_uuid)"
     fi
     return 0
 }
 
 _show_node_list() {
     local lst; lst=$(_xhttp_list)
-    [[ -z "$lst" ]] && { log_warn "暂无 XHTTP 节点。"; return; }
-    echo -e "\n${BOLD}XHTTP 节点：${NC}"
-    printf "  %-20s %-6s %-15s %-14s %s\n" "标识" "端口" "监听" "模式" "域名"
+    [[ -z "$lst" ]] && { log_warn "$(t xray.xhttp.no_nodes)"; return; }
+    echo -e "\n${BOLD}$(t xray.xhttp.nodes_title)${NC}"
+    printf "  %-20s %-6s %-15s %-14s %s\n" "$(t xray.header.tag)" "$(t xray.header.port)" "$(t xray.header.listen)" "$(t xray.header.mode)" "$(t xray.header.domain)"
     echo "$lst" | while IFS=$'\t' read -r t p l m d; do
         printf "  %-20s %-6s %-15s %-14s %s\n" "$t" "$p" "$l" "$m" "$d"
     done
@@ -157,7 +157,7 @@ _xhttp_build_inbound() {
                 }')
             ;;
         *)
-            die "未知 XHTTP 模式：$mode"
+            die "$(t xray.xhttp.unknown_mode "$mode")"
             ;;
     esac
 
@@ -211,16 +211,16 @@ xhttp_add_node() {
     local count; count=$(_xhttp_load | jq 'length')
     local tag port uuid domain path mode
 
-    ask tag  "节点标识"   "xhttp-$((count+1))"
-    ask port "本机端口"   "$((XHTTP_DEFAULT_PORT + count * 10))"
-    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    ask tag  "$(t xray.ask.node_tag)"   "xhttp-$((count+1))"
+    ask port "$(t xray.ask.local_port)" "$((XHTTP_DEFAULT_PORT + count * 10))"
+    _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
 
-    echo -e "\n  传输模式："
-    echo -e "  1. XHTTP/SplitHTTP  （需要自己的域名 + TLS 证书）"
-    echo -e "  2. WebSocket        （需要自己的域名 + TLS 证书）"
-    echo -e "  3. gRPC             （需要自己的域名 + TLS 证书）"
-    echo -e "  4. Reality layer    （无需域名/证书，使用伪装 SNI）"
-    read -rp "$(echo -e "${CYAN}模式 [1]: ${NC}")" mc
+    echo -e "\n  $(t xray.xhttp.transport_title)"
+    echo -e "  $(t xray.xhttp.mode1)"
+    echo -e "  $(t xray.xhttp.mode2)"
+    echo -e "  $(t xray.xhttp.mode3)"
+    echo -e "  $(t xray.xhttp.mode4)"
+    read -rp "$(echo -e "${CYAN}$(t xray.xhttp.ask_mode)${NC}")" mc
     case "${mc:-1}" in
         1) mode="xhttp" ;;
         2) mode="upgrade" ;;
@@ -232,12 +232,12 @@ xhttp_add_node() {
     # ── Domain + cert (modes 1-3 only) ───────────────────────────────────────
     domain=""
     if [[ "$mode" != "reality-layer" ]]; then
-        echo -e "  ${YELLOW}此模式需要自己的域名和 TLS 证书。${NC}"
-        ask domain "你的域名（必须解析到本机）"
-        [[ -z "$domain" ]] && { log_error "此模式需要填写域名。"; return 1; }
+        echo -e "  ${YELLOW}$(t xray.xhttp.mode_need_cert)${NC}"
+        ask domain "$(t xray.ask.domain_required)"
+        [[ -z "$domain" ]] && { log_error "$(t xray.xhttp.domain_required)"; return 1; }
         source "$LIB_DIR/cert.sh"
         cert_ensure_domain "$domain" || {
-            log_warn "取消——无有效证书。"
+            log_warn "$(t xray.cancel_no_cert)"
             return 1
         }
     fi
@@ -245,13 +245,13 @@ xhttp_add_node() {
     # ── Nginx reverse proxy choice ────────────────────────────────────────────
     local listen_addr="" use_nginx=0 public_port fallback_enabled=true
     echo ""
-    if ask_yn "是否使用 Nginx 反向代理？（可让多个协议复用 443 端口）" N; then
+    if ask_yn "$(t xray.ask.nginx_proxy)" N; then
         use_nginx=1; listen_addr="127.0.0.1"
         if ! is_installed nginx; then
-            log_warn "Nginx 未安装。"
-            ask_yn "是否现在安装 Nginx？" Y \
+            log_warn "$(t xray.nginx_not_installed)"
+            ask_yn "$(t xray.ask_install_nginx)" Y \
                 && nginx_install \
-                || { log_error "反向代理模式需要 Nginx。"; return 1; }
+                || { log_error "$(t xray.proxy_need_nginx)"; return 1; }
         fi
         if [[ -n "$domain" ]]; then
             _sni_add_entry "$domain" "127.0.0.1:${port}"
@@ -261,15 +261,15 @@ xhttp_add_node() {
         listen_addr="0.0.0.0"
         public_port="$port"
         if [[ "$mode" != "reality-layer" ]] && ! is_installed nginx; then
-            ask_yn "是否安装 Nginx 作为本地伪装 fallback？" Y \
+            ask_yn "$(t xray.ask_nginx_fallback)" Y \
                 && nginx_install \
                 || fallback_enabled=false
         fi
     fi
 
-    ask uuid "UUID（留空自动生成）" ""
+    ask uuid "$(t xray.ask.uuid_auto)" ""
     [[ -z "$uuid" ]] && uuid=$(uuid_gen)
-    ask path "路径（留空随机生成）" ""
+    ask path "$(t xray.xhttp.ask_path_auto)" ""
     [[ -z "$path" ]] && path=$(rand_path)
     if [[ "$mode" == "grpc" ]]; then
         path="${path#/}"
@@ -292,19 +292,19 @@ xhttp_add_node() {
         '{tag:$tag, port:$port, public_port:$public_port, uuid:$uuid, domain:$domain, path:$path, mode:$mode, listen_addr:$listen_addr, fallback_enabled:$fallback_enabled}')
 
     if [[ "$mode" == "reality-layer" ]]; then
-        log_step "正在为 XHTTP Reality 层生成密钥..."
+        log_step "$(t xray.xhttp.generating_reality_keys)"
         local pair; pair=$(xray_gen_x25519_keys) || return 1
         local priv_key="${pair%%$'\t'*}"
         local pub_key="${pair#*$'\t'}"
         local sid; sid=$(openssl rand -hex 4)
         local sn=""
-        if ask_yn "是否用测绘引擎发现同网络/同机房的伪装 SNI？" N; then
+        if ask_yn "$(t xray.xhttp.ask_discover_sni)" N; then
             source "$LIB_DIR/xray/sni_finder.sh"
             local _picked; _picked=$(sni_finder_pick_one) || true
             # reality-layer 的 dest 固定为 sn:443（见 _xhttp_build_inbound），此处只取 SNI
-            [[ -n "$_picked" ]] && { sn="${_picked%%|*}"; log_info "已选用发现的伪装 SNI：${sn}"; }
+            [[ -n "$_picked" ]] && { sn="${_picked%%|*}"; log_info "$(t xray.xhttp.picked_sni "$sn")"; }
         fi
-        [[ -z "$sn" ]] && ask sn "伪装 SNI（例如 www.apple.com）" "www.microsoft.com"
+        [[ -z "$sn" ]] && ask sn "$(t xray.xhttp.ask_sni)" "www.microsoft.com"
         node=$(echo "$node" | jq \
             --arg pk "$priv_key" --arg pub "$pub_key" \
             --arg sid "$sid" --arg sn "$sn" \
@@ -312,17 +312,17 @@ xhttp_add_node() {
         if (( use_nginx )); then
             _sni_add_entry "$sn" "127.0.0.1:${port}"
         fi
-        log_info "公钥：$pub_key  Short ID：$sid"
+        log_info "$(t xray.xhttp.keys "$pub_key" "$sid")"
     fi
 
     _xhttp_upsert "$node"
     _xhttp_apply_all
 
     echo ""
-    log_ok "XHTTP 节点 '$tag' → ${listen_addr}:${port}"
+    log_ok "$(t xray.xhttp.added "$tag" "$listen_addr" "$port")"
 
     if (( use_nginx == 0 )); then
-        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$port" "tcp"
         }
@@ -335,26 +335,26 @@ xhttp_add_node() {
 # ── Delete node ───────────────────────────────────────────────────────────────
 xhttp_delete_node() {
     _show_node_list
-    local tag; ask tag "要删除的节点标识"
+    local tag; ask tag "$(t xray.ask.delete_node_tag)"
     local node; node=$(_xhttp_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     local domain; domain=$(echo "$node" | jq -r '.domain // ""')
-    ask_yn "确认删除节点 '$tag'？" N || return 0
+    ask_yn "$(t xray.ask.delete_node "$tag")" N || return 0
     _xhttp_delete "$tag"
     [[ -n "$domain" ]] && _sni_remove_entry "$domain" 2>/dev/null || true
     _xhttp_apply_all
     if [[ -f "${CFG_DIR}/traffic/state.json" ]]; then
         source "$LIB_DIR/traffic.sh"; _trf_init; _trf_cleanup_node "$tag"
     fi
-    log_ok "已删除。"
+    log_ok "$(t xray.deleted)"
 }
 
 xhttp_modify_path() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_xhttp_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
-    local new_path; ask new_path "新路径（留空随机生成）" ""
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+    local new_path; ask new_path "$(t xray.xhttp.ask_new_path)" ""
     [[ -z "$new_path" ]] && new_path=$(rand_path)
     local mode; mode=$(echo "$node" | jq -r '.mode')
     if [[ "$mode" == "grpc" ]]; then
@@ -366,29 +366,29 @@ xhttp_modify_path() {
     node=$(echo "$node" | jq --arg v "$new_path" '.path=$v')
     _xhttp_upsert "$node"
     _xhttp_apply_all
-    log_ok "路径已更新为 $new_path"
+    log_ok "$(t xray.xhttp.path_updated "$new_path")"
 }
 
 xhttp_modify_uuid() {
     _xhttp_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_xhttp_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
-    local new_uuid; ask new_uuid "新 UUID（留空自动生成）" ""
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+    local new_uuid; ask new_uuid "$(t xray.ask.uuid_auto)" ""
     [[ -z "$new_uuid" ]] && new_uuid=$(uuid_gen)
     node=$(echo "$node" | jq --arg v "$new_uuid" '.uuid=$v')
     _xhttp_upsert "$node"
     _xhttp_apply_all
-    log_ok "UUID 已更新：$new_uuid"
+    log_ok "$(t xray.uuid_updated_value "$new_uuid")"
 }
 
 xhttp_modify_port() {
     _xhttp_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_xhttp_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     local old_port listen skey
     old_port=$(echo "$node" | jq -r '.port')
     listen=$(echo "$node"   | jq -r '.listen_addr // "127.0.0.1"')
@@ -396,27 +396,27 @@ xhttp_modify_port() {
 
     local port
     [[ "$listen" == "127.0.0.1" ]] \
-        && log_info "该节点经 Nginx 反代（公网端口保持 443），修改的是本机 Xray 监听端口。"
-    ask port "新端口" "$old_port"
-    [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+        && log_info "$(t xray.nginx_proxy_port_note)"
+    ask port "$(t xray.ask.new_port)" "$old_port"
+    [[ "$port" == "$old_port" ]] && { log_info "$(t xray.port_unchanged)"; return 0; }
     if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-        log_error "无效端口"; return 1
+        log_error "$(t xray.invalid_port_short)"; return 1
     fi
-    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
 
     node=$(echo "$node" | jq --argjson p "$port" \
         '.port = $p | (if (.listen_addr // "127.0.0.1") != "127.0.0.1" then .public_port = $p else . end)')
     _xhttp_upsert "$node"
     [[ "$listen" == "127.0.0.1" && -n "$skey" ]] && _sni_add_entry "$skey" "127.0.0.1:${port}" || true
     _xhttp_apply_all
-    log_ok "节点 '$tag' 端口已更新：${old_port} → ${port}"
+    log_ok "$(t xray.port_updated "$tag" "$old_port" "$port")"
 
     if [[ "$listen" != "127.0.0.1" ]]; then
-        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$port" "tcp"
         }
-        log_info "原端口 ${old_port}/tcp 若已在防火墙放行，不再使用时请手动关闭。"
+        log_info "$(t xray.old_port_note "$old_port")"
     fi
 }
 
@@ -424,9 +424,9 @@ xhttp_modify_port() {
 xhttp_show_share() {
     local tag="$1"
     _xhttp_sync_from_live
-    [[ -z "$tag" ]] && { _show_node_list; ask tag "节点标识"; }
+    [[ -z "$tag" ]] && { _show_node_list; ask tag "$(t xray.ask.node_tag)"; }
     local node; node=$(_xhttp_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
 
     local uuid;       uuid=$(echo "$node"       | jq -r '.uuid')
     local domain;     domain=$(echo "$node"     | jq -r '.domain // ""')
@@ -474,7 +474,7 @@ xhttp_show_share() {
     esac
     local uri="vless://${uuid}@${host}:${ref_port}?${query}#PSM-${tag}"
 
-    echo -e "\n${BOLD}${GREEN}── XHTTP 分享链接 ──${NC}"
+    echo -e "\n${BOLD}${GREEN}$(t xray.xhttp.share_title)${NC}"
     echo "  $uri"
     echo ""
     echo "$uri" | qrencode -t ANSIUTF8 2>/dev/null || true
@@ -484,10 +484,10 @@ xhttp_show_share() {
 _xhttp_check_deps() {
     ensure_pkg_deps jq qrencode python3
     if ! [[ -f "$XRAY_BIN" ]]; then
-        log_warn "Xray 未安装。"
-        ask_yn "是否现在安装 Xray？" Y \
+        log_warn "$(t xray.need_install)"
+        ask_yn "$(t xray.ask_install_xray)" Y \
             && xray_install \
-            || { log_error "XHTTP 需要 Xray。"; return 1; }
+            || { log_error "$(t xray.xhttp.need_xray)"; return 1; }
     fi
 }
 
@@ -498,14 +498,14 @@ xhttp_menu() {
         # 每轮菜单前同步一次，避免任何走 _xhttp_apply_all 的操作
         # 用过期的节点存储覆盖 config.json 中的手动修改。
         _xhttp_sync_from_live
-        show_menu "XHTTP 管理" \
-            "添加节点" \
-            "删除节点" \
-            "修改路径" \
-            "修改 UUID" \
-            "修改端口" \
-            "显示分享链接 / URI" \
-            "列出节点"
+        show_menu "$(t xray.xhttp.menu.title)" \
+            "$(t xray.xhttp.menu.add)" \
+            "$(t xray.xhttp.menu.delete)" \
+            "$(t xray.xhttp.menu.path)" \
+            "$(t xray.xhttp.menu.uuid)" \
+            "$(t xray.xhttp.menu.port)" \
+            "$(t xray.xhttp.menu.share)" \
+            "$(t xray.xhttp.menu.list)"
 
         case "$MENU_CHOICE" in
             1) xhttp_add_node ;;

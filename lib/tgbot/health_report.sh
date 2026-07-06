@@ -53,15 +53,15 @@ _hr_section_traffic() {
 
         if [[ "$is_paused" == "true" ]]; then
             paused=$(( paused + 1 ))
-            lines="${lines}\n  🚫 ${tag}（端口 ${port}）已暂停"
+            lines="${lines}$(t tgbot.hr.traffic_paused_line "$tag" "$port")"
         elif (( pct >= 90 )); then
             warn=$(( warn + 1 ))
-            lines="${lines}\n  ⚠️ ${tag}（端口 ${port}）${pct}%"
+            lines="${lines}$(t tgbot.hr.traffic_warn_line "$tag" "$port" "$pct")"
         fi
     done < <(_trf_get_tags)
 
     (( count == 0 )) && return 0
-    printf '*🚦 流量*\n共 %d 个节点，%d 个 ≥90%%，%d 个已暂停%b\n' "$count" "$warn" "$paused" "$lines"
+    printf "$(t tgbot.hr.traffic_section)" "$count" "$warn" "$paused" "$lines"
 }
 
 _hr_section_expiry() {
@@ -79,16 +79,15 @@ _hr_section_expiry() {
         local exp_ts diff; exp_ts=$(_exp_str_to_ts "$exp_at"); diff=$(( exp_ts - now_ts ))
         if (( diff <= 0 )); then
             expired=$(( expired + 1 ))
-            lines="${lines}\n  🔴 ${tag} 已过期"
+            lines="${lines}$(t tgbot.hr.expired_line "$tag")"
         elif (( diff <= 7 * 86400 )); then
             soon=$(( soon + 1 ))
-            lines="${lines}\n  🟡 ${tag} 剩 $(( diff / 86400 )) 天（${exp_at}）"
+            lines="${lines}$(t tgbot.hr.expiring_line "$tag" "$(( diff / 86400 ))" "$exp_at")"
         fi
     done < <(_exp_get_tags)
 
     (( count == 0 )) && return 0
-    printf '*📅 到期*\n共 %d 个节点设置了到期时间，%d 个已过期，%d 个 7 天内到期%b\n' \
-        "$count" "$expired" "$soon" "$lines"
+    printf "$(t tgbot.hr.expiry_section)" "$count" "$expired" "$soon" "$lines"
 }
 
 _hr_section_reality_watchdog() {
@@ -106,14 +105,13 @@ _hr_section_reality_watchdog() {
             local sw_ts; sw_ts=$(date -d "$last_switch" +%s 2>/dev/null || echo 0)
             if (( sw_ts > 0 )) && (( now_ts - sw_ts <= 86400 )); then
                 recent_switch=$(( recent_switch + 1 ))
-                lines="${lines}\n  🔁 ${tag} 24 小时内切换过伪装目标 → ${active}"
+                lines="${lines}$(t tgbot.hr.reality_switch_line "$tag" "$active")"
             fi
         fi
     done < <(_rwd_enabled_tags)
 
     (( count == 0 )) && return 0
-    printf '*🛡 Reality 测活*\n共 %d 个节点启用测活，%d 个 24 小时内发生过切换%b\n' \
-        "$count" "$recent_switch" "$lines"
+    printf "$(t tgbot.hr.reality_section)" "$count" "$recent_switch" "$lines"
 }
 
 _hr_section_security() {
@@ -124,19 +122,19 @@ _hr_section_security() {
     if command -v sshd &>/dev/null && declare -f _ssh_get &>/dev/null; then
         local pwauth; pwauth=$(_ssh_get passwordauthentication)
         if [[ "$pwauth" == "no" ]]; then
-            lines="${lines}\nSSH：密码登录 ✅ 已禁用"
+            lines="${lines}$(t tgbot.hr.ssh_pw_disabled)"
         else
-            lines="${lines}\nSSH：密码登录 ⚠️ 仍启用"
+            lines="${lines}$(t tgbot.hr.ssh_pw_enabled)"
         fi
         local remaining
         if remaining=$(_ssh_pending_rollback_info); then
-            lines="${lines}\n  ⏳ 有未确认的 SSH 变更，约 ${remaining} 秒后自动回滚"
+            lines="${lines}$(t tgbot.hr.ssh_pending "$remaining")"
         fi
     fi
 
     # BBR
     if declare -f check_bbr &>/dev/null; then
-        check_bbr && lines="${lines}\nBBR：✅ 已启用" || lines="${lines}\nBBR：❌ 未启用"
+        check_bbr && lines="${lines}$(t tgbot.hr.bbr_enabled)" || lines="${lines}$(t tgbot.hr.bbr_disabled)"
     fi
 
     # fail2ban
@@ -147,17 +145,17 @@ _hr_section_security() {
             | awk -F: '/Currently banned/{gsub(/ /,"",$2); print $2}')
         hp_banned=$(fail2ban-client status psm-honeypot 2>/dev/null \
             | awk -F: '/Currently banned/{gsub(/ /,"",$2); print $2}')
-        [[ -n "$sshd_banned" ]] && lines="${lines}\nFail2ban：SSH 规则当前封禁 ${sshd_banned} 个 IP"
-        [[ -n "$hp_banned" ]] && lines="${lines}\n蜜罐：当前封禁 ${hp_banned} 个 IP"
+        [[ -n "$sshd_banned" ]] && lines="${lines}$(t tgbot.hr.fail2ban_banned "$sshd_banned")"
+        [[ -n "$hp_banned" ]] && lines="${lines}$(t tgbot.hr.honeypot_banned "$hp_banned")"
     fi
     if [[ -f "${HP_LOG:-$CFG_DIR/../logs/honeypot.log}" ]]; then
         local today; today=$(date '+%Y-%m-%d')
         local hits; hits=$(grep -c "^${today}" "${HP_LOG:-$CFG_DIR/../logs/honeypot.log}" 2>/dev/null || echo 0)
-        (( hits > 0 )) && lines="${lines}\n蜜罐：今日新增 ${hits} 次命中"
+        (( hits > 0 )) && lines="${lines}$(t tgbot.hr.honeypot_hits "$hits")"
     fi
 
     [[ -z "$lines" ]] && return 0
-    printf '*🔒 安全*%b\n' "$lines"
+    printf "$(t tgbot.hr.security_section)" "$lines"
 }
 
 _hr_section_warp() {
@@ -167,11 +165,11 @@ _hr_section_warp() {
 
     local applied
     if _outb_get_by_tag "$WARP_OUTBOUND_TAG" 2>/dev/null | jq -e '.tag' &>/dev/null; then
-        applied="✅ 出站已生效"
+        applied="$(t tgbot.hr.warp_applied)"
     else
-        applied="⚠️ 已注册但出站未应用"
+        applied="$(t tgbot.hr.warp_not_applied)"
     fi
-    printf '*🌐 WARP*\n%s\n' "$applied"
+    printf "$(t tgbot.hr.warp_section)" "$applied"
 }
 
 # ── Assemble & send ───────────────────────────────────────────────────────────
@@ -185,10 +183,9 @@ hr_build_report() {
         [[ -n "$part" ]] && body="${body}${part}\n\n"
     done
 
-    [[ -z "$body" ]] && body="暂无可汇总的监控数据（各功能模块尚未启用）。\n\n"
+    [[ -z "$body" ]] && body="$(t tgbot.hr.empty)"
 
-    printf '📋 *PSM 每日体检报告*\n━━━━━━━━━━━━━━━━━━━━\n🗓 %s\n\n%b━━━━━━━━━━━━━━━━━━━━\n_更多详情请到各自菜单查看_' \
-        "$now" "$body"
+    printf "$(t tgbot.hr.report)" "$now" "$body"
 }
 
 hr_send_report() {
@@ -227,14 +224,14 @@ EOF
 
     systemctl daemon-reload
     systemctl enable --now psm-health-report.timer
-    log_ok "每日体检报告已启用，每天 ${HR_HOUR}:00 推送"
+    log_ok "$(t tgbot.hr.enabled "$HR_HOUR")"
 }
 
 _hr_uninstall_timer() {
     systemctl disable --now psm-health-report.timer 2>/dev/null || true
     rm -f "$HR_SVC" "$HR_TIMER"
     systemctl daemon-reload
-    log_ok "每日体检报告已停用"
+    log_ok "$(t tgbot.hr.disabled)"
 }
 
 _hr_timer_active() { systemctl is-active --quiet psm-health-report.timer 2>/dev/null; }
@@ -242,11 +239,11 @@ _hr_timer_active() { systemctl is-active --quiet psm-health-report.timer 2>/dev/
 # ── Wizard / menu ─────────────────────────────────────────────────────────────
 hr_setup_wizard() {
     _hr_load_cfg
-    echo -e "\n${BOLD}${BLUE}══ 每日体检报告配置 ══════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t tgbot.hr.setup_title) ══════════════════════${NC}"
     local hour
-    ask hour "每天几点推送（0-23，服务器本地时间）" "${HR_HOUR:-8}"
+    ask hour "$(t tgbot.hr.ask_hour)" "${HR_HOUR:-8}"
     if ! [[ "$hour" =~ ^[0-9]+$ ]] || (( hour < 0 || hour > 23 )); then
-        log_error "小时无效"; return 1
+        log_error "$(t tgbot.hr.invalid_hour)"; return 1
     fi
     HR_HOUR="$hour"
     HR_ENABLED="true"
@@ -262,11 +259,11 @@ hr_disable() {
 
 hr_status() {
     _hr_load_cfg
-    echo -e "\n${BOLD}${BLUE}══ 每日体检报告状态 ══════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t tgbot.hr.status_title) ══════════════════════${NC}"
     if [[ "$HR_ENABLED" == "true" ]] && _hr_timer_active; then
-        echo -e "  状态：${GREEN}已启用${NC}，每天 ${HR_HOUR}:00 推送"
+        echo -e "  ${GREEN}$(t tgbot.hr.status_enabled "$HR_HOUR")${NC}"
     else
-        echo -e "  状态：${YELLOW}未启用${NC}"
+        echo -e "  ${YELLOW}$(t tgbot.hr.status_disabled)${NC}"
     fi
     echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
 }
@@ -274,14 +271,14 @@ hr_status() {
 hr_menu() {
     while true; do
         hr_status
-        show_menu "每日体检报告" \
-            "启用 / 修改推送时间" \
-            "立即发送一次（测试）" \
-            "停用"
+        show_menu "$(t tgbot.hr.menu.title)" \
+            "$(t tgbot.hr.menu.setup)" \
+            "$(t tgbot.hr.menu.send_now)" \
+            "$(t tgbot.hr.menu.disable)"
 
         case "$MENU_CHOICE" in
             1) hr_setup_wizard; press_enter ;;
-            2) log_step "正在发送..."; hr_send_report; log_ok "已发送（若未收到，请检查 Telegram Bot 是否已配置管理员）"; press_enter ;;
+            2) log_step "$(t tgbot.hr.sending)"; hr_send_report; log_ok "$(t tgbot.hr.sent)"; press_enter ;;
             3) hr_disable; press_enter ;;
             0) return ;;
         esac

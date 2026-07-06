@@ -10,11 +10,11 @@ source "$LIB_DIR/common.sh"
 
 require_root
 
-echo -e "\n${RED}${BOLD}PSM 卸载程序${NC}"
-echo -e "${YELLOW}此操作将删除所有 PSM 管理的组件。${NC}"
-echo -e "${YELLOW}PSM 程序目录 $PSM_ROOT 也会删除。${NC}\n"
+echo -e "\n${RED}${BOLD}$(t uninstall.title)${NC}"
+echo -e "${YELLOW}$(t uninstall.warn1)${NC}"
+echo -e "${YELLOW}$(t uninstall.warn2 "$PSM_ROOT")${NC}\n"
 
-ask_yn "确定要卸载吗？" N || { log_info "已取消。"; exit 0; }
+ask_yn "$(t uninstall.confirm)" N || { log_info "$(t common.cancelled)"; exit 0; }
 
 _systemctl_disable_now() {
     local unit="$1"
@@ -65,7 +65,7 @@ _remove_psm_iptables() {
 }
 
 # ── Optional component removal ────────────────────────────────────────────────
-ask_yn "是否删除 Nginx？" N && {
+ask_yn "$(t uninstall.ask_nginx)" N && {
     _systemctl_stop_disable nginx
     detect_os
     case "$OS_ID" in
@@ -75,69 +75,77 @@ ask_yn "是否删除 Nginx？" N && {
             "$(_rhel_pkg_cmd)" remove -y nginx 2>/dev/null || true ;;
     esac
     rm -rf /etc/nginx
-    log_ok "Nginx 已删除。"
+    log_ok "$(t uninstall.nginx_removed)"
 }
 
-ask_yn "是否删除 Xray？" N && {
+ask_yn "$(t uninstall.ask_xray)" N && {
     _systemctl_stop_disable xray
     rm -f /usr/local/bin/xray /etc/systemd/system/xray.service
     rm -rf "$XRAY_CFG_DIR" /var/log/xray /usr/local/share/xray
     systemctl daemon-reload
-    log_ok "Xray 已删除。"
+    log_ok "$(t uninstall.xray_removed)"
 }
 
-ask_yn "是否删除 Hysteria2？" N && {
+ask_yn "$(t uninstall.ask_singbox)" N && {
+    _systemctl_stop_disable sing-box
+    rm -f "$SINGBOX_BIN" /etc/systemd/system/sing-box.service
+    rm -rf "$SINGBOX_CFG_DIR"
+    systemctl daemon-reload
+    log_ok "$(t uninstall.singbox_removed)"
+}
+
+ask_yn "$(t uninstall.ask_hy2)" N && {
     _systemctl_stop_disable hysteria-server
     rm -f /usr/local/bin/hysteria /etc/systemd/system/hysteria-server.service
     rm -rf /etc/hysteria
     systemctl daemon-reload
-    log_ok "Hysteria2 已删除。"
+    log_ok "$(t uninstall.hy2_removed)"
 }
 
-ask_yn "是否删除 Snell？" N && {
+ask_yn "$(t uninstall.ask_snell)" N && {
     systemctl stop snell snell.socket snell-netns 2>/dev/null || true
     systemctl disable snell snell.socket snell-netns 2>/dev/null || true
     rm -f /usr/local/bin/snell-server /usr/local/bin/snell
     _remove_systemd_units snell.service snell.socket snell-netns.service
     rm -rf /etc/snell
     systemctl daemon-reload
-    log_ok "Snell 已删除。"
+    log_ok "$(t uninstall.snell_removed)"
 }
 
-ask_yn "是否删除 ss-rust？" N && {
+ask_yn "$(t uninstall.ask_ssrust)" N && {
     _systemctl_stop_disable ss-rust
     rm -f /usr/local/bin/ss-rust /etc/systemd/system/ss-rust.service
     rm -rf /etc/ss-rust
     systemctl daemon-reload
-    log_ok "ss-rust 已删除。"
+    log_ok "$(t uninstall.ssrust_removed)"
 }
 
-ask_yn "是否停止并删除 PSM 管理的 Docker Compose 应用？" N && {
+ask_yn "$(t uninstall.ask_docker)" N && {
     _compose_down_all
     rm -rf /opt/psm/compose
-    log_ok "PSM Docker Compose 应用已删除。"
+    log_ok "$(t uninstall.docker_removed)"
 }
 
-ask_yn "是否删除 acme.sh？（SSL 证书将保留在 $NGINX_SSL_DIR）
-  ${YELLOW}警告：删除后重装会重新签发证书，同一域名 7 天内最多签 5 张（Let's Encrypt 限流）。${NC}" N && {
+ask_yn "$(t uninstall.ask_acme "$NGINX_SSL_DIR")
+  ${YELLOW}$(t uninstall.ask_acme_warn)${NC}" N && {
     # 删除前先把 acme.sh 账户与证书缓存打包备份，避免重装后重新签发触发限流
     if [[ -d "$ACME_HOME" ]]; then
         mkdir -p "$BAK_DIR"
         acme_bak="$BAK_DIR/acme-home-$(date +%Y%m%d-%H%M%S).tar.gz"
         if tar -czf "$acme_bak" -C "$(dirname "$ACME_HOME")" "$(basename "$ACME_HOME")" 2>/dev/null; then
-            log_ok "acme.sh 缓存已备份到 $acme_bak"
+            log_ok "$(t uninstall.acme_backed_up "$acme_bak")"
         else
-            log_warn "acme.sh 缓存备份失败，仍继续卸载。" || true
+            log_warn "$(t uninstall.acme_backup_fail)" || true
         fi
     fi
     [[ -f "$ACME_HOME/acme.sh" ]] && "$ACME_HOME/acme.sh" --uninstall
     rm -rf "$ACME_HOME"
-    log_ok "acme.sh 已删除。"
+    log_ok "$(t uninstall.acme_removed)"
 }
 
-ask_yn "是否删除 $NGINX_SSL_DIR 中的 SSL 证书？" N && {
+ask_yn "$(t uninstall.ask_certs "$NGINX_SSL_DIR")" N && {
     rm -rf "$NGINX_SSL_DIR"
-    log_ok "证书已删除。"
+    log_ok "$(t uninstall.certs_removed)"
 }
 
 # Remove crons and PSM-owned systemd units.
@@ -176,19 +184,19 @@ command -v cloudflared &>/dev/null && cloudflared service uninstall 2>/dev/null 
 systemctl daemon-reload 2>/dev/null || true
 
 psm_root_removed=0
-if ask_yn "是否删除 PSM 程序目录及其中配置/状态（$PSM_ROOT）？" Y; then
+if ask_yn "$(t uninstall.ask_progdir "$PSM_ROOT")" Y; then
     rm -rf "$PSM_ROOT"
     psm_root_removed=1
 else
-    ask_yn "是否仅删除 PSM 配置/状态（$CFG_DIR）？" N && {
+    ask_yn "$(t uninstall.ask_cfg "$CFG_DIR")" N && {
         rm -rf "$CFG_DIR"
-        log_ok "PSM 配置已删除。"
+        log_ok "$(t uninstall.cfg_removed)"
     }
 fi
 
-log_ok "PSM 卸载完成。"
+log_ok "$(t uninstall.done)"
 if (( psm_root_removed )); then
-    echo -e "  已删除：${YELLOW}$PSM_ROOT${NC}"
+    echo -e "  $(t uninstall.removed_label)${YELLOW}$PSM_ROOT${NC}"
 else
-    echo -e "  PSM 程序目录保留在：${YELLOW}$PSM_ROOT${NC}"
+    echo -e "  $(t uninstall.kept_label)${YELLOW}$PSM_ROOT${NC}"
 fi

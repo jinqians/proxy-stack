@@ -16,8 +16,8 @@ _docker_check_port_conflict() {
     source "$LIB_DIR/security/honeypot.sh" 2>/dev/null || return 0
     declare -f _hp_is_reserved_port &>/dev/null || return 0
     _hp_is_reserved_port "$port" || return 0
-    log_warn "端口 ${port} 似乎已被占用（本机服务、防火墙已放行的端口，或已配置的代理节点/蜜罐）"
-    ask_yn "仍要使用这个端口吗？" N
+    log_warn "$(t docker.port_conflict "$port")"
+    ask_yn "$(t docker.ask_use_port)" N
 }
 
 # Ask how a container's port should bind. "仅本机" keeps it on 127.0.0.1 so
@@ -28,10 +28,10 @@ _docker_check_port_conflict() {
 _docker_pick_bind() {
     local port="$1"
     echo "" >&2
-    echo "  这个服务的端口打算怎么绑？" >&2
-    echo "    1. 仅本机监听（推荐；之后可以选择加 Nginx 反代或 Cloudflare Tunnel）" >&2
-    echo "    2. 直接绑定公网 0.0.0.0（不经过反代，请自行确保该应用有基本的认证/访问控制）" >&2
-    local choice; read -rp "$(echo -e "${CYAN}选择 [1]: ${NC}")" choice >&2
+    echo "  $(t docker.bind.title)" >&2
+    echo "    $(t docker.bind.local)" >&2
+    echo "    $(t docker.bind.public)" >&2
+    local choice; read -rp "$(echo -e "${CYAN}$(t docker.ask_select_1)${NC}")" choice >&2
     if [[ "${choice:-1}" == "2" ]]; then
         source "$LIB_DIR/system.sh" 2>/dev/null || true
         declare -f firewall_open_port &>/dev/null && firewall_open_port "$port" "tcp" >&2
@@ -50,31 +50,31 @@ _docker_pick_bind() {
 _docker_offer_expose() {
     local target="$1"
     echo ""
-    echo "  是否需要把这个服务暴露到公网？"
-    echo "    1. Nginx 反向代理（域名需解析到本机 IP，走 80/443）"
-    echo "    2. Cloudflare Tunnel（不开放任何端口，域名需托管在 Cloudflare）"
-    echo "    3. 不需要（仅本机访问）"
-    local choice; read -rp "$(echo -e "${CYAN}选择 [3]: ${NC}")" choice
+    echo "  $(t docker.expose.title)"
+    echo "    $(t docker.expose.nginx)"
+    echo "    $(t docker.expose.tunnel)"
+    echo "    $(t docker.expose.none)"
+    local choice; read -rp "$(echo -e "${CYAN}$(t docker.ask_select_3)${NC}")" choice
     case "${choice:-3}" in
         1)
             source "$LIB_DIR/nginx.sh"
-            local domain; ask domain "反向代理域名"
+            local domain; ask domain "$(t docker.ask.proxy_domain)"
             add_site <<< "$domain"$'\n'"$target"$'\n'"y"$'\n'"n"$'\n'"n" 2>/dev/null || {
-                log_info "请在 Nginx → 添加 HTTP 站点 中指向 ${target}"
+                log_info "$(t docker.nginx_hint "$target")"
             }
             ;;
         2)
-            source "$LIB_DIR/cloudflare/tunnel.sh" 2>/dev/null || { log_error "无法加载 Cloudflare Tunnel 模块"; return 1; }
-            local domain; ask domain "要暴露的域名（例如 app.example.com，需已托管在 Cloudflare 账号下）"
+            source "$LIB_DIR/cloudflare/tunnel.sh" 2>/dev/null || { log_error "$(t docker.cft_load_fail)"; return 1; }
+            local domain; ask domain "$(t docker.ask.expose_domain)"
             cft_add_ingress "$domain" "$target" || return 1
-            if ask_yn "是否加一层 Cloudflare Access 门禁（需先过邮箱验证才能打开，Portainer/NPM 这类管理面板建议开）？" N; then
+            if ask_yn "$(t docker.ask.cloudflare_access)" N; then
                 source "$LIB_DIR/cloudflare/access.sh" 2>/dev/null \
                     && cfa_protect "$domain" \
-                    || log_error "无法加载 Cloudflare Access 模块"
+                    || log_error "$(t docker.cfa_load_fail)"
             fi
             ;;
         *)
-            log_info "已跳过，仅本机可访问：${target}" ;;
+            log_info "$(t docker.expose_skipped "$target")" ;;
     esac
 }
 
@@ -87,17 +87,17 @@ _docker_offer_expose() {
 # `docker` package Amazon maintains in its base repos.
 docker_install() {
     if is_installed docker; then
-        log_info "Docker 已安装：$(docker --version)"
+        log_info "$(t docker.installed "$(docker --version)")"
         return 0
     fi
     detect_os
     case "$OS_ID" in
         amzn)
-            log_step "正在从 Amazon Linux 仓库安装 Docker..."
-            pkg_install docker || { log_error "Docker 安装失败"; return 1; }
+            log_step "$(t docker.install.amzn)"
+            pkg_install docker || { log_error "$(t docker.install.failed)"; return 1; }
             ;;
         centos|rhel|rocky|almalinux|ol|fedora)
-            log_step "正在添加 Docker CE 官方仓库并安装..."
+            log_step "$(t docker.install.repo)"
             local repo_os="centos"
             [[ "$OS_ID" == "fedora" ]] && repo_os="fedora"
             [[ "$OS_ID" == "rhel"   ]] && repo_os="rhel"
@@ -109,32 +109,32 @@ docker_install() {
                     "$pkg_cmd" install -y dnf-plugins-core 2>/dev/null || true
                     "$pkg_cmd" config-manager --add-repo "$repo_url" 2>/dev/null \
                         || curl -fsSL "$repo_url" -o /etc/yum.repos.d/docker-ce.repo \
-                        || { log_error "无法添加 Docker CE 仓库"; return 1; }
+                        || { log_error "$(t docker.install.repo_fail)"; return 1; }
                 fi
             fi
             "$pkg_cmd" install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin \
-                || { log_error "Docker 安装失败"; return 1; }
+                || { log_error "$(t docker.install.failed)"; return 1; }
             ;;
         *)
-            log_step "正在通过官方脚本安装 Docker..."
-            curl -fsSL https://get.docker.com | sh || { log_error "Docker 安装失败"; return 1; }
+            log_step "$(t docker.install.script)"
+            curl -fsSL https://get.docker.com | sh || { log_error "$(t docker.install.failed)"; return 1; }
             ;;
     esac
     svc_enable docker
-    svc_start docker || { log_error "Docker 服务启动失败"; return 1; }
-    log_ok "Docker 已安装：$(docker --version)"
+    svc_start docker || { log_error "$(t docker.service_start_fail)"; return 1; }
+    log_ok "$(t docker.installed "$(docker --version)")"
 }
 
 docker_install_compose() {
     if docker compose version &>/dev/null 2>&1; then
-        log_info "Docker Compose 插件已可用。"
+        log_info "$(t docker.compose.plugin_ready)"
         return 0
     fi
     if is_installed docker-compose; then
-        log_info "docker-compose 独立版：$(docker-compose --version)"
+        log_info "$(t docker.compose.standalone "$(docker-compose --version)")"
         return 0
     fi
-    log_step "正在安装 Docker Compose 插件..."
+    log_step "$(t docker.compose.installing)"
     # Family-wide package attempt first (works wherever the docker-ce repo or
     # the distro provides it) …
     pkg_install docker-compose-plugin 2>/dev/null || true
@@ -153,7 +153,7 @@ docker_install_compose() {
         if [[ -n "$arch" ]]; then
             plugin_dir="/usr/local/lib/docker/cli-plugins"
             mkdir -p "$plugin_dir"
-            log_step "正在下载 Docker Compose 官方二进制（${arch}）..."
+            log_step "$(t docker.compose.downloading "$arch")"
             curl -fsSL \
                 "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-${arch}" \
                 -o "$plugin_dir/docker-compose" 2>/dev/null \
@@ -161,12 +161,12 @@ docker_install_compose() {
         fi
     fi
 
-    docker compose version &>/dev/null && log_ok "Compose 插件已安装。" \
-        || log_error "安装可能失败，请手动检查。"
+    docker compose version &>/dev/null && log_ok "$(t docker.compose.installed)" \
+        || log_error "$(t docker.compose.install_maybe_failed)"
 }
 
 docker_uninstall() {
-    ask_yn "是否删除 Docker？（所有容器和镜像将丢失）" N || return 0
+    ask_yn "$(t docker.ask_uninstall)" N || return 0
     detect_os
     case "$OS_ID" in
         ubuntu|debian|raspbian)
@@ -178,7 +178,7 @@ docker_uninstall() {
     esac
     rm -rf /var/lib/docker /etc/docker
     rm -f /usr/local/lib/docker/cli-plugins/docker-compose
-    log_ok "Docker 已删除。"
+    log_ok "$(t docker.uninstalled)"
 }
 
 # ── Compose project management ────────────────────────────────────────────────
@@ -192,13 +192,13 @@ _compose_cmd() {
 
 docker_add_project() {
     local name port
-    ask name "项目名称（例如 uptime-kuma）"
-    ask port "容器内部端口"
+    ask name "$(t docker.ask.project_name)"
+    ask port "$(t docker.ask.container_port)"
 
-    local local_port; ask local_port "本机端口" "$(rand_port 3000 9000)"
-    _docker_check_port_conflict "$local_port" || { log_info "已取消"; return 1; }
+    local local_port; ask local_port "$(t docker.ask.local_port)" "$(rand_port 3000 9000)"
+    _docker_check_port_conflict "$local_port" || { log_info "$(t common.cancelled)"; return 1; }
     local local_bind; local_bind=$(_docker_pick_bind "$local_port")
-    local image; ask image "Docker 镜像（例如 louislam/uptime-kuma:1）"
+    local image; ask image "$(t docker.ask.image)"
 
     local project_dir="$DOCKER_COMPOSE_DIR/$name"
     mkdir -p "$project_dir"
@@ -219,66 +219,66 @@ services:
       - TZ=Asia/Shanghai
 EOF
 
-    log_info "Compose 文件已创建：$project_dir/docker-compose.yml"
-    ask_yn "是否现在启动项目？" Y \
+    log_info "$(t docker.compose.created "$project_dir/docker-compose.yml")"
+    ask_yn "$(t docker.ask.start_now)" Y \
         && _compose_cmd -f "$project_dir/docker-compose.yml" up -d \
-        && log_ok "$name 已在 ${local_bind}:${local_port} 运行" \
-        || log_info "手动启动命令：docker compose -f $project_dir/docker-compose.yml up -d"
+        && log_ok "$(t docker.project.running "$name" "$local_bind" "$local_port")" \
+        || log_info "$(t docker.manual_start "$project_dir/docker-compose.yml")"
 
     [[ "$local_bind" == "127.0.0.1" ]] && _docker_offer_expose "${local_bind}:${local_port}"
 }
 
 docker_delete_project() {
     _list_projects
-    local name; ask name "要删除的项目名称"
+    local name; ask name "$(t docker.ask.delete_project_name)"
     local project_dir="$DOCKER_COMPOSE_DIR/$name"
-    [[ -d "$project_dir" ]] || { log_error "未找到项目目录：$project_dir"; return 1; }
-    ask_yn "是否停止并删除 $name？" N || return 0
+    [[ -d "$project_dir" ]] || { log_error "$(t docker.project_dir_missing "$project_dir")"; return 1; }
+    ask_yn "$(t docker.ask.stop_delete "$name")" N || return 0
     _compose_cmd -f "$project_dir/docker-compose.yml" down
-    ask_yn "是否删除项目文件？" N && rm -rf "$project_dir"
-    log_ok "项目 $name 已删除。"
+    ask_yn "$(t docker.ask.delete_files)" N && rm -rf "$project_dir"
+    log_ok "$(t docker.project_deleted "$name")"
 }
 
 _list_projects() {
-    echo -e "\n${BOLD}Compose 项目：${NC}"
+    echo -e "\n${BOLD}$(t docker.projects_title)${NC}"
     ls "$DOCKER_COMPOSE_DIR" 2>/dev/null | while read -r proj; do
-        local status="已停止"
-        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "$proj" && status="运行中"
+        local status; status="$(t docker.status.stopped)"
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "$proj" && status="$(t docker.status.running)"
         printf "  %-25s %s\n" "$proj" "$status"
     done
 }
 
 docker_list_running() {
     docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null \
-        || log_error "Docker 未运行"
+        || log_error "$(t docker.not_running)"
 }
 
 docker_view_logs() {
     _list_projects
-    local name; ask name "容器/项目名称"
-    local lines; ask lines "日志行数" "100"
+    local name; ask name "$(t docker.ask.container_name)"
+    local lines; ask lines "$(t docker.ask.log_lines)" "100"
     docker logs --tail "$lines" -f "$name" 2>/dev/null \
         || _compose_cmd -f "$DOCKER_COMPOSE_DIR/$name/docker-compose.yml" logs --tail "$lines" -f
 }
 
 docker_prune() {
-    ask_yn "是否删除已停止的容器、未使用的镜像和孤立卷？" N || return 0
+    ask_yn "$(t docker.ask_prune)" N || return 0
     docker system prune -f
     docker volume prune -f 2>/dev/null || true
-    log_ok "Docker 已清理。"
+    log_ok "$(t docker.pruned)"
 }
 
 # ── Bind helper: ensure all compose services bind to 127.0.0.1 ───────────────
 docker_audit_binds() {
-    echo -e "\n${BOLD}检查 Compose 端口绑定（应为 127.0.0.1:*）：${NC}"
+    echo -e "\n${BOLD}$(t docker.audit_title)${NC}"
     find "$DOCKER_COMPOSE_DIR" -name "docker-compose.yml" | while read -r f; do
         local project; project=$(dirname "$f" | xargs basename)
         local bad_lines; bad_lines=$(grep -n "- \"[0-9]*:" "$f" 2>/dev/null)
         if [[ -n "$bad_lines" ]]; then
-            echo -e "  ${RED}[警告]${NC} $project — 可能绑定到 0.0.0.0："
+            echo -e "  ${RED}$(t docker.audit.warn)${NC} $(t docker.audit.bad "$project")"
             echo "$bad_lines"
         else
-            echo -e "  ${GREEN}[正常]${NC}  $project"
+            echo -e "  ${GREEN}$(t docker.audit.ok)${NC}  $project"
         fi
     done
 }
@@ -295,24 +295,24 @@ _handler_wg_easy() {
     local dir="/opt/psm/compose/$name"
 
     if [[ -d "$dir" ]]; then
-        log_warn "$label 已存在部署目录"
-        ask_yn "是否停止并重新部署？" N || return 0
+        log_warn "$(t docker.deploy.exists "$label")"
+        ask_yn "$(t docker.ask.redeploy)" N || return 0
         _compose_cmd -f "$dir/docker-compose.yml" down 2>/dev/null || true
     fi
 
-    local host; ask host "服务器公网 IP 或域名（客户端连接用）" "$(get_ipv4 2>/dev/null || echo '')"
-    local port; ask port "管理面板本机端口" "$default_port"
-    _docker_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    local host; ask host "$(t docker.ask.wg_host)" "$(get_ipv4 2>/dev/null || echo '')"
+    local port; ask port "$(t docker.ask.panel_port)" "$default_port"
+    _docker_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
     # WireGuard 监听端口在模板里是写死的 51820/udp，不随管理面板端口变化，同样要查一遍
-    _docker_check_port_conflict "51820" || { log_info "已取消"; return 1; }
+    _docker_check_port_conflict "51820" || { log_info "$(t common.cancelled)"; return 1; }
     local bind; bind=$(_docker_pick_bind "$port")
-    local password; ask password "管理面板登录密码"
+    local password; ask password "$(t docker.ask.panel_password)"
 
-    log_step "正在生成密码哈希..."
+    log_step "$(t docker.hashing_password)"
     local pw_hash yaml_hash
     pw_hash=$(docker run --rm ghcr.io/wg-easy/wg-easy wgpw "$password" 2>/dev/null \
         | grep -oE '\$2[aby]\$[0-9]+\$[A-Za-z0-9./]+' | head -1 || true)
-    [[ -z "$pw_hash" ]] && { log_error "密码哈希生成失败，请确认 Docker 正常运行。"; return 1; }
+    [[ -z "$pw_hash" ]] && { log_error "$(t docker.hash_fail)"; return 1; }
 
     # Escape $ → $$ so docker-compose does not expand them as variables
     yaml_hash=$(printf '%s' "$pw_hash" | sed 's/\$/\$\$/g')
@@ -324,14 +324,14 @@ _handler_wg_easy() {
         -e "s|__HASH__|$yaml_hash|g" \
         "$tpl" > "$dir/docker-compose.yml"
 
-    log_step "正在启动 $label，请稍候..."
+    log_step "$(t docker.starting "$label")"
     if _compose_cmd -f "$dir/docker-compose.yml" up -d; then
-        log_ok "$label 已启动"
-        echo -e "  管理面板：${CYAN}http://${bind}:${port}${NC}"
-        echo -e "  WireGuard：${CYAN}${host}:51820 / UDP${NC}（已直接对外监听，Tunnel 不适用于 UDP，无需额外配置）"
+        log_ok "$(t docker.started "$label")"
+        echo -e "  $(t docker.panel_url) ${CYAN}http://${bind}:${port}${NC}"
+        echo -e "  $(t docker.wireguard_endpoint) ${CYAN}${host}:51820 / UDP${NC} ($(t docker.wireguard_note))"
         [[ "$bind" == "127.0.0.1" ]] && _docker_offer_expose "127.0.0.1:${port}"
     else
-        log_error "启动失败，请检查：docker logs $name"
+        log_error "$(t docker.start_fail "$name")"
     fi
 }
 
@@ -346,8 +346,8 @@ _deploy_from_template() {
 
     # Show warning + confirmation if defined
     if [[ -n "$warn" ]]; then
-        echo -e "\n${YELLOW}注意：${warn}${NC}\n"
-        ask_yn "确认继续？" N || return 0
+        echo -e "\n${YELLOW}$(t docker.warn_prefix "$warn")${NC}\n"
+        ask_yn "$(t docker.ask_continue)" N || return 0
     fi
 
     # Delegate to special handler if defined
@@ -358,31 +358,31 @@ _deploy_from_template() {
 
     local dir="/opt/psm/compose/$name"
     if [[ -d "$dir" ]]; then
-        log_warn "$label 已存在部署目录：$dir"
-        ask_yn "是否停止并重新部署？" N || return 0
+        log_warn "$(t docker.deploy.exists_dir "$label" "$dir")"
+        ask_yn "$(t docker.ask.redeploy)" N || return 0
         _compose_cmd -f "$dir/docker-compose.yml" down 2>/dev/null || true
     fi
 
-    local port; ask port "$label 本机访问端口" "$def_port"
-    _docker_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    local port; ask port "$(t docker.ask.app_port "$label")" "$def_port"
+    _docker_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
     local bind; bind=$(_docker_pick_bind "$port")
     mkdir -p "$dir"
     sed -e "s/__PORT__/$port/g" -e "s/__BIND__/$bind/g" "$tpl" > "$dir/docker-compose.yml"
 
-    log_step "正在拉取镜像并启动 $label，请稍候..."
+    log_step "$(t docker.pulling_starting "$label")"
     if _compose_cmd -f "$dir/docker-compose.yml" up -d; then
-        log_ok "$label 已启动"
-        echo -e "  本机地址：${CYAN}http://${bind}:${port}${NC}"
+        log_ok "$(t docker.started "$label")"
+        echo -e "  $(t docker.local_url) ${CYAN}http://${bind}:${port}${NC}"
         [[ "$bind" == "127.0.0.1" ]] && _docker_offer_expose "127.0.0.1:${port}"
     else
-        log_error "启动失败，请检查：docker logs $name"
+        log_error "$(t docker.start_fail "$name")"
     fi
 }
 
 # ── App store menu (dynamic — reads templates/docker/apps/) ────────────────────
 docker_app_store() {
     local app_dir="$PSM_ROOT/templates/docker/apps"
-    [[ -d "$app_dir" ]] || { log_error "应用模板目录不存在：$app_dir"; return 1; }
+    [[ -d "$app_dir" ]] || { log_error "$(t docker.app_dir_missing "$app_dir")"; return 1; }
 
     # Load template files in sorted order
     local tpls=()
@@ -390,7 +390,7 @@ docker_app_store() {
         tpls+=("$f")
     done < <(find "$app_dir" -maxdepth 1 -name "*.yml" | sort)
 
-    [[ ${#tpls[@]} -eq 0 ]] && { log_warn "未找到任何应用模板。"; return 1; }
+    [[ ${#tpls[@]} -eq 0 ]] && { log_warn "$(t docker.app.none)"; return 1; }
 
     # Build label list for show_menu
     local labels=()
@@ -399,7 +399,7 @@ docker_app_store() {
     done
 
     while true; do
-        show_menu "一键部署应用" "${labels[@]}"
+        show_menu "$(t docker.app.menu)" "${labels[@]}"
         [[ "$MENU_CHOICE" == "0" ]] && return
         local idx=$(( MENU_CHOICE - 1 ))
         if [[ $idx -ge 0 && $idx -lt ${#tpls[@]} ]]; then
@@ -415,8 +415,8 @@ docker_app_store() {
 _docker_check_deps() {
     ensure_pkg_deps curl
     if ! is_installed docker; then
-        log_warn "Docker 未安装。"
-        ask_yn "是否现在安装 Docker？" Y && docker_install || log_warn "大多数操作需要 Docker。"
+        log_warn "$(t docker.not_installed)"
+        ask_yn "$(t docker.ask_install_now)" Y && docker_install || log_warn "$(t docker.most_need_docker)"
     fi
 }
 
@@ -424,18 +424,18 @@ _docker_check_deps() {
 docker_menu() {
     _docker_check_deps
     while true; do
-        show_menu "Docker 管理" \
-            "安装 Docker" \
-            "安装 Docker Compose" \
-            "卸载 Docker" \
-            "一键部署应用" \
-            "添加 Compose 项目" \
-            "删除 Compose 项目" \
-            "列出项目" \
-            "列出运行中的容器" \
-            "查看容器日志" \
-            "审查端口绑定" \
-            "清理未使用资源"
+        show_menu "$(t docker.menu.title)" \
+            "$(t docker.menu.install)" \
+            "$(t docker.menu.compose)" \
+            "$(t docker.menu.uninstall)" \
+            "$(t docker.menu.apps)" \
+            "$(t docker.menu.add_project)" \
+            "$(t docker.menu.delete_project)" \
+            "$(t docker.menu.list_projects)" \
+            "$(t docker.menu.list_running)" \
+            "$(t docker.menu.logs)" \
+            "$(t docker.menu.audit)" \
+            "$(t docker.menu.prune)"
 
         case "$MENU_CHOICE" in
             1)  docker_install ;;

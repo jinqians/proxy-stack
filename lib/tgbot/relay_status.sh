@@ -83,7 +83,7 @@ _rs_conn_count() {
 _rs_section_service() {
     local bin="${REALM_BIN:-/usr/local/bin/realm}"
     if [[ ! -f "$bin" ]]; then
-        printf '*🔁 realm 服务*\n❌ 未安装\n'
+        printf "$(t tgbot.rs.service_not_installed)"
         return
     fi
     local ver; ver=$("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}')
@@ -98,12 +98,12 @@ _rs_section_service() {
             now_ts=$(date +%s)
             if (( since_ts > 0 )); then
                 local s=$(( now_ts - since_ts ))
-                uptime=$(printf '%d 天 %d 小时 %d 分' $((s/86400)) $((s%86400/3600)) $((s%3600/60)))
+                uptime="$(t tgbot.rs.uptime $((s/86400)) $((s%86400/3600)) $((s%3600/60)))"
             fi
         fi
-        printf '*🔁 realm 服务*\n✅ 运行中（%s）%s\n' "${ver:-?}" "${uptime:+ · 已运行 ${uptime}}"
+        printf "$(t tgbot.rs.service_running)" "${ver:-?}" "${uptime:+$(t tgbot.rs.service_uptime_suffix "$uptime")}"
     else
-        printf '*🔁 realm 服务*\n⚠️ 未运行（%s）\n' "${state:-unknown}"
+        printf "$(t tgbot.rs.service_stopped)" "${state:-unknown}"
     fi
 }
 
@@ -138,15 +138,17 @@ _rs_section_resources_and_net() {
     # realm 进程自身占用
     local proc_line=""
     if command -v ps &>/dev/null; then
-        proc_line=$(ps -C realm -o %cpu=,%mem=,rss= 2>/dev/null | head -1 \
-            | awk '{printf "CPU %s%% · 内存 %s%% (%.1f MB)", $1, $2, $3/1024}')
+        local proc_cpu proc_mem proc_rss
+        read -r proc_cpu proc_mem proc_rss <<< "$(ps -C realm -o %cpu=,%mem=,rss= 2>/dev/null | head -1 \
+            | awk '{printf "%s %s %.1f", $1, $2, $3/1024}')"
+        [[ -n "$proc_cpu" ]] && proc_line="$(t tgbot.rs.proc_line "$proc_cpu" "$proc_mem" "$proc_rss")"
     fi
 
-    printf '*📟 资源消耗*\n'
-    printf 'CPU：%s%%  ·  负载：%s\n' "$cpu_pct" "${loadavg:-?}"
-    printf '内存：%s\n' "${mem_line:-?}"
-    printf '磁盘 /：%s\n' "${disk_line:-?}"
-    [[ -n "$proc_line" ]] && printf 'realm 进程：%s\n' "$proc_line"
+    printf "$(t tgbot.rs.resources_title)"
+    printf "$(t tgbot.rs.cpu_line)" "$cpu_pct" "${loadavg:-?}"
+    printf "$(t tgbot.rs.mem_line)" "${mem_line:-?}"
+    printf "$(t tgbot.rs.disk_line)" "${disk_line:-?}"
+    [[ -n "$proc_line" ]] && printf "$(t tgbot.rs.realm_proc_line)" "$proc_line"
 
     # 网速（同一窗口的字节差）
     if [[ -n "$iface" ]]; then
@@ -154,8 +156,8 @@ _rs_section_resources_and_net() {
         read -r rx0 tx0 <<< "$net0"
         read -r rx1 tx1 <<< "$net1"
         if [[ "$rx1" =~ ^[0-9]+$ && "$rx0" =~ ^[0-9]+$ ]]; then
-            printf '\n*📶 实时网速*（%s）\n' "$iface"
-            printf '↓ 入站 %s  ·  ↑ 出站 %s\n' \
+            printf "$(t tgbot.rs.net_title)" "$iface"
+            printf "$(t tgbot.rs.net_line)" \
                 "$(_rs_fmt_rate $(( rx1 - rx0 )))" \
                 "$(_rs_fmt_rate $(( tx1 - tx0 )))"
         fi
@@ -168,9 +170,9 @@ _rs_section_rules() {
     local count; count=$(echo "$rules" | jq 'length' 2>/dev/null || echo 0)
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
 
-    printf '*🛰 中转规则*（%d 条）\n' "$count"
+    printf "$(t tgbot.rs.rules_title)" "$count"
     if (( count == 0 )); then
-        printf '未配置中转规则\n'
+        printf "$(t tgbot.rs.no_rules)"
         return
     fi
 
@@ -191,25 +193,25 @@ _rs_section_rules() {
 
         local status lat_str
         if (( ok == 0 )); then
-            status="❌ 落地不可达"
-            lat_str="连接失败（${n}/${n} 超时）"
+            status="$(t tgbot.rs.status_unreachable)"
+            lat_str="$(t tgbot.rs.lat_fail "$n" "$n")"
         else
             if (( ok < n )); then
-                status="⚠️ 有丢包"
+                status="$(t tgbot.rs.status_loss)"
             elif (( avg < 100 )); then
-                status="✅ 优"
+                status="$(t tgbot.rs.status_good)"
             elif (( avg < 250 )); then
-                status="✅ 良"
+                status="$(t tgbot.rs.status_ok)"
             else
-                status="⚠️ 延迟偏高"
+                status="$(t tgbot.rs.status_slow)"
             fi
-            lat_str="延迟 ${avg}ms · 抖动 ${jit}ms · 成功 ${ok}/${n}"
+            lat_str="$(t tgbot.rs.lat_ok "$avg" "$jit" "$ok" "$n")"
         fi
-        printf '\n\\[%s] `:%s` → `%s:%s`（%s）\n' "$tag" "$lp" "$rh" "$rp" "$udp"
+        printf "$(t tgbot.rs.rule_line)" "$tag" "$lp" "$rh" "$rp" "$udp"
         printf '%s · %s\n' "$status" "$lat_str"
-        printf '当前连接：%s\n' "$conns"
+        printf "$(t tgbot.rs.current_conn)" "$conns"
     done
-    (( count > probed )) && printf '\n_（其余 %d 条规则未探测，避免报告耗时过长）_\n' $(( count - probed ))
+    (( count > probed )) && printf "$(t tgbot.rs.skipped)" $(( count - probed ))
     return 0
 }
 
@@ -225,8 +227,7 @@ rs_build_report() {
         [[ -n "$part" ]] && body="${body}${part}\n\n"
     done
 
-    printf '🔁 *中转服务器状态*\n━━━━━━━━━━━━━━━━━━━━\n🖥 %s\n🗓 %s\n\n%b━━━━━━━━━━━━━━━━━━━━' \
-        "$host_ip" "$now" "$body"
+    printf "$(t tgbot.rs.report)" "$host_ip" "$now" "$body"
 }
 
 # 推送给所有管理员（走 notify.sh，Bot 未配置时静默跳过）

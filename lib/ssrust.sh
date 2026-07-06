@@ -12,33 +12,33 @@ SS_INSTALLER="https://raw.githubusercontent.com/jinqians/ss-2022.sh/main/ss-2022
 _ssrust_check_deps() {
     ensure_pkg_deps curl jq qrencode
     [[ -f "$SS_BIN" ]] && return 0
-    log_warn "ss-rust 未安装。"
-    ask_yn "是否现在安装 ss-rust？" Y \
+    log_warn "$(t ssrust.not_installed)"
+    ask_yn "$(t ssrust.ask_install)" Y \
         && ssrust_install \
-        || { log_error "需要 ss-rust。"; return 1; }
+        || { log_error "$(t ssrust.need)"; return 1; }
 }
 
 # ── Install ───────────────────────────────────────────────────────────────────
 ssrust_install() {
-    log_step "正在下载 ss-rust 安装脚本..."
+    log_step "$(t ssrust.downloading_install)"
     local tmp; tmp=$(mktemp --suffix=.sh)
     if ! curl -fsSL "$SS_INSTALLER" -o "$tmp"; then
-        log_error "下载安装脚本失败，请检查网络连接"
+        log_error "$(t ssrust.download_install_fail)"
         rm -f "$tmp"
         return 1
     fi
-    log_step "正在运行 ss-rust 安装程序..."
+    log_step "$(t ssrust.running_install)"
     bash "$tmp"
     local rc=$?
     rm -f "$tmp"
-    (( rc != 0 )) && log_warn "安装脚本退出码：${rc}（服务可能未能启动，请检查 journalctl -u ss-rust）" \
-                  || log_ok "ss-rust 安装完成"
+    (( rc != 0 )) && log_warn "$(t ssrust.install_rc "$rc")" \
+                  || log_ok "$(t ssrust.install_done)"
     return 0
 }
 
 # ── Show config / SS URI ──────────────────────────────────────────────────────
 ssrust_show_config() {
-    [[ -f "$SS_CONF" ]] || { log_error "未找到配置文件：$SS_CONF"; return 1; }
+    [[ -f "$SS_CONF" ]] || { log_error "$(t ssrust.conf_missing "$SS_CONF")"; return 1; }
 
     local port method password tfo nameserver
     port=$(jq -r '.server_port'        "$SS_CONF")
@@ -53,14 +53,14 @@ ssrust_show_config() {
     local userinfo; userinfo=$(printf '%s:%s' "$method" "$password" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
     local uri="ss://${userinfo}@${ip}:${port}#PSM-ss-rust"
 
-    echo -e "\n${BOLD}${GREEN}── ss-rust 配置 ──${NC}"
-    printf "  %-12s %s\n" "服务器:"     "$ip"
-    printf "  %-12s %s\n" "端口:"       "$port"
-    printf "  %-12s %s\n" "加密方式:"   "$method"
-    printf "  %-12s %s\n" "密码:"       "$password"
+    echo -e "\n${BOLD}${GREEN}── $(t ssrust.config_title) ──${NC}"
+    printf "  %-12s %s\n" "$(t ssrust.lbl_server)"   "$ip"
+    printf "  %-12s %s\n" "$(t ssrust.lbl_port)"     "$port"
+    printf "  %-12s %s\n" "$(t ssrust.lbl_method)"   "$method"
+    printf "  %-12s %s\n" "$(t ssrust.lbl_password)" "$password"
     printf "  %-12s %s\n" "TFO:"        "$tfo"
     [[ -n "$nameserver" ]] && printf "  %-12s %s\n" "DNS:"  "$nameserver"
-    echo -e "\n${BOLD}SS 链接：${NC}"
+    echo -e "\n${BOLD}$(t ssrust.link_label)${NC}"
     echo "  $uri"
     echo ""
     echo "$uri" | qrencode -t ANSIUTF8 2>/dev/null || true
@@ -68,7 +68,7 @@ ssrust_show_config() {
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 ssrust_uninstall() {
-    ask_yn "是否卸载 ss-rust（程序 + 配置 + 服务）？" N || return 0
+    ask_yn "$(t ssrust.ask_uninstall)" N || return 0
     systemctl stop "$SS_SERVICE" 2>/dev/null || true
     systemctl disable "$SS_SERVICE" 2>/dev/null || true
     rm -f "$SS_BIN"
@@ -78,19 +78,19 @@ ssrust_uninstall() {
     if [[ -f "${CFG_DIR}/traffic/state.json" ]]; then
         source "$LIB_DIR/traffic.sh"; _trf_init; _trf_cleanup_node "ss2022"
     fi
-    log_ok "ss-rust 已卸载。"
+    log_ok "$(t ssrust.uninstalled)"
 }
 
 # ── Update ────────────────────────────────────────────────────────────────────
 ssrust_update() {
-    log_step "正在下载 ss-rust 更新脚本..."
+    log_step "$(t ssrust.downloading_update)"
     local tmp; tmp=$(mktemp --suffix=.sh)
     if ! curl -fsSL "$SS_INSTALLER" -o "$tmp"; then
-        log_error "下载更新脚本失败"; rm -f "$tmp"; return 1
+        log_error "$(t ssrust.download_update_fail)"; rm -f "$tmp"; return 1
     fi
     bash "$tmp"; local rc=$?
     rm -f "$tmp"
-    (( rc != 0 )) && log_warn "更新脚本退出码：${rc}" || log_ok "ss-rust 更新完成"
+    (( rc != 0 )) && log_warn "$(t ssrust.update_rc "$rc")" || log_ok "$(t ssrust.update_done)"
     return 0
 }
 
@@ -101,36 +101,36 @@ ssrust_logs() {
 
 # ── List helper (called by _view_all_nodes in manager.sh) ────────────────────
 _ssrust_show_node_list() {
-    echo -e "\n${BOLD}ss-rust：${NC}"
+    echo -e "\n${BOLD}$(t ssrust.list_header)${NC}"
     if [[ ! -f "$SS_CONF" ]]; then
-        echo "  未配置"
+        echo "  $(t common.not_configured)"
         return
     fi
     local port method
     port=$(jq -r '.server_port' "$SS_CONF" 2>/dev/null)
     method=$(jq -r '.method'    "$SS_CONF" 2>/dev/null)
     local ip; ip=$(get_ipv4 2>/dev/null || echo "?")
-    printf "  TCP+UDP %s | 端口: %s | 加密: %s\n" "$ip" "$port" "$method"
+    printf "$(t ssrust.list_line)" "$ip" "$port" "$method"
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────
 ssrust_menu() {
     _ssrust_check_deps || return
     while true; do
-        show_menu "ss-rust 管理" \
-            "安装 / 重新安装" \
-            "显示配置 / SS 链接" \
-            "服务状态" \
-            "重启服务" \
-            "查看日志" \
-            "更新" \
-            "卸载"
+        show_menu "$(t ssrust.menu.title)" \
+            "$(t ssrust.menu.install)" \
+            "$(t ssrust.menu.show_config)" \
+            "$(t ssrust.menu.status)" \
+            "$(t ssrust.menu.restart)" \
+            "$(t ssrust.menu.logs)" \
+            "$(t ssrust.menu.update)" \
+            "$(t ssrust.menu.uninstall)"
 
         case "$MENU_CHOICE" in
             1) ssrust_install;                                                press_enter ;;
             2) ssrust_show_config;                                            press_enter ;;
             3) svc_status "$SS_SERVICE";                                      press_enter ;;
-            4) svc_restart "$SS_SERVICE"; log_ok "ss-rust 已重启。"; press_enter ;;
+            4) svc_restart "$SS_SERVICE"; log_ok "$(t ssrust.restarted)"; press_enter ;;
             5) ssrust_logs ;;
             6) ssrust_update;                                                 press_enter ;;
             7) ssrust_uninstall;                                              press_enter ;;

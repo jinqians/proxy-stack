@@ -118,7 +118,7 @@ expiry_check() {
 
         # Pause on expiry (only once)
         if (( diff <= 0 )) && [[ "$(_exp_get "$tag" "expired_paused")" != "true" ]]; then
-            log_warn "[到期] 节点 ${tag}（端口 ${port}）已到期，正在暂停..."
+            log_warn "$(t expiry.expired_pausing "$tag" "$port")"
             echo "$(TZ="$_EXP_TZ" date '+%Y-%m-%d %H:%M:%S') EXPIRED tag=${tag} port=${port}" >> "$EXPIRY_LOG"
             # _trf_pause_tag is defined in traffic.sh which sources this file,
             # so it is available at call time.
@@ -150,7 +150,7 @@ _exp_maybe_notify() {
 # ── Interactive status display ─────────────────────────────────────────────────
 _exp_show_status() {
     _exp_init
-    echo -e "\n${BOLD}${BLUE}══ 节点到期管理（香港时间）════════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t expiry.status_title) ════════════════════════${NC}"
     local count=0
     while IFS= read -r tag; do
         count=$(( count + 1 ))
@@ -162,33 +162,33 @@ _exp_show_status() {
         diff=$(( exp_ts - now_ts ))
 
         local icon
-        if   (( diff < 0 ));           then icon="${RED}● 已过期${NC}"
-        elif (( diff < 86400 ));       then icon="${RED}● 即将到期${NC}"
-        elif (( diff < 3*86400 ));     then icon="${YELLOW}● 3天内到期${NC}"
-        elif (( diff < 7*86400 ));     then icon="${YELLOW}● 7天内到期${NC}"
-        else                                icon="${GREEN}● 正常${NC}"; fi
+        if   (( diff < 0 ));           then icon="${RED}$(t expiry.state_expired)${NC}"
+        elif (( diff < 86400 ));       then icon="${RED}$(t expiry.state_expiring_soon)${NC}"
+        elif (( diff < 3*86400 ));     then icon="${YELLOW}$(t expiry.state_expiring_3d)${NC}"
+        elif (( diff < 7*86400 ));     then icon="${YELLOW}$(t expiry.state_expiring_7d)${NC}"
+        else                                icon="${GREEN}$(t expiry.state_ok)${NC}"; fi
 
         local days_str
-        if (( diff >= 0 )); then days_str="剩余 $(( diff / 86400 )) 天"
-        else                     days_str="已过期 $(( -diff / 86400 )) 天"; fi
+        if (( diff >= 0 )); then days_str="$(t expiry.days_left "$(( diff / 86400 ))")"
+        else                     days_str="$(t expiry.days_expired "$(( -diff / 86400 ))")"; fi
 
-        printf "  ${BOLD}${CYAN}%s${NC}  (端口 %s)  %b\n" "$tag" "$port" "$(echo -e "$icon")"
-        printf "    到期时间 [HKT]: %s  (%s)\n" "$exp_at" "$days_str"
+        printf "${BOLD}${CYAN}$(t expiry.status_node_line)${NC}" "$tag" "$port" "$(echo -e "$icon")"
+        printf "$(t expiry.status_expiry_line)" "$exp_at" "$days_str"
         echo ""
     done < <(_exp_get_tags)
-    (( count == 0 )) && echo -e "  ${YELLOW}尚未为任何节点设置到期时间${NC}\n"
+    (( count == 0 )) && echo -e "  ${YELLOW}$(t expiry.no_expiry_set)${NC}\n"
     echo -e "${BOLD}${BLUE}════════════════════════════════════════════════════${NC}"
 }
 
 # ── Interactive wizard: set or renew expiry for a node ────────────────────────
 _exp_wizard() {
     _exp_init
-    echo -e "\n${BOLD}设置节点到期时间（香港时间）${NC}"
+    echo -e "\n${BOLD}$(t expiry.wizard_title)${NC}"
 
     # Collect available tags from traffic state
     local trf_state="${CFG_DIR}/traffic/state.json"
     if [[ ! -f "$trf_state" ]]; then
-        log_warn "尚未配置任何节点流量限制，请先在流量管理中添加节点。"
+        log_warn "$(t expiry.no_traffic_nodes)"
         return
     fi
 
@@ -199,17 +199,17 @@ _exp_wizard() {
         [[ -z "$port" ]] && continue
         i=$(( i+1 )); tags_arr+=("$tag"); ports_arr+=("$port")
         local cur_exp; cur_exp=$(_exp_get "$tag" "expires_at")
-        printf "  ${CYAN}%2d.${NC} %-22s 端口 %-6s 到期: %s\n" \
-            "$i" "$tag" "$port" "${cur_exp:-(未设置)}"
+        printf "${CYAN}$(t expiry.node_line)${NC}" \
+            "$i" "$tag" "$port" "${cur_exp:-$(t expiry.not_set)}"
     done < <(jq -r 'keys[]' "$trf_state" 2>/dev/null)
 
-    if (( i == 0 )); then log_warn "没有找到可配置的节点"; return; fi
+    if (( i == 0 )); then log_warn "$(t expiry.no_nodes)"; return; fi
     echo ""
     local sel
-    read -rp "$(echo -e "${CYAN}选择节点序号（0=取消）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t expiry.ask_node): ${NC}")" sel
     [[ -z "$sel" || "$sel" == "0" ]] && return
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项"; return; fi
+        log_warn "$(t expiry.invalid_option)"; return; fi
 
     local tag="${tags_arr[$((sel-1))]}"
     local port="${ports_arr[$((sel-1))]}"
@@ -217,11 +217,11 @@ _exp_wizard() {
 
     echo ""
     if [[ -n "$cur_exp" ]]; then
-        log_info "当前到期时间：${cur_exp}（香港时间）"
-        echo "  1. 续期（从当前到期时间/现在起增加月数）"
-        echo "  2. 重新设置（直接输入新日期）"
+        log_info "$(t expiry.current_expiry "$cur_exp")"
+        echo "$(t expiry.mode_renew)"
+        echo "$(t expiry.mode_reset)"
         local mode
-        read -rp "$(echo -e "${CYAN}请选择 [1]: ${NC}")" mode
+        read -rp "$(echo -e "${CYAN}$(t expiry.ask_select)${NC}")" mode
         mode="${mode:-1}"
     else
         local mode="2"
@@ -229,16 +229,16 @@ _exp_wizard() {
 
     if [[ "$mode" == "1" ]]; then
         local months
-        ask months "续期月数" "1"
+        ask months "$(t expiry.ask_months)" "1"
         if ! [[ "$months" =~ ^[0-9]+$ ]] || (( months < 1 )); then
-            log_error "月数须为正整数"; return; fi
+            log_error "$(t expiry.invalid_months)"; return; fi
         local new_exp; new_exp=$(exp_renew "$tag" "$months")
-        log_ok "节点 ${tag} 已续期至：${new_exp}（香港时间）"
+        log_ok "$(t expiry.renewed "$tag" "$new_exp")"
     else
         local date_in
-        ask date_in "到期日期（YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS，香港时间）" \
+        ask date_in "$(t expiry.ask_date)" \
             "$(TZ="$_EXP_TZ" date -d 'now +1 month' '+%Y-%m-%d')"
         exp_set "$tag" "$port" "$date_in"
-        log_ok "节点 ${tag} 到期时间已设置为：${date_in}（香港时间）"
+        log_ok "$(t expiry.set_done "$tag" "$date_in")"
     fi
 }

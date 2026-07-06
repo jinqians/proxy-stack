@@ -69,7 +69,7 @@ _xss_sync_from_live() {
     done
     if (( changed )); then
         _xss_save "$nodes"
-        log_info "检测到 config.json 中的手动修改，已同步端口/密码到节点存储。"
+        log_info "$(t xray.manual_sync_port_password)"
     fi
     return 0
 }
@@ -78,17 +78,17 @@ _xss_sync_from_live() {
 _xss_select_node() {
     XSS_SEL_TAG=""
     local count; count=$(_xss_count)
-    (( count == 0 )) && { log_warn "没有 SS2022 节点"; return 1; }
+    (( count == 0 )) && { log_warn "$(t xray.no_ss2022_nodes)"; return 1; }
     local tags_arr=() i=0 tag port method _
     while IFS=$'\t' read -r tag port method _; do
         i=$((i+1)); tags_arr+=("$tag")
-        printf "  ${CYAN}%2d.${NC} %-20s 端口 %-6s %s\n" "$i" "$tag" "$port" "$method"
+        printf "  ${CYAN}%2d.${NC} %-20s %s %-6s %s\n" "$i" "$tag" "$(t xray.port_label)" "$port" "$method"
     done < <(_xss_list)
     local sel
-    read -rp "$(echo -e "${CYAN}选择序号（0=取消）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t xray.select_index_cancel)${NC}")" sel
     [[ -z "$sel" || "$sel" == "0" ]] && return 1
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项"; return 1; fi
+        log_warn "$(t xray.invalid_option)"; return 1; fi
     XSS_SEL_TAG="${tags_arr[$((sel-1))]}"
 }
 
@@ -164,7 +164,7 @@ _xss_apply_to_xray() {
 _xss_uri() {
     local tag="$1"
     local node; node=$(_xss_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "节点 ${tag} 不存在"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_missing "$tag")"; return 1; }
 
     local port method pass
     port=$(echo "$node"   | jq -r '.port')
@@ -175,13 +175,13 @@ _xss_uri() {
     local userinfo; userinfo=$(printf '%s:%s' "$method" "$pass" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
     local uri="ss://${userinfo}@${ip}:${port}#${tag}"
 
-    echo -e "\n${BOLD}${GREEN}── Xray SS2022 节点：${tag} ──${NC}"
-    printf "  %-12s %s\n" "服务器:"   "$ip"
-    printf "  %-12s %s\n" "端口:"     "$port"
-    printf "  %-12s %s\n" "加密:"     "$method"
-    printf "  %-12s %s\n" "密码:"     "$pass"
+    echo -e "\n${BOLD}${GREEN}$(t xray.ss2022.title "$tag")${NC}"
+    printf "  %-12s %s\n" "$(t xray.server_label)"   "$ip"
+    printf "  %-12s %s\n" "$(t xray.port_label):"     "$port"
+    printf "  %-12s %s\n" "$(t xray.encrypt_label)"     "$method"
+    printf "  %-12s %s\n" "$(t xray.password_label)"     "$pass"
     echo ""
-    echo -e "${BOLD}SS 链接：${NC}"
+    echo -e "${BOLD}$(t xray.ss_link_label)${NC}"
     echo "  $uri"
     echo ""
     echo "$uri" | qrencode -t ANSIUTF8 2>/dev/null || true
@@ -192,29 +192,29 @@ xss_add_node() {
     _xray_require_installed || return
     _xss_sync_from_live
 
-    echo -e "\n${BOLD}添加 Xray SS2022 节点${NC}"
+    echo -e "\n${BOLD}$(t xray.ss2022.add_title)${NC}"
 
     local tag port method listen
-    ask tag    "节点标签 (tag)"        "xss-$(tr -dc a-z0-9 </dev/urandom 2>/dev/null | head -c4)"
-    ask port   "监听端口"               "$XSS_DEFAULT_PORT"
-    echo "  加密方式："
-    echo "    1. 2022-blake3-aes-128-gcm  (16字节密钥，推荐)"
-    echo "    2. 2022-blake3-aes-256-gcm  (32字节密钥)"
-    echo "    3. 2022-blake3-chacha20-poly1305 (32字节密钥)"
+    ask tag    "$(t xray.ss2022.ask_tag)"        "xss-$(tr -dc a-z0-9 </dev/urandom 2>/dev/null | head -c4)"
+    ask port   "$(t xray.ss2022.ask_listen_port)" "$XSS_DEFAULT_PORT"
+    echo "  $(t xray.ss2022.cipher_title)"
+    echo "    $(t xray.ss2022.cipher1)"
+    echo "    $(t xray.ss2022.cipher2)"
+    echo "    $(t xray.ss2022.cipher3)"
     local cipher_sel
-    read -rp "$(echo -e "${CYAN}选择 [1]: ${NC}")" cipher_sel
+    read -rp "$(echo -e "${CYAN}$(t docker.ask_select_1)${NC}")" cipher_sel
     case "${cipher_sel:-1}" in
         2) method="2022-blake3-aes-256-gcm" ;;
         3) method="2022-blake3-chacha20-poly1305" ;;
         *) method="2022-blake3-aes-128-gcm" ;;
     esac
 
-    ask listen "监听地址 (0.0.0.0=全部)" "0.0.0.0"
+    ask listen "$(t xray.ss2022.ask_listen_addr)" "0.0.0.0"
 
     if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-        log_error "无效端口"; return 1
+        log_error "$(t xray.invalid_port_short)"; return 1
     fi
-    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
     if ! [[ "$tag" =~ ^xss- ]]; then
         tag="xss-${tag}"
     fi
@@ -233,11 +233,11 @@ xss_add_node() {
     _xss_upsert "$node_json"
     _xss_apply_to_xray
 
-    log_ok "节点 ${tag} 已添加（端口 ${port}，${method}）"
+    log_ok "$(t xray.ss2022.added "$tag" "$port" "$method")"
 
     # SS2022 直接监听自己的端口（不走 Nginx）。RHEL 系默认 firewalld 为
     # Enforcing 且只放行 SSH，不放行端口则节点从外部不可达——主动询问放行。
-    ask_yn "是否现在放行防火墙端口 ${port}？" Y && {
+    ask_yn "$(t xray.ask.open_firewall "$port")" Y && {
         source "$LIB_DIR/system.sh"
         firewall_open_port "$port" "both"
     }
@@ -248,43 +248,43 @@ xss_add_node() {
 # ── Interactive: modify port / password ──────────────────────────────────────
 xss_modify_port() {
     _xss_sync_from_live
-    echo -e "\n${BOLD}修改 SS2022 节点端口${NC}"
+    echo -e "\n${BOLD}$(t xray.ss2022.modify_port_title)${NC}"
     _xss_select_node || return
     local tag="$XSS_SEL_TAG"
     local node; node=$(_xss_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "节点 ${tag} 不存在"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_missing "$tag")"; return 1; }
     local old_port; old_port=$(echo "$node" | jq -r '.port')
 
-    local port; ask port "新端口" "$old_port"
-    [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+    local port; ask port "$(t xray.ask.new_port)" "$old_port"
+    [[ "$port" == "$old_port" ]] && { log_info "$(t xray.port_unchanged)"; return 0; }
     if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-        log_error "无效端口"; return 1
+        log_error "$(t xray.invalid_port_short)"; return 1
     fi
-    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
 
     node=$(echo "$node" | jq --argjson p "$port" '.port = $p')
     _xss_upsert "$node"
     _xss_apply_to_xray
-    log_ok "节点 ${tag} 端口已更新：${old_port} → ${port}"
+    log_ok "$(t xray.port_updated "$tag" "$old_port" "$port")"
 
-    ask_yn "是否现在放行防火墙端口 ${port}？" Y && {
+    ask_yn "$(t xray.ask.open_firewall "$port")" Y && {
         source "$LIB_DIR/system.sh"
         firewall_open_port "$port" "both"
     }
-    log_info "原端口 ${old_port} 若已在防火墙放行，不再使用时请手动关闭。"
+    log_info "$(t xray.old_port_note "$old_port")"
     _xss_uri "$tag"
 }
 
 xss_modify_password() {
     _xss_sync_from_live
-    echo -e "\n${BOLD}修改 SS2022 节点密码${NC}"
+    echo -e "\n${BOLD}$(t xray.ss2022.modify_password_title)${NC}"
     _xss_select_node || return
     local tag="$XSS_SEL_TAG"
     local node; node=$(_xss_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "节点 ${tag} 不存在"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_missing "$tag")"; return 1; }
     local method; method=$(echo "$node" | jq -r '.method')
 
-    local pass; ask pass "新密码（留空自动生成）" ""
+    local pass; ask pass "$(t xray.ss2022.ask_new_password)" ""
     if [[ -z "$pass" ]]; then
         pass=$(_xss_gen_password "$method")
     else
@@ -294,7 +294,7 @@ xss_modify_password() {
         case "$method" in *256*|*chacha20*) need=32 ;; esac
         local got; got=$(printf '%s' "$pass" | base64 -d 2>/dev/null | wc -c | tr -d ' ') || got=0
         if [[ "$got" != "$need" ]]; then
-            log_error "密码必须是 ${need} 字节随机数据的 base64 编码（当前解码为 ${got:-0} 字节），留空可自动生成。"
+            log_error "$(t xray.ss2022.bad_password "$need" "${got:-0}")"
             return 1
         fi
     fi
@@ -302,31 +302,31 @@ xss_modify_password() {
     node=$(echo "$node" | jq --arg v "$pass" '.password = $v')
     _xss_upsert "$node"
     _xss_apply_to_xray
-    log_ok "节点 ${tag} 密码已更新。"
+    log_ok "$(t xray.ss2022.password_updated "$tag")"
     _xss_uri "$tag"
 }
 
 # ── Interactive: delete node ──────────────────────────────────────────────────
 xss_delete_node() {
     local count; count=$(_xss_count)
-    (( count == 0 )) && { log_warn "没有 SS2022 节点"; return; }
+    (( count == 0 )) && { log_warn "$(t xray.no_ss2022_nodes)"; return; }
 
-    echo -e "\n${BOLD}删除 Xray SS2022 节点${NC}"
+    echo -e "\n${BOLD}$(t xray.ss2022.delete_title)${NC}"
     local tags_arr=()
     local i=0
     while IFS=$'\t' read -r tag port method _; do
         i=$((i+1)); tags_arr+=("$tag")
-        printf "  ${CYAN}%2d.${NC} %-20s 端口 %-6s %s\n" "$i" "$tag" "$port" "$method"
+        printf "  ${CYAN}%2d.${NC} %-20s %s %-6s %s\n" "$i" "$tag" "$(t xray.port_label)" "$port" "$method"
     done < <(_xss_list)
 
     local sel
-    read -rp "$(echo -e "${CYAN}选择序号（0=取消）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t xray.select_index_cancel)${NC}")" sel
     [[ -z "$sel" || "$sel" == "0" ]] && return
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项"; return; fi
+        log_warn "$(t xray.invalid_option)"; return; fi
 
     local tag="${tags_arr[$((sel-1))]}"
-    ask_yn "确认删除节点 ${tag}？" N || return
+    ask_yn "$(t xray.ss2022.ask_delete "$tag")" N || return
 
     _xss_delete "$tag"
     _xss_apply_to_xray
@@ -336,17 +336,17 @@ xss_delete_node() {
         source "$LIB_DIR/traffic.sh" 2>/dev/null && \
         _trf_cleanup_node "$tag" 2>/dev/null || true
 
-    log_ok "节点 ${tag} 已删除"
+    log_ok "$(t xray.ss2022.deleted "$tag")"
 }
 
 # ── List helper (called by _view_all_nodes in manager.sh) ────────────────────
 _xss_show_node_list() {
     local count; count=$(_xss_count)
     echo -e "\n${BOLD}Xray SS2022：${NC}"
-    if (( count == 0 )); then echo "  未配置"; return; fi
+    if (( count == 0 )); then echo "  $(t common.not_configured)"; return; fi
     local ip; ip=$(get_ipv4 2>/dev/null || echo "?")
     while IFS=$'\t' read -r tag port method _; do
-        printf "  TCP+UDP %s | 端口: %-6s | 加密: %-36s | tag: %s\n" \
+        printf "$(t xray.ss2022.list_line)" \
             "$ip" "$port" "$method" "$tag"
     done < <(_xss_list)
 }
@@ -358,13 +358,13 @@ xss_menu() {
         # 每轮菜单前同步一次，避免任何走 _xss_apply_to_xray 的操作
         # 用过期的节点存储覆盖 config.json 中的手动修改。
         _xss_sync_from_live
-        show_menu "Xray SS2022 管理" \
-            "添加节点" \
-            "查看节点 / SS 链接" \
-            "修改端口" \
-            "修改密码" \
-            "删除节点" \
-            "重启 Xray"
+        show_menu "$(t xray.ss2022.menu.title)" \
+            "$(t xray.ss2022.menu.add)" \
+            "$(t xray.ss2022.menu.view)" \
+            "$(t xray.ss2022.menu.port)" \
+            "$(t xray.ss2022.menu.password)" \
+            "$(t xray.ss2022.menu.delete)" \
+            "$(t xray.ss2022.menu.restart)"
 
         case "$MENU_CHOICE" in
             1) xss_add_node;  press_enter ;;

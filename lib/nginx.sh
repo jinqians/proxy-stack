@@ -10,13 +10,13 @@ NGINX_MAIN="/etc/nginx/nginx.conf"
 # ── Install ───────────────────────────────────────────────────────────────────
 nginx_install() {
     if is_installed nginx; then
-        log_info "Nginx 已安装：$(nginx -v 2>&1)"
+        log_info "$(t nginx.installed "$(nginx -v 2>&1)")"
         nginx_ensure_stream_sni
         return 0
     fi
 
     detect_os
-    log_step "正在安装 Nginx..."
+    log_step "$(t nginx.installing)"
     case "$OS_ID" in
         ubuntu|debian|raspbian)
             pkg_update
@@ -29,7 +29,7 @@ nginx_install() {
             # back to enabling EPEL only if the base install fails (older CentOS).
             pkg_install nginx 2>/dev/null \
                 || { ensure_epel || true; pkg_install nginx 2>/dev/null || true; }
-            is_installed nginx || die "Nginx 安装失败，请检查软件源。"
+            is_installed nginx || die "$(t nginx.install_fail_sources)"
             pkg_install nginx-mod-stream 2>/dev/null || true
             ;;
     esac
@@ -47,17 +47,17 @@ nginx_install() {
     local test_out
     if test_out=$(nginx -t 2>&1); then
         if svc_restart nginx; then
-            log_ok "Nginx 已安装。"
+            log_ok "$(t nginx.installed_done)"
         else
-            log_error "Nginx 配置有效，但服务启动失败："
+            log_error "$(t nginx.config_valid_start_fail)"
             svc_status nginx 2>&1 | tail -n 15 >&2 || true
             return 1
         fi
     else
-        log_error "Nginx 配置测试失败，未启动服务："
+        log_error "$(t nginx.config_test_fail_no_start)"
         echo "$test_out" >&2
         if grep -q 'unknown directive "stream"' <<<"$test_out"; then
-            log_error "stream 模块未加载：请安装 libnginx-mod-stream（Debian/Ubuntu）或 nginx-mod-stream（RHEL 系）后重试。"
+            log_error "$(t nginx.stream_directive_missing)"
         fi
         return 1
     fi
@@ -88,11 +88,11 @@ _nginx_selinux_permit() {
         && getsebool httpd_can_network_connect 2>/dev/null | grep -q 'on$'; then
         return 0
     fi
-    log_step "检测到 SELinux Enforcing，正在放行 nginx 反代所需的网络连接权限..."
+    log_step "$(t nginx.selinux.permitting)"
     if setsebool -P httpd_can_network_connect 1 2>/dev/null; then
-        log_ok "SELinux：httpd_can_network_connect 已开启（nginx → 本机上游）"
+        log_ok "$(t nginx.selinux.enabled)"
     else
-        log_warn "无法设置 SELinux 布尔值，若反代 502/权限拒绝，请手动执行："
+        log_warn "$(t nginx.selinux.failed)"
         log_warn "  setsebool -P httpd_can_network_connect 1"
     fi
 }
@@ -212,24 +212,24 @@ MAINCFG
 
 nginx_upgrade() {
     detect_os
-    log_step "正在升级 Nginx..."
+    log_step "$(t nginx.upgrading)"
     case "$OS_ID" in
         ubuntu|debian|raspbian) apt-get install --only-upgrade -y nginx ;;
         centos|rhel|rocky|almalinux|ol|amzn|fedora) "$(_rhel_pkg_cmd)" update -y nginx ;;
     esac
     nginx_test_reload
-    log_ok "Nginx 已升级。"
+    log_ok "$(t nginx.upgraded)"
 }
 
 nginx_uninstall() {
-    ask_yn "是否删除 Nginx 及其所有配置？" N || return 0
+    ask_yn "$(t nginx.ask_uninstall)" N || return 0
     svc_stop nginx
     detect_os
     case "$OS_ID" in
         ubuntu|debian|raspbian) apt-get purge -y nginx nginx-common ;;
         centos|rhel|rocky|almalinux|ol|amzn|fedora) "$(_rhel_pkg_cmd)" remove -y nginx ;;
     esac
-    log_ok "Nginx 已删除。"
+    log_ok "$(t nginx.uninstalled)"
 }
 
 # ── Stream SNI routing ────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ _sni_map_file() { echo "$NGINX_STREAM_D/00-sni-map.conf"; }
 _nginx_ensure_stream_module() {
     _nginx_stream_module_available && return 0
     detect_os
-    log_step "正在安装 Nginx stream 模块..."
+    log_step "$(t nginx.stream.installing)"
     case "$OS_ID" in
         ubuntu|debian|raspbian)
             # Retry behind a `pkg_update` — the usual reason the .so is absent is
@@ -260,8 +260,8 @@ _nginx_ensure_stream_module() {
             ;;
     esac
     _nginx_stream_module_available && return 0
-    log_warn "未能安装/找到 Nginx stream 模块（ngx_stream_module.so）。"
-    log_warn "SNI 分流依赖该模块，请手动安装 libnginx-mod-stream（Debian/Ubuntu）或 nginx-mod-stream（RHEL 系）。"
+    log_warn "$(t nginx.stream.missing)"
+    log_warn "$(t nginx.stream.sni_dep)"
     return 1
 }
 
@@ -295,7 +295,7 @@ server {
 EOF
 
     # UDP 443 is handled by Hysteria2 directly (separate listener)
-    log_ok "Stream SNI 映射表已初始化。"
+    log_ok "$(t nginx.stream.sni_initialized)"
 }
 
 nginx_ensure_stream_sni() {
@@ -314,10 +314,10 @@ nginx_ensure_stream_sni() {
 
 nginx_ensure_local_http() {
     if ! is_installed nginx; then
-        log_warn "本地伪装 HTTP 站点需要 Nginx。"
-        ask_yn "是否现在安装 Nginx？" Y \
+        log_warn "$(t nginx.local_http.need)"
+        ask_yn "$(t nginx.ask_install_now)" Y \
             && nginx_install \
-            || { log_error "本地伪装需要 Nginx。"; return 1; }
+            || { log_error "$(t nginx.local_http.required)"; return 1; }
         return 0
     fi
 
@@ -334,14 +334,14 @@ _sni_set_default_backend() {
     local addr="$1"   # e.g. "127.0.0.1:1443"
     local file; file="$(_sni_map_file)"
     if [[ ! -f "$file" ]]; then
-        log_warn "未找到 SNI 映射表，正在初始化..."
+        log_warn "$(t nginx.sni.map_missing_init)"
         nginx_ensure_stream_sni || return 1
     fi
     local tmp; tmp=$(mktemp)
     awk -v addr="$addr" '$1 == "default" {$0 = "    default     " addr ";"} {print}' "$file" > "$tmp" \
         && mv "$tmp" "$file"
     nginx_test_reload
-    log_ok "Nginx 默认 stream 后端 → $addr"
+    log_ok "$(t nginx.sni.default_backend "$addr")"
 }
 
 _sni_add_entry() {
@@ -354,15 +354,15 @@ _sni_add_entry() {
         awk -v domain="$domain" -v upstream="$upstream" \
             '$1 == domain {$0 = "    " domain "   " upstream ";"} {print}' "$file" > "$tmp" \
             && mv "$tmp" "$file"
-        log_info "已更新 SNI 条目：$domain → $upstream"
+        log_info "$(t nginx.sni.updated "$domain" "$upstream")"
     else
         awk -v line="    ${domain}   ${upstream};" \
             '/# PSM:ENTRIES:END/ {print line} {print}' "$file" > "$tmp" \
             && mv "$tmp" "$file"
-        log_info "已添加 SNI 条目：$domain → $upstream"
+        log_info "$(t nginx.sni.added "$domain" "$upstream")"
     fi
     nginx_test_reload
-    log_ok "SNI 路由已就绪：$domain → $upstream"
+    log_ok "$(t nginx.sni.ready "$domain" "$upstream")"
 }
 
 _sni_remove_entry() {
@@ -372,49 +372,49 @@ _sni_remove_entry() {
     local tmp; tmp=$(mktemp)
     awk -v domain="$domain" '$1 != domain {print}' "$file" > "$tmp" && mv "$tmp" "$file"
     nginx_test_reload
-    log_ok "已删除 SNI 条目：$domain"
+    log_ok "$(t nginx.sni.removed "$domain")"
 }
 
 _sni_list_entries() {
     local file; file="$(_sni_map_file)"
-    [[ -f "$file" ]] || { log_warn "SNI 映射表未初始化。"; return; }
-    echo -e "\n${BOLD}当前 SNI 路由表：${NC}"
+    [[ -f "$file" ]] || { log_warn "$(t nginx.sni.not_initialized)"; return; }
+    echo -e "\n${BOLD}$(t nginx.sni.table_title)${NC}"
     awk '/PSM:ENTRIES:BEGIN/ {show=1; next} /PSM:ENTRIES:END/ {show=0} show && NF {print}' "$file" || true
 }
 
 stream_add_entry() {
     local domain upstream
-    ask domain "域名（SNI）"
-    ask upstream "上游地址（如 127.0.0.1:端口）"
+    ask domain "$(t nginx.ask.sni_domain)"
+    ask upstream "$(t nginx.ask.sni_upstream)"
     _sni_add_entry "$domain" "$upstream"
 }
 
 stream_remove_entry() {
     _sni_list_entries
     local domain
-    ask domain "要删除的域名"
+    ask domain "$(t nginx.ask.delete_domain)"
     _sni_remove_entry "$domain"
 }
 
 # ── HTTP site management ──────────────────────────────────────────────────────
 list_sites() {
-    echo -e "\n${BOLD}已配置的 HTTP 站点：${NC}"
+    echo -e "\n${BOLD}$(t nginx.sites.title)${NC}"
     ls "$NGINX_HTTP_D"/*.conf 2>/dev/null | while read -r f; do
         local name; name=$(basename "$f" .conf)
-        local enabled; svc_is_active nginx && enabled="运行中" || enabled="已停止"
+        local enabled; svc_is_active nginx && enabled="$(t nginx.status.running)" || enabled="$(t nginx.status.stopped)"
         echo "  $name  [$enabled]"
     done
 }
 
 add_site() {
     local domain port proxy_pass tls="no" h3="no" ws="no"
-    ask domain "域名（例如 blog.example.com）"
-    is_domain "$domain" || { log_error "无效的域名"; return 1; }
+    ask domain "$(t nginx.ask.domain)"
+    is_domain "$domain" || { log_error "$(t nginx.invalid_domain)"; return 1; }
 
-    ask proxy_pass "本地上游（例如 127.0.0.1:3001）"
-    ask_yn "是否启用 TLS（HTTPS）？" Y && tls="yes"
-    ask_yn "是否启用 HTTP/3（QUIC）？" N && h3="yes"
-    ask_yn "是否启用 WebSocket 支持？" N && ws="yes"
+    ask proxy_pass "$(t nginx.ask.proxy_pass)"
+    ask_yn "$(t nginx.ask.tls)" Y && tls="yes"
+    ask_yn "$(t nginx.ask.h3)" N && h3="yes"
+    ask_yn "$(t nginx.ask.ws)" N && ws="yes"
 
     local conf_file="$NGINX_HTTP_D/${domain}.conf"
 
@@ -423,14 +423,14 @@ add_site() {
     if [[ "$tls" == "yes" ]]; then
         source "$LIB_DIR/cert.sh"
         cert_ensure_domain "$domain" || {
-            log_warn "取消——无有效证书无法启用 HTTPS。"
+            log_warn "$(t nginx.cancel.no_cert_https)"
             return 1
         }
         local cert_dir="$NGINX_SSL_DIR/$domain"
         mkdir -p "$cert_dir"
         tls_listen="listen 127.0.0.1:8443 ssl http2;"
         tls_block="    ssl_certificate     $cert_dir/fullchain.pem;\n    ssl_certificate_key $cert_dir/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;"
-        [[ "$h3" == "yes" ]] && log_warn "PSM SNI 复用模式下不支持 HTTP/3。"
+        [[ "$h3" == "yes" ]] && log_warn "$(t nginx.h3.unsupported_sni)"
     else
         tls_listen="listen 80;\nlisten [::]:80;"
     fi
@@ -463,18 +463,18 @@ EOF
     [[ "$tls" == "yes" ]] && _sni_add_entry "$domain" "127.0.0.1:8443"
 
     nginx_test_reload
-    log_ok "站点已创建：$conf_file"
+    log_ok "$(t nginx.site.created "$conf_file")"
 }
 
 _ensure_camouflage_webroot() {
     local webroot="/var/www/psm-camouflage"
     mkdir -p "$webroot"
     [[ -f "$webroot/index.html" ]] && return 0
-    cat > "$webroot/index.html" <<'HTML'
+    cat > "$webroot/index.html" <<HTML
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="$(t nginx.camouflage.html_lang)">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>服务维护中</title>
+<title>$(t nginx.camouflage.title)</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f5f5;color:#333;min-height:100vh;display:flex;align-items:center;justify-content:center}
@@ -485,8 +485,8 @@ _ensure_camouflage_webroot() {
 </head>
 <body>
 <div class="card">
-  <h1>服务维护中</h1>
-  <p>我们正在进行计划维护，服务即将恢复。感谢您的耐心等待。</p>
+  <h1>$(t nginx.camouflage.title)</h1>
+  <p>$(t nginx.camouflage.body)</p>
 </div>
 </body>
 </html>
@@ -516,7 +516,7 @@ server {
 }
 EOF
     nginx_test_reload
-    log_ok "HTTP 伪装站点已就绪：127.0.0.1:8080 → $domain（Xray fallback 目标）"
+    log_ok "$(t nginx.camouflage.http_ready "$domain")"
 }
 
 # HTTPS camouflage site on 127.0.0.1:8443
@@ -527,7 +527,7 @@ nginx_setup_camouflage_site() {
     nginx_ensure_local_http || return 1
 
     [[ -f "$cert_dir/fullchain.pem" ]] || {
-        log_warn "未找到 $domain 的证书，跳过伪装站点。"
+        log_warn "$(t nginx.camouflage.cert_missing "$domain")"
         return 1
     }
 
@@ -563,36 +563,36 @@ server {
 EOF
 
     nginx_test_reload
-    log_ok "HTTPS 伪装站点已就绪：127.0.0.1:8443 → $domain（含有效证书）"
+    log_ok "$(t nginx.camouflage.https_ready "$domain")"
 }
 
 delete_site() {
     list_sites
     local domain
-    ask domain "要删除的域名"
+    ask domain "$(t nginx.ask.delete_domain)"
     rm -f "$NGINX_HTTP_D/${domain}.conf"
     _sni_remove_entry "$domain" 2>/dev/null
     nginx_test_reload
-    log_ok "站点 $domain 已删除。"
+    log_ok "$(t nginx.site.deleted "$domain")"
 }
 
 modify_site_upstream() {
     list_sites
     local domain new_upstream
-    ask domain "要修改的域名"
+    ask domain "$(t nginx.ask.modify_domain)"
     local conf="$NGINX_HTTP_D/${domain}.conf"
-    [[ -f "$conf" ]] || { log_error "未找到：$conf"; return 1; }
+    [[ -f "$conf" ]] || { log_error "$(t nginx.not_found "$conf")"; return 1; }
     local cur; cur=$(grep "proxy_pass" "$conf" | awk '{print $2}' | tr -d ';')
-    log_info "当前上游：$cur"
-    ask new_upstream "新上游地址"
+    log_info "$(t nginx.current_upstream "$cur")"
+    ask new_upstream "$(t nginx.ask.new_upstream)"
     sed -i "s|proxy_pass .*;|proxy_pass http://${new_upstream};|" "$conf"
     nginx_test_reload
 }
 
 # ── View logs ─────────────────────────────────────────────────────────────────
 nginx_logs() {
-    echo -e "\n  1. 访问日志\n  2. 错误日志\n  3. Stream 日志\n  4. Stream 错误日志"
-    read -rp "$(echo -e "${CYAN}请选择: ${NC}")" lc
+    echo -e "$(t nginx.logs.menu)"
+    read -rp "$(echo -e "${CYAN}$(t common.select)${NC}")" lc
     case "$lc" in
         1) tail -f /var/log/nginx/access.log ;;
         2) tail -f /var/log/nginx/error.log ;;
@@ -604,31 +604,31 @@ nginx_logs() {
 # ── Dependency check ─────────────────────────────────────────────────────────
 _nginx_check_deps() {
     is_installed nginx && return 0
-    log_warn "Nginx 未安装。"
-    ask_yn "是否现在安装 Nginx？" Y \
+    log_warn "$(t nginx.not_installed)"
+    ask_yn "$(t nginx.ask_install_now)" Y \
         && nginx_install \
-        || { log_error "需要 Nginx。"; return 1; }
+        || { log_error "$(t nginx.required)"; return 1; }
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────
 nginx_menu() {
     _nginx_check_deps || return
     while true; do
-        show_menu "Nginx 管理" \
-            "安装" \
-            "升级" \
-            "卸载" \
-            "测试配置" \
-            "重新加载" \
-            "添加 HTTP 站点" \
-            "删除站点" \
-            "修改站点上游" \
-            "列出站点" \
-            "添加 SNI 路由条目" \
-            "删除 SNI 路由条目" \
-            "列出 SNI 路由条目" \
-            "查看日志" \
-            "服务状态"
+        show_menu "$(t nginx.menu.title)" \
+            "$(t nginx.menu.install)" \
+            "$(t nginx.menu.upgrade)" \
+            "$(t nginx.menu.uninstall)" \
+            "$(t nginx.menu.test)" \
+            "$(t nginx.menu.reload)" \
+            "$(t nginx.menu.add_site)" \
+            "$(t nginx.menu.delete_site)" \
+            "$(t nginx.menu.modify_upstream)" \
+            "$(t nginx.menu.list_sites)" \
+            "$(t nginx.menu.add_sni)" \
+            "$(t nginx.menu.delete_sni)" \
+            "$(t nginx.menu.list_sni)" \
+            "$(t nginx.menu.logs)" \
+            "$(t nginx.menu.status)"
 
         case "$MENU_CHOICE" in
             1)  nginx_install ;;

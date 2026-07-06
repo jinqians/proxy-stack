@@ -21,9 +21,9 @@ F2B_WHITELIST_FILE="$F2B_SEC_DIR/f2b_whitelist.txt"
 # ── Install ───────────────────────────────────────────────────────────────────
 f2b_install() {
     if command -v fail2ban-client &>/dev/null; then
-        log_info "fail2ban 已安装"
+        log_info "$(t security.f2b.installed)"
     else
-        log_step "正在安装 fail2ban..."
+        log_step "$(t security.f2b.installing)"
         detect_os
         # On the RHEL family fail2ban lives in EPEL — enable it the right way
         # per distro (Oracle/RHEL/Amazon each differ; see ensure_epel).
@@ -32,13 +32,13 @@ f2b_install() {
         [[ "$PKG_MGR" == "yum" ]] && ensure_epel || true
         # Install separately: batching would let a missing python3-systemd (not
         # packaged everywhere) abort the fail2ban install itself.
-        pkg_install fail2ban || { log_error "fail2ban 安装失败"; return 1; }
+        pkg_install fail2ban || { log_error "$(t security.f2b.install_fail)"; return 1; }
         # python3-systemd: required for the systemd journal backend we prefer for
         # the sshd jail — without it fail2ban falls back to reading log files
         # that may not exist on journald-only systems (e.g. Debian 12+).
         pkg_install python3-systemd 2>/dev/null \
-            || log_warn "python3-systemd 未能安装，将使用日志文件后端（journald-only 系统上 SSH 规则可能失效）"
-        log_ok "fail2ban 已安装"
+            || log_warn "$(t security.f2b.py_systemd_warn)"
+        log_ok "$(t security.f2b.installed)"
     fi
     svc_enable fail2ban
 
@@ -49,11 +49,11 @@ f2b_install() {
     # silently wedge the service (and we don't falsely report success).
     _f2b_repair_stale_configs
     if ! _f2b_start_validated; then
-        log_error "fail2ban 服务未能启动，请运行「journalctl -u fail2ban」查看详情。"
+        log_error "$(t security.f2b.service_start_fail)"
         return 1
     fi
 
-    ask_yn "是否现在配置 SSH 防爆破规则（推荐）？" Y && f2b_setup_wizard
+    ask_yn "$(t security.f2b.ask_setup_ssh)" Y && f2b_setup_wizard
 }
 
 # ── Startup safety ────────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ _f2b_repair_stale_configs() {
     for f in "$F2B_DEFAULTS_JAIL" "$F2B_JAIL_DIR"/psm-*.conf; do
         [[ -f "$f" ]] || continue
         if grep -Eq '^[[:space:]]*ignoreip[[:space:]]*=.*%\(ignoreip\)s' "$f"; then
-            log_warn "检测到旧版本残留的递归 fail2ban 配置：$(basename "$f")，正在修复..."
+            log_warn "$(t security.f2b.repair_recursive "$(basename "$f")")"
             if [[ "$f" == "$F2B_DEFAULTS_JAIL" ]]; then
                 _f2b_write_defaults_jail
             else
@@ -84,7 +84,7 @@ _f2b_quarantine_dropins() {
     local q="$dir/psm-quarantine.$(date +%Y%m%d%H%M%S)"
     mkdir -p "$q"
     mv "$dir"/psm-*.conf "$q"/ 2>/dev/null || true
-    log_warn "已将 PSM 的 fail2ban 规则备份到 ${q}"
+    log_warn "$(t security.f2b.quarantined "$q")"
 }
 
 # Start fail2ban and confirm it actually came up. If a PSM drop-in wedges the
@@ -92,17 +92,17 @@ _f2b_quarantine_dropins() {
 # — the user can then re-run the wizard to regenerate clean rules.
 _f2b_start_validated() {
     if command -v fail2ban-client &>/dev/null && ! fail2ban-client -t &>/dev/null; then
-        log_warn "fail2ban 配置校验未通过，正在隔离 PSM 规则后重试..."
+        log_warn "$(t security.f2b.config_test_retry)"
         _f2b_quarantine_dropins
     fi
     svc_start fail2ban 2>/dev/null || svc_restart fail2ban 2>/dev/null || true
     svc_is_active fail2ban && return 0
 
-    log_warn "fail2ban 启动失败，正在隔离 PSM 规则后重试..."
+    log_warn "$(t security.f2b.start_retry)"
     _f2b_quarantine_dropins
     svc_restart fail2ban 2>/dev/null || true
     if svc_is_active fail2ban; then
-        log_warn "已隔离 PSM 规则并成功启动 fail2ban；请重新运行「一键配置向导」生成规则。"
+        log_warn "$(t security.f2b.quarantine_started)"
         return 0
     fi
     return 1
@@ -159,17 +159,17 @@ _f2b_ensure_firewall_backend() {
     if _f2b_has ufw || _f2b_has firewall-cmd || _f2b_has nft || _f2b_has iptables; then
         return 0
     fi
-    log_warn "未检测到任何防火墙（ufw / firewalld / nftables / iptables）"
-    log_warn "没有防火墙后端，fail2ban 能启动但无法真正封禁 IP。"
+    log_warn "$(t security.f2b.no_firewall)"
+    log_warn "$(t security.f2b.no_backend_warn)"
 
     local fw; fw=$(_f2b_preferred_firewall)
-    ask_yn "是否安装并启用 ${fw}（本项目推荐的防火墙，会自动放行 SSH 与 443 端口）？" Y || {
-        log_warn "已跳过。fail2ban 的封禁在你安装 ufw/firewalld/nftables/iptables 之一前不会生效。"
+    ask_yn "$(t security.f2b.ask_install_firewall "$fw")" Y || {
+        log_warn "$(t security.f2b.skip_firewall)"
         return 1
     }
 
-    log_step "正在安装 ${fw}..."
-    pkg_install "$fw" 2>/dev/null || { log_error "${fw} 安装失败"; return 1; }
+    log_step "$(t security.f2b.installing_firewall "$fw")"
+    pkg_install "$fw" 2>/dev/null || { log_error "$(t security.f2b.firewall_install_fail "$fw")"; return 1; }
 
     # Before enabling a default-deny firewall, open EVERY port PSM's nodes are
     # actually using — not just SSH + 443 — or we'd cut off Reality/SS2022/
@@ -182,7 +182,7 @@ _f2b_ensure_firewall_backend() {
             ufw allow "${p}/udp" &>/dev/null || true
         done
         ufw --force enable &>/dev/null || true
-        log_ok "ufw 已安装并启用（已放行现有节点端口：${ports}）"
+        log_ok "$(t security.f2b.ufw_ready "$ports")"
         _f2b_resync_traffic_rules
         return 0
     fi
@@ -193,11 +193,11 @@ _f2b_ensure_firewall_backend() {
             firewall-cmd --permanent --add-port="${p}/udp" &>/dev/null || true
         done
         firewall-cmd --reload &>/dev/null || true
-        log_ok "firewalld 已安装并启用（已放行现有节点端口：${ports}）"
+        log_ok "$(t security.f2b.firewalld_ready "$ports")"
         _f2b_resync_traffic_rules
         return 0
     fi
-    log_error "${fw} 安装后仍不可用，请手动检查"
+    log_error "$(t security.f2b.firewall_unavailable "$fw")"
     return 1
 }
 
@@ -212,7 +212,7 @@ _f2b_resync_traffic_rules() {
     [[ -f "$CFG_DIR/traffic/state.json" ]] || return 0
     source "$LIB_DIR/traffic.sh" 2>/dev/null || return 0
     declare -f _trf_enforce &>/dev/null || return 0
-    log_step "正在重新同步流量限额的防火墙规则（traffic.sh）..."
+    log_step "$(t security.f2b.resync_traffic)"
     _trf_init            2>/dev/null || true
     _trf_ipt_restore_all 2>/dev/null || true   # accounting rules (mangle)
     _trf_enforce         2>/dev/null || true   # re-apply over-quota pause rules
@@ -266,9 +266,9 @@ f2b_configure_sshd_jail() {
     local backend; backend=$(_f2b_backend)
 
     local maxretry findtime bantime
-    ask maxretry "统计窗口内允许的最大失败次数" "5"
-    ask findtime "统计窗口（如 10m / 1h）" "10m"
-    ask bantime  "封禁时长（如 1h / 1d）" "1h"
+    ask maxretry "$(t security.f2b.ask_maxretry)" "5"
+    ask findtime "$(t security.f2b.ask_findtime)" "10m"
+    ask bantime  "$(t security.f2b.ask_bantime)" "1h"
 
     cat > "$F2B_SSHD_JAIL" <<EOF
 # Managed by PSM — 通过「安全加固 → Fail2ban」菜单重新生成，请勿手动编辑
@@ -281,7 +281,7 @@ findtime  = ${findtime}
 bantime   = ${bantime}
 banaction = ${banaction}
 EOF
-    log_ok "SSH 防爆破规则已写入（端口 ${ports}，${findtime} 内失败 ${maxretry} 次封禁 ${bantime}，banaction=${banaction}）"
+    log_ok "$(t security.f2b.ssh_rule_written "$ports" "$findtime" "$maxretry" "$bantime" "$banaction")"
 }
 
 f2b_configure_recidive_jail() {
@@ -291,14 +291,14 @@ f2b_configure_recidive_jail() {
 [recidive]
 enabled = true
 EOF
-    log_ok "惯犯（recidive）规则已启用"
+    log_ok "$(t security.f2b.recidive_enabled)"
 }
 
 f2b_reload() {
     if fail2ban-client reload &>/dev/null; then
-        log_ok "fail2ban 配置已重新加载"
+        log_ok "$(t security.f2b.reloaded)"
     else
-        log_warn "reload 失败，尝试重启服务"
+        log_warn "$(t security.f2b.reload_fail)"
         svc_restart fail2ban
     fi
 }
@@ -328,116 +328,116 @@ f2b_whitelist_add() {
     mkdir -p "$F2B_SEC_DIR"
     local suggested; suggested=$(_f2b_current_client_ip)
     local ip
-    ask ip "要加入白名单的 IP/CIDR" "${suggested:-}"
-    [[ -z "$ip" ]] && { log_warn "未输入，已取消"; return 1; }
+    ask ip "$(t security.f2b.ask_whitelist_ip)" "${suggested:-}"
+    [[ -z "$ip" ]] && { log_warn "$(t security.f2b.no_input_cancel)"; return 1; }
     touch "$F2B_WHITELIST_FILE"
     if grep -qxF "$ip" "$F2B_WHITELIST_FILE"; then
-        log_info "该 IP 已在白名单中"
+        log_info "$(t security.f2b.ip_already_whitelisted)"
         return 0
     fi
     echo "$ip" >> "$F2B_WHITELIST_FILE"
     _f2b_write_defaults_jail
     command -v fail2ban-client &>/dev/null && f2b_reload
-    log_ok "已加入白名单：$ip"
+    log_ok "$(t security.f2b.whitelist_added "$ip")"
 }
 
 f2b_whitelist_remove() {
-    [[ -s "$F2B_WHITELIST_FILE" ]] || { log_warn "白名单为空"; return 0; }
-    echo -e "\n${BOLD}当前白名单：${NC}"
+    [[ -s "$F2B_WHITELIST_FILE" ]] || { log_warn "$(t security.f2b.whitelist_empty)"; return 0; }
+    echo -e "\n${BOLD}$(t security.f2b.whitelist_title)${NC}"
     nl -ba "$F2B_WHITELIST_FILE"
-    local ip; ask ip "要移除的 IP" ""
+    local ip; ask ip "$(t security.f2b.ask_remove_ip)" ""
     [[ -z "$ip" ]] && return 0
     local tmp; tmp=$(mktemp)
     grep -vxF "$ip" "$F2B_WHITELIST_FILE" > "$tmp" && mv "$tmp" "$F2B_WHITELIST_FILE"
     _f2b_write_defaults_jail
     command -v fail2ban-client &>/dev/null && f2b_reload
-    log_ok "已移除：$ip"
+    log_ok "$(t security.f2b.removed "$ip")"
 }
 
 # ── Combined setup wizard ─────────────────────────────────────────────────────
 f2b_setup_wizard() {
-    echo -e "\n${BOLD}${BLUE}══ Fail2ban 配置向导 ══════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t security.f2b.wizard_title) ══════════════════${NC}"
     local my_ip; my_ip=$(_f2b_current_client_ip)
     if [[ -n "$my_ip" ]]; then
-        echo -e "${YELLOW}检测到你当前的连接 IP：${my_ip}${NC}"
-        ask_yn "是否将其加入白名单？（强烈建议，避免自己测试密码/密钥时被误封）" Y && {
+        echo -e "${YELLOW}$(t security.f2b.current_ip "$my_ip")${NC}"
+        ask_yn "$(t security.f2b.ask_whitelist_current)" Y && {
             mkdir -p "$F2B_SEC_DIR"; touch "$F2B_WHITELIST_FILE"
             grep -qxF "$my_ip" "$F2B_WHITELIST_FILE" || echo "$my_ip" >> "$F2B_WHITELIST_FILE"
             _f2b_write_defaults_jail
         }
     else
-        log_warn "未能自动识别当前连接 IP（可能不是通过 SSH 运行本工具），建议稍后在菜单里手动添加白名单"
+        log_warn "$(t security.f2b.no_current_ip)"
     fi
 
     f2b_configure_sshd_jail
     f2b_configure_recidive_jail
     f2b_reload
-    log_ok "Fail2ban 配置完成"
+    log_ok "$(t security.f2b.config_done)"
 }
 
 # ── Status / operations ───────────────────────────────────────────────────────
 f2b_status() {
-    echo -e "\n${BOLD}${BLUE}══ Fail2ban 状态 ══════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t security.f2b.status_title) ══════════════════════${NC}"
     if ! command -v fail2ban-client &>/dev/null; then
-        echo -e "  ${YELLOW}未安装${NC}"
+        echo -e "  ${YELLOW}$(t security.f2b.not_installed)${NC}"
         echo -e "${BOLD}${BLUE}════════════════════════════════════════${NC}"
         return 0
     fi
     if svc_is_active fail2ban; then
-        echo -e "  服务状态：${GREEN}运行中${NC}"
+        echo -e "  ${GREEN}$(t security.f2b.service_running)${NC}"
     else
-        echo -e "  服务状态：${RED}未运行${NC}"
+        echo -e "  ${RED}$(t security.f2b.service_stopped)${NC}"
     fi
 
     local jails; jails=$(fail2ban-client status 2>/dev/null | awk -F: '/Jail list/{print $2}' | tr -d '\t')
-    echo -e "  已启用规则：${jails:-（无）}"
+    echo -e "  $(t security.f2b.enabled_jails "${jails:-$(t security.f2b.no_jails)}")"
     local j
     for j in $(echo "$jails" | tr ',' ' '); do
         [[ -z "$j" ]] && continue
         local banned; banned=$(fail2ban-client status "$j" 2>/dev/null \
             | awk -F: '/Currently banned/{gsub(/ /,"",$2); print $2}')
-        echo -e "    ${CYAN}${j}${NC}：当前封禁 ${banned:-0} 个 IP"
+        echo -e "    ${CYAN}${j}${NC}: $(t security.f2b.banned_count "${banned:-0}")"
     done
     if [[ -s "$F2B_WHITELIST_FILE" ]]; then
-        echo -e "  白名单：$(tr '\n' ' ' < "$F2B_WHITELIST_FILE")"
+        echo -e "  $(t security.f2b.whitelist_line "$(tr '\n' ' ' < "$F2B_WHITELIST_FILE")")"
     fi
     echo -e "${BOLD}${BLUE}════════════════════════════════════════${NC}"
 }
 
 f2b_list_banned() {
-    local jail; ask jail "查看哪个规则的封禁详情" "sshd"
+    local jail; ask jail "$(t security.f2b.ask_jail_status)" "sshd"
     fail2ban-client status "$jail" 2>&1
 }
 
 f2b_unban() {
-    local ip; ask ip "要解封的 IP（从所有规则中解封）" ""
+    local ip; ask ip "$(t security.f2b.ask_unban_ip)" ""
     [[ -z "$ip" ]] && return 0
     fail2ban-client unban "$ip" &>/dev/null \
-        && log_ok "已解封：$ip" \
-        || log_error "解封失败（该 IP 可能当前未被封禁）"
+        && log_ok "$(t security.f2b.unbanned "$ip")" \
+        || log_error "$(t security.f2b.unban_fail)"
 }
 
 f2b_uninstall() {
-    ask_yn "确认卸载 fail2ban 防爆破规则？（会保留白名单记录，仅停用服务和规则）" N || return 0
+    ask_yn "$(t security.f2b.ask_uninstall)" N || return 0
     svc_stop fail2ban 2>/dev/null || true
     systemctl disable fail2ban --quiet 2>/dev/null || true
     rm -f "$F2B_SSHD_JAIL" "$F2B_RECIDIVE_JAIL" "$F2B_DEFAULTS_JAIL"
-    log_ok "fail2ban 已停用（程序本身未卸载，如需彻底移除请用系统包管理器）"
+    log_ok "$(t security.f2b.uninstalled)"
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────
 f2b_menu() {
     while true; do
         f2b_status
-        show_menu "Fail2ban 防爆破" \
-            "安装 / 一键配置向导（推荐）" \
-            "刷新 SSH 规则（改过 SSH 端口后执行）" \
-            "查看某规则的封禁详情" \
-            "解封 IP" \
-            "添加 IP 到白名单" \
-            "移除白名单 IP" \
-            "查看 fail2ban 日志" \
-            "停用防爆破规则"
+        show_menu "$(t security.f2b.menu.title)" \
+            "$(t security.f2b.menu.install)" \
+            "$(t security.f2b.menu.refresh_ssh)" \
+            "$(t security.f2b.menu.status_jail)" \
+            "$(t security.f2b.menu.unban)" \
+            "$(t security.f2b.menu.add_whitelist)" \
+            "$(t security.f2b.menu.remove_whitelist)" \
+            "$(t security.f2b.menu.logs)" \
+            "$(t security.f2b.menu.disable)"
 
         case "$MENU_CHOICE" in
             1) f2b_install;             press_enter ;;
@@ -445,7 +445,7 @@ f2b_menu() {
                 if command -v fail2ban-client &>/dev/null; then
                     f2b_configure_sshd_jail; f2b_reload
                 else
-                    log_warn "请先安装 fail2ban"
+                    log_warn "$(t security.f2b.install_first)"
                 fi
                 press_enter ;;
             3) f2b_list_banned;         press_enter ;;
@@ -455,7 +455,7 @@ f2b_menu() {
             7)
                 journalctl -u fail2ban -n 50 --no-pager 2>/dev/null \
                     || tail -n 50 /var/log/fail2ban.log 2>/dev/null \
-                    || log_warn "暂无日志"
+                    || log_warn "$(t security.f2b.no_logs)"
                 press_enter ;;
             8) f2b_uninstall;           press_enter ;;
             0) return ;;

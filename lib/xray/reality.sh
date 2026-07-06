@@ -118,7 +118,7 @@ _reality_sync_from_live() {
         if [[ "$nclients" == "1" ]]; then
             live_uuid=$(echo "$live" | jq -r '.settings.clients[0].id')
         elif ! echo "$live" | jq -e --arg u "$uuid" '.settings.clients[]? | select(.id == $u)' >/dev/null 2>&1; then
-            log_warn "节点 '$tag'：config.json 对应入站是多用户且不含其 UUID，无法自动同步，请通过菜单修改。"
+            log_warn "$(t xray.reality.multi_user_sync_warn "$tag")"
         fi
 
         [[ "$live_port" == "$port" && "$live_uuid" == "$uuid" ]] && continue
@@ -137,7 +137,7 @@ _reality_sync_from_live() {
     done
     if (( changed )); then
         _reality_save "$nodes"
-        log_info "检测到 config.json 中的手动修改，已同步端口/UUID 到节点存储。"
+        log_info "$(t xray.manual_sync_port_uuid)"
     fi
     return 0
 }
@@ -302,78 +302,76 @@ _reality_apply_all() {
 # ── Add node ──────────────────────────────────────────────────────────────────
 reality_add_node() {
     _reality_sync_from_live
-    log_step "正在配置 VLESS + Reality 节点..."
-    echo -e "  ${YELLOW}Reality 使用 x25519 密钥认证，本身不需要 TLS 证书。"
-    echo -e "  如果使用自己的域名，签发证书可让 Nginx 提供真实 HTTPS 伪装站点，"
-    echo -e "  这样被探测时更像正常网站。${NC}\n"
+    log_step "$(t xray.reality.adding)"
+    echo -e "  ${YELLOW}$(t xray.reality.desc1)"
+    echo -e "  $(t xray.reality.desc2)"
+    echo -e "  $(t xray.reality.desc3)${NC}\n"
 
     local tag port uuid flow server_names_raw dest
     local count; count=$(_reality_count)
     local own_domain=0 domain=""
 
-    ask tag  "节点标识"    "reality-$((count+1))"
+    ask tag  "$(t xray.ask.node_tag)" "reality-$((count+1))"
 
     # ── Domain choice: own domain or public camouflage ────────────────────────
     echo ""
-    if ask_yn "是否使用自己的域名作为 SNI？（伪装更好，需要证书）" N; then
+    if ask_yn "$(t xray.reality.ask_own_domain)" N; then
         own_domain=1
-        ask domain "你的域名（也会作为 SNI）"
-        [[ -z "$domain" ]] && { log_error "域名不能为空。"; return 1; }
+        ask domain "$(t xray.reality.ask_domain_sni)"
+        [[ -z "$domain" ]] && { log_error "$(t xray.reality.domain_empty)"; return 1; }
 
         source "$LIB_DIR/cert.sh"
         if cert_ensure_domain "$domain" \
-            "Reality 本身不需要证书。这个证书用于本机 HTTPS 伪装站点
-  (127.0.0.1:8443)，探测者连接你的服务器时会看到它。
-  如果没有证书，伪装会表现为普通 TLS 错误，较容易被识别。"; then
+            "$(t xray.reality.cert_note)"; then
             server_names_raw="$domain"
             # dest receives raw TLS stream → must be an HTTPS (TLS-capable) backend
             dest="127.0.0.1:8443"
-            log_info "伪装目标已设置为 127.0.0.1:8443（本机 HTTPS 站点）"
+            log_info "$(t xray.reality.dest_local_https)"
         else
             # 没有证书时 nginx 不会创建 8443 伪装站（见 nginx_setup_camouflage_site），
             # 若仍把 dest 指向 127.0.0.1:8443 会得到 connection refused，反而暴露。
             # 因此回退到公共域名伪装：dest 指向真实存在的外部 HTTPS 站点。
-            log_warn "无证书，本机 HTTPS 伪装站点无法建立，已回退为公共域名伪装。"
+            log_warn "$(t xray.reality.no_cert_fallback)"
             own_domain=0
             server_names_raw="$REALITY_DEFAULT_SERVER_NAME"
             dest="$REALITY_DEFAULT_DEST"
             domain="$server_names_raw"
-            log_info "伪装目标已回退为 $dest（公共域名）"
+            log_info "$(t xray.reality.dest_public_fallback "$dest")"
         fi
     else
         own_domain=0
-        if ask_yn "是否用测绘引擎发现同网络/同机房的伪装域名？" N; then
+        if ask_yn "$(t xray.reality.ask_discover_sni)" N; then
             source "$LIB_DIR/xray/sni_finder.sh"
             local _picked; _picked=$(sni_finder_pick_one) || true
             if [[ -n "$_picked" ]]; then
                 server_names_raw="${_picked%%|*}"
                 dest="${_picked#*|}"
-                log_info "已选用发现的伪装目标：SNI=${server_names_raw} dest=${dest}"
+                log_info "$(t xray.reality.picked_sni "$server_names_raw" "$dest")"
             fi
         fi
         [[ -z "$server_names_raw" ]] && \
-            ask server_names_raw "伪装 SNI（例如 www.apple.com）"     "$REALITY_DEFAULT_SERVER_NAME"
+            ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
         [[ -z "$dest" ]] && \
-            ask dest             "伪装目标（例如 www.apple.com:443）"  "$REALITY_DEFAULT_DEST"
+            ask dest             "$(t xray.reality.ask_dest)" "$REALITY_DEFAULT_DEST"
         domain="$server_names_raw"
     fi
 
-    ask uuid "UUID（留空自动生成）" ""
+    ask uuid "$(t xray.ask.uuid_auto)" ""
     [[ -z "$uuid" ]] && uuid=$(uuid_gen)
-    ask flow "Flow 参数" "xtls-rprx-vision"
+    ask flow "$(t xray.ask.flow)" "xtls-rprx-vision"
 
     # ── Nginx reverse proxy choice ────────────────────────────────────────────
     local listen_addr="" use_nginx=0 public_port="$REALITY_DEFAULT_PORT"
     local _primary_sn="" reuse_node="" reuse_sni=0
     echo ""
     if (( own_domain )); then
-        echo -e "  ${CYAN}使用自己的域名时，建议通过 Nginx 提供伪装网站。${NC}"
-        if ask_yn "是否使用 Nginx 反向代理？" Y; then
+        echo -e "  ${CYAN}$(t xray.reality.own_domain_nginx_hint)${NC}"
+        if ask_yn "$(t xray.reality.ask_nginx_proxy_short)" Y; then
             use_nginx=1; listen_addr="127.0.0.1"
         else
             use_nginx=0; listen_addr="0.0.0.0"
         fi
-    elif ask_yn "是否使用 Nginx 反向代理？（可让多个协议复用 443 端口）" N; then
+    elif ask_yn "$(t xray.ask.nginx_proxy)" N; then
         use_nginx=1; listen_addr="127.0.0.1"
     else
         use_nginx=0; listen_addr="0.0.0.0"
@@ -393,11 +391,11 @@ reality_add_node() {
         if [[ -n "$reuse_node" && "$reuse_node" != "null" ]]; then
             reuse_sni=1
             port=$(echo "$reuse_node" | jq -r '.port')
-            log_warn "SNI '$_primary_sn' 已被现有节点使用（端口 $port）"
-            log_info "新节点将共享该端口和密钥对，仅添加新 UUID 作为独立用户"
+            log_warn "$(t xray.reality.sni_reuse_warn "$_primary_sn" "$port")"
+            log_info "$(t xray.reality.sni_reuse_info)"
         else
-            ask port "本机 Xray 监听端口" "$((1443 + count))"
-            _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+            ask port "$(t xray.reality.ask_local_xray_port)" "$((1443 + count))"
+            _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
         fi
         public_port=443
     else
@@ -406,33 +404,33 @@ reality_add_node() {
         # picks a risky one anyway (e.g. 445 = SMB), warn and re-ask until they
         # give a safe port or explicitly confirm the risky one.
         while true; do
-            ask port "监听端口" "$(_reality_suggest_direct_port)"
+            ask port "$(t xray.reality.ask_listen_port)" "$(_reality_suggest_direct_port)"
             if _reality_port_is_risky "$port"; then
                 if [[ "$port" == "445" ]]; then
-                    log_warn "端口 445 是 SMB/microsoft-ds，几乎所有云厂商和 ISP 都会在上游封锁它，客户端通常完全连不上。"
+                    log_warn "$(t xray.reality.port_445_warn)"
                 else
-                    log_warn "端口 ${port} 是常见服务端口，许多云厂商/ISP 会在上游封锁或过滤它。"
+                    log_warn "$(t xray.reality.risky_port_warn "$port")"
                 fi
-                log_warn "即使实例安全组/防火墙已放行，客户端也可能无法从公网连接此端口的节点。"
-                ask_yn "仍要使用这个端口吗？" N || continue
+                log_warn "$(t xray.reality.risky_port_note)"
+                ask_yn "$(t xray.ask_use_port)" N || continue
             fi
             if _reality_port_in_use "$port"; then
-                log_warn "端口 ${port} 已被本机其它服务占用（当前正在监听）。"
-                ask_yn "仍要使用这个端口吗？" N || continue
+                log_warn "$(t xray.reality.port_in_use "$port")"
+                ask_yn "$(t xray.ask_use_port)" N || continue
             fi
             break
         done
-        _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+        _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
         public_port="$port"
     fi
 
     if (( use_nginx )); then
         source "$LIB_DIR/nginx.sh"
         if ! is_installed nginx; then
-            log_warn "Nginx 尚未安装。"
-            ask_yn "是否现在安装 Nginx？" Y \
+            log_warn "$(t xray.reality.nginx_not_installed)"
+            ask_yn "$(t xray.ask_install_nginx)" Y \
                 && nginx_install \
-                || { log_error "反向代理模式需要 Nginx。"; return 1; }
+                || { log_error "$(t xray.proxy_need_nginx)"; return 1; }
         fi
         # Always update the SNI entry. When reuse_sni=1, $port is the shared port
         # of the existing node — this also fixes any stale entry that pointed to a
@@ -444,7 +442,7 @@ reality_add_node() {
         fi
         if (( own_domain )); then
             nginx_setup_camouflage_site "$domain" \
-                || log_warn "HTTPS 伪装站点未启用，但 Reality 节点会继续安装。"
+                || log_warn "$(t xray.reality.camouflage_not_enabled)"
         fi
     fi
 
@@ -454,17 +452,17 @@ reality_add_node() {
         # Clients connecting with any UUID under this inbound use the same public key.
         REALITY_PRIVATE_KEY=$(echo "$reuse_node" | jq -r '.private_key')
         REALITY_PUBLIC_KEY=$(echo "$reuse_node"  | jq -r '.public_key')
-        log_info "复用密钥对 → 公钥：$REALITY_PUBLIC_KEY"
+        log_info "$(t xray.reality.reuse_key "$REALITY_PUBLIC_KEY")"
     else
-        log_step "正在生成 x25519 密钥对..."
+        log_step "$(t xray.reality.generating_keys)"
         _reality_gen_keys
     fi
     local short_id; short_id=$(_reality_gen_shortid)
     local server_name; server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
 
-    log_info "私钥 Private Key : $REALITY_PRIVATE_KEY"
-    log_info "公钥 Public Key  : $REALITY_PUBLIC_KEY"
-    log_info "短 ID Short ID   : $short_id"
+    log_info "$(t xray.reality.private_key "$REALITY_PRIVATE_KEY")"
+    log_info "$(t xray.reality.public_key "$REALITY_PUBLIC_KEY")"
+    log_info "$(t xray.reality.short_id "$short_id")"
     log_info "UUID        : $uuid"
 
     local node_json
@@ -500,10 +498,10 @@ reality_add_node() {
     _reality_apply_all
 
     echo ""
-    log_ok "Reality 节点 '$tag' → ${listen_addr}:${port}"
+    log_ok "$(t xray.reality.added "$tag" "$listen_addr" "$port")"
 
     if (( use_nginx == 0 )); then
-        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$port" "tcp"
         }
@@ -516,10 +514,10 @@ reality_add_node() {
 # ── Delete node ───────────────────────────────────────────────────────────────
 reality_delete_node() {
     _show_node_list
-    local tag; ask tag "要删除的节点标识"
+    local tag; ask tag "$(t xray.ask.delete_node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到：$tag"; return 1; }
-    ask_yn "确认删除节点 '$tag'？" N || return 0
+    [[ -z "$node" ]] && { log_error "$(t xray.not_found "$tag")"; return 1; }
+    ask_yn "$(t xray.ask.delete_node "$tag")" N || return 0
 
     # Clean up the Nginx SNI entry added when this node was created
     local listen_addr; listen_addr=$(echo "$node" | jq -r '.listen_addr // "0.0.0.0"')
@@ -534,29 +532,29 @@ reality_delete_node() {
     if [[ -f "${CFG_DIR}/traffic/state.json" ]]; then
         source "$LIB_DIR/traffic.sh"; _trf_init; _trf_cleanup_node "$tag"
     fi
-    log_ok "节点 '$tag' 已删除。"
+    log_ok "$(t xray.reality.deleted "$tag")"
 }
 
 # ── Modify helpers ────────────────────────────────────────────────────────────
 reality_modify_uuid() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
-    local new_uuid; ask new_uuid "新 UUID（留空自动生成）" ""
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+    local new_uuid; ask new_uuid "$(t xray.ask.uuid_auto)" ""
     [[ -z "$new_uuid" ]] && new_uuid=$(uuid_gen)
     node=$(echo "$node" | jq --arg v "$new_uuid" '.uuid = $v')
     _reality_upsert "$node"
     _reality_apply_all
-    log_ok "UUID 已更新：$new_uuid"
+    log_ok "$(t xray.uuid_updated_value "$new_uuid")"
 }
 
 reality_modify_port() {
     _reality_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
 
     local old_port listen sn
     old_port=$(echo "$node" | jq -r '.port')
@@ -565,31 +563,31 @@ reality_modify_port() {
 
     local port
     if [[ "$listen" == "127.0.0.1" ]]; then
-        log_info "该节点经 Nginx 反代（公网端口保持 443），修改的是本机 Xray 监听端口。"
-        ask port "新的本机 Xray 监听端口" "$old_port"
-        [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+        log_info "$(t xray.nginx_proxy_port_note)"
+        ask port "$(t xray.reality.ask_new_local_port)" "$old_port"
+        [[ "$port" == "$old_port" ]] && { log_info "$(t xray.port_unchanged)"; return 0; }
         if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-            log_error "无效端口"; return 1
+            log_error "$(t xray.invalid_port_short)"; return 1
         fi
-        _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+        _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
     else
         while true; do
-            ask port "新的监听端口" "$(_reality_suggest_direct_port)"
-            [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+            ask port "$(t xray.reality.ask_new_listen_port)" "$(_reality_suggest_direct_port)"
+            [[ "$port" == "$old_port" ]] && { log_info "$(t xray.port_unchanged)"; return 0; }
             if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-                log_error "无效端口"; continue
+                log_error "$(t xray.invalid_port_short)"; continue
             fi
             if _reality_port_is_risky "$port"; then
-                log_warn "端口 ${port} 是常见服务端口，许多云厂商/ISP 会在上游封锁或过滤它。"
-                ask_yn "仍要使用这个端口吗？" N || continue
+                log_warn "$(t xray.reality.risky_port_warn "$port")"
+                ask_yn "$(t xray.ask_use_port)" N || continue
             fi
             if _reality_port_in_use "$port"; then
-                log_warn "端口 ${port} 已被本机其它服务占用（当前正在监听）。"
-                ask_yn "仍要使用这个端口吗？" N || continue
+                log_warn "$(t xray.reality.port_in_use "$port")"
+                ask_yn "$(t xray.ask_use_port)" N || continue
             fi
             break
         done
-        _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+        _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
     fi
 
     # 同端口+同 SNI 的节点共享一个入站（同一密钥对，仅 UUID 不同），必须整组迁移，
@@ -616,22 +614,22 @@ reality_modify_port() {
     fi
 
     _reality_apply_all
-    log_ok "节点 '$tag' 端口已更新：${old_port} → ${port}"
+    log_ok "$(t xray.port_updated "$tag" "$old_port" "$port")"
 
     if [[ "$listen" != "127.0.0.1" ]]; then
-        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$port" "tcp"
         }
-        log_info "原端口 ${old_port}/tcp 若已在防火墙放行，不再使用时请手动关闭。"
+        log_info "$(t xray.old_port_note "$old_port")"
     fi
 }
 
 reality_rotate_keys() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     _reality_gen_keys
     node=$(echo "$node" | jq \
         --arg k "$REALITY_PRIVATE_KEY" \
@@ -639,68 +637,68 @@ reality_rotate_keys() {
         '.private_key=$k | .public_key=$p')
     _reality_upsert "$node"
     _reality_apply_all
-    log_ok "密钥已轮换。新公钥：$REALITY_PUBLIC_KEY"
+    log_ok "$(t xray.reality.key_rotated "$REALITY_PUBLIC_KEY")"
 }
 
 reality_rotate_shortid() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     local sid; sid=$(_reality_gen_shortid)
     node=$(echo "$node" | jq --argjson s "[\"$sid\"]" '.short_ids = $s')
     _reality_upsert "$node"
     _reality_apply_all
-    log_ok "Short ID 已更新：$sid"
+    log_ok "$(t xray.reality.shortid_updated "$sid")"
 }
 
 reality_modify_servername() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
-    local sn; ask sn "新的伪装 SNI（多个用逗号分隔）"
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+    local sn; ask sn "$(t xray.reality.ask_new_sni)"
     local primary; primary=$(echo "$sn" | cut -d',' -f1 | tr -d ' ')
     node=$(echo "$node" | jq --arg v "$sn" --arg p "$primary" \
         '.server_names_raw=$v | .server_name=$p')
     _reality_upsert "$node"
     _reality_apply_all
-    log_ok "伪装 SNI 已更新。"
+    log_ok "$(t xray.reality.sni_updated)"
 }
 
 reality_modify_dest() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
-    local dest; ask dest "新的伪装目标（例如 www.apple.com:443）"
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+    local dest; ask dest "$(t xray.reality.ask_new_dest)"
     node=$(echo "$node" | jq --arg v "$dest" '.dest = $v')
     _reality_upsert "$node"
     _reality_apply_all
-    log_ok "伪装目标已更新。"
+    log_ok "$(t xray.reality.dest_updated)"
 }
 
 reality_modify_flow() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     echo -e "  1. xtls-rprx-vision\n  2. (none)"
-    read -rp "$(echo -e "${CYAN}Flow 选项: ${NC}")" fc
+    read -rp "$(echo -e "${CYAN}$(t xray.reality.ask_flow)${NC}")" fc
     local flow; [[ "$fc" == "2" ]] && flow="" || flow="xtls-rprx-vision"
     node=$(echo "$node" | jq --arg v "$flow" '.flow = $v')
     _reality_upsert "$node"
     _reality_apply_all
-    log_ok "Flow 已更新。"
+    log_ok "$(t xray.reality.flow_updated)"
 }
 
 # ── Export / share ────────────────────────────────────────────────────────────
 reality_show_uri() {
     local tag="$1"
     _reality_sync_from_live
-    [[ -z "$tag" ]] && { _show_node_list; ask tag "节点标识"; }
+    [[ -z "$tag" ]] && { _show_node_list; ask tag "$(t xray.ask.node_tag)"; }
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到：$tag"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.not_found "$tag")"; return 1; }
 
     local uuid;        uuid=$(echo "$node"        | jq -r '.uuid')
     local pub_key;     pub_key=$(echo "$node"     | jq -r '.public_key')
@@ -716,8 +714,8 @@ reality_show_uri() {
     printf "  %-14s %s\n" "UUID:"        "$uuid"
     printf "  %-14s %s\n" "Public Key:"  "$pub_key"
     printf "  %-14s %s\n" "Short ID:"    "$short_id"
-    printf "  %-14s %s\n" "本机端口:"    "$port"
-    printf "  %-14s %s\n" "公网端口:"    "$public_port"
+    printf "  %-14s %s\n" "$(t xray.reality.local_port_label)" "$port"
+    printf "  %-14s %s\n" "$(t xray.reality.public_port_label)" "$public_port"
     printf "  %-14s %s\n" "SNI:"         "$server_name"
     printf "  %-14s %s\n" "Flow:"        "$flow"
     echo ""
@@ -727,7 +725,7 @@ reality_show_uri() {
 
     if [[ -n "$ipv4" ]]; then
         local uri_v4="vless://${uuid}@${ipv4}:${public_port}?encryption=none&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&type=tcp#PSM-${tag}-v4"
-        echo -e "${BOLD}${GREEN}IPv4 链接:${NC}"
+        echo -e "${BOLD}${GREEN}$(t xray.reality.ipv4_link)${NC}"
         echo "  $uri_v4"
         echo ""
         command -v qrencode &>/dev/null && echo "$uri_v4" | qrencode -t ANSIUTF8 2>/dev/null || true
@@ -735,7 +733,7 @@ reality_show_uri() {
 
     if [[ -n "$ipv6" ]]; then
         local uri_v6="vless://${uuid}@[${ipv6}]:${public_port}?encryption=none&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&type=tcp#PSM-${tag}-v6"
-        echo -e "${BOLD}${GREEN}IPv6 链接:${NC}"
+        echo -e "${BOLD}${GREEN}$(t xray.reality.ipv6_link)${NC}"
         echo "  $uri_v6"
         echo ""
         command -v qrencode &>/dev/null && echo "$uri_v6" | qrencode -t ANSIUTF8 2>/dev/null || true
@@ -745,9 +743,9 @@ reality_show_uri() {
 reality_export_clash() {
     _reality_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
 
     local uuid;        uuid=$(echo "$node"        | jq -r '.uuid')
     local pub_key;     pub_key=$(echo "$node"     | jq -r '.public_key')
@@ -757,7 +755,7 @@ reality_export_clash() {
     local port;        port=$(echo "$node"        | jq -r '.public_port // (if (.listen_addr // "") == "127.0.0.1" then 443 else .port end)')
     local ip;          ip=$(get_ipv4)
 
-    echo -e "\n${BOLD}${GREEN}── Clash Meta 配置 ──${NC}"
+    echo -e "\n${BOLD}${GREEN}$(t xray.reality.clash_title)${NC}"
     cat <<EOF
 proxies:
   - name: PSM-${tag}
@@ -780,9 +778,9 @@ EOF
 reality_export_singbox() {
     _reality_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
 
     local uuid;        uuid=$(echo "$node"        | jq -r '.uuid')
     local pub_key;     pub_key=$(echo "$node"     | jq -r '.public_key')
@@ -792,7 +790,7 @@ reality_export_singbox() {
     local port;        port=$(echo "$node"        | jq -r '.public_port // (if (.listen_addr // "") == "127.0.0.1" then 443 else .port end)')
     local ip;          ip=$(get_ipv4)
 
-    echo -e "\n${BOLD}${GREEN}── Sing-box 出站配置 ──${NC}"
+    echo -e "\n${BOLD}${GREEN}$(t xray.reality.singbox_title)${NC}"
     jq -n \
         --arg tag "$tag" --arg ip "$ip" --arg uuid "$uuid" \
         --arg flow "$flow" --arg pub_key "$pub_key" \
@@ -822,10 +820,10 @@ reality_export_singbox() {
 _show_node_list() {
     local nodes; nodes=$(_reality_list)
     if [[ -z "$nodes" ]]; then
-        log_warn "尚未配置 Reality 节点。"
+        log_warn "$(t xray.reality.no_nodes)"
     else
-        echo -e "\n${BOLD}Reality 节点:${NC}"
-        printf "  %-20s %-6s %-15s %s\n" "标识" "端口" "监听" "SNI"
+        echo -e "\n${BOLD}$(t xray.reality.nodes_title)${NC}"
+        printf "  %-20s %-6s %-15s %s\n" "$(t xray.header.tag)" "$(t xray.header.port)" "$(t xray.header.listen)" "SNI"
         echo "$nodes" | while IFS=$'\t' read -r tag port listen sn; do
             printf "  %-20s %-6s %-15s %s\n" "$tag" "$port" "$listen" "$sn"
         done
@@ -835,9 +833,9 @@ _show_node_list() {
 reality_show_config() {
     _reality_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     echo "$node" | jq .
 }
 
@@ -845,10 +843,10 @@ reality_show_config() {
 _reality_check_deps() {
     ensure_pkg_deps jq openssl qrencode
     if [[ ! -f "$XRAY_BIN" ]]; then
-        log_warn "Xray 尚未安装。"
-        ask_yn "是否现在安装 Xray？" Y \
+        log_warn "$(t xray.need_install)"
+        ask_yn "$(t xray.ask_install_xray)" Y \
             && xray_install \
-            || { log_error "Reality 需要 Xray。"; return 1; }
+            || { log_error "$(t xray.reality.need_xray)"; return 1; }
     fi
 }
 
@@ -859,22 +857,22 @@ reality_menu() {
         # 每轮菜单前同步一次，避免任何走 _reality_apply_all 的操作
         # 用过期的节点存储覆盖 config.json 中的手动修改。
         _reality_sync_from_live
-        show_menu "Reality 管理" \
-            "添加节点" \
-            "删除节点" \
-            "修改 UUID" \
-            "修改端口" \
-            "轮换密钥（私钥 / 公钥）" \
-            "轮换 Short ID" \
-            "修改伪装 SNI" \
-            "修改 Flow" \
-            "修改伪装目标" \
-            "显示 URI / 二维码" \
-            "导出 Clash Meta" \
-            "导出 Sing-box" \
-            "显示节点配置（JSON）" \
-            "列出节点" \
-            "多目标自动测活切换（抗封锁）"
+        show_menu "$(t xray.reality.menu.title)" \
+            "$(t xray.reality.menu.add)" \
+            "$(t xray.reality.menu.delete)" \
+            "$(t xray.reality.menu.uuid)" \
+            "$(t xray.reality.menu.port)" \
+            "$(t xray.reality.menu.rotate_key)" \
+            "$(t xray.reality.menu.shortid)" \
+            "$(t xray.reality.menu.sni)" \
+            "$(t xray.reality.menu.flow)" \
+            "$(t xray.reality.menu.dest)" \
+            "$(t xray.reality.menu.uri)" \
+            "$(t xray.reality.menu.clash)" \
+            "$(t xray.reality.menu.singbox)" \
+            "$(t xray.reality.menu.config)" \
+            "$(t xray.reality.menu.list)" \
+            "$(t xray.reality.menu.watchdog)"
 
         case "$MENU_CHOICE" in
             1)  reality_add_node ;;

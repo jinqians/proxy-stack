@@ -86,7 +86,7 @@ _route_apply_to_xray() {
     if ! jq '(.routing.rules) //= []
              | del(.routing.rules[] | select((.outboundTag // "") | startswith("out-")))' \
              "$XRAY_CFG" > "$tmp"; then
-        log_error "读取 Xray 路由配置失败，已放弃写入（保留原配置）。"; rm -f "$tmp"; return 1
+        log_error "$(t xray.routing.read_fail)"; rm -f "$tmp"; return 1
     fi
 
     # Set domainStrategy if any geosite/domain rules exist
@@ -119,7 +119,7 @@ _route_apply_to_xray() {
             + $pr
             + [.routing.rules[]? | select(.outboundTag != "api")]
     ' "$tmp" > "$tmp2"; then
-        log_error "生成 Xray 路由规则失败，已放弃写入（保留原配置）。"; rm -f "$tmp" "$tmp2"; return 1
+        log_error "$(t xray.routing.gen_fail)"; rm -f "$tmp" "$tmp2"; return 1
     fi
     rm -f "$tmp"
     _xray_write_cfg_checked "$tmp2"
@@ -132,15 +132,15 @@ route_add_wizard() {
     # Must have at least one outbound
     local ob_count; ob_count=$(_outb_count)
     if (( ob_count == 0 )); then
-        log_error "请先在「出站节点管理」中添加至少一个出站节点"
+        log_error "$(t xray.routing.need_outbound)"
         return
     fi
 
-    echo -e "\n${BOLD}添加路由规则${NC}"
+    echo -e "\n${BOLD}$(t xray.routing.add_title)${NC}"
 
     # Pick outbound
     echo ""
-    echo "  可用出站节点："
+    echo "  $(t xray.routing.available_outbounds)"
     local ob_tags=() ob_i=0
     while IFS=$'\t' read -r tag proto addr remark; do
         ob_i=$((ob_i+1)); ob_tags+=("$tag")
@@ -148,22 +148,22 @@ route_add_wizard() {
     done < <(_outb_list)
     echo ""
     local ob_sel
-    read -rp "$(echo -e "${CYAN}选择出站节点（流量目标）: ${NC}")" ob_sel
+    read -rp "$(echo -e "${CYAN}$(t xray.routing.ask_outbound)${NC}")" ob_sel
     if ! [[ "$ob_sel" =~ ^[0-9]+$ ]] || (( ob_sel < 1 || ob_sel > ob_i )); then
-        log_warn "无效选项"; return; fi
+        log_warn "$(t xray.invalid_option)"; return; fi
     local outbound_tag="${ob_tags[$((ob_sel-1))]}"
 
     # Pick rule type
     echo ""
-    echo "  规则类型："
-    echo "    1. GeoSite（按网站类别，如 netflix / openai / geolocation-!cn）"
-    echo "    2. GeoIP  （按目标 IP 地区，如 us / jp / hk）"
-    echo "    3. 域名   （精确/通配，逗号分隔，如 openai.com,chatgpt.com）"
-    echo "    4. IP/CIDR（逗号分隔，如 1.2.3.0/24,5.6.7.8）"
-    echo "    5. 入站标签（指定某个节点的流量，如 reality-abc）"
+    echo "  $(t xray.routing.type_title)"
+    echo "    $(t xray.routing.type1)"
+    echo "    $(t xray.routing.type2)"
+    echo "    $(t xray.routing.type3)"
+    echo "    $(t xray.routing.type4)"
+    echo "    $(t xray.routing.type5)"
     echo ""
     local rt_sel
-    read -rp "$(echo -e "${CYAN}选择规则类型 [1]: ${NC}")" rt_sel
+    read -rp "$(echo -e "${CYAN}$(t xray.routing.ask_type)${NC}")" rt_sel
     rt_sel="${rt_sel:-1}"
 
     local rule_type value remark
@@ -171,42 +171,42 @@ route_add_wizard() {
     1)
         rule_type="geosite"
         echo ""
-        echo "  常用 GeoSite 分类（可逗号分隔多个）："
+        echo "  $(t xray.routing.geosite_common)"
         echo "    netflix  openai  google  telegram  twitter  youtube"
-        echo "    geolocation-!cn（所有非中国大陆域名）"
-        ask value  "GeoSite 值" "netflix"
-        ask remark "备注"       "${value} → ${outbound_tag}"
+        echo "    $(t xray.routing.geosite_noncn)"
+        ask value  "$(t xray.routing.ask_geosite)" "netflix"
+        ask remark "$(t xray.routing.ask_remark)" "${value} → ${outbound_tag}"
         ;;
     2)
         rule_type="geoip"
         echo ""
-        echo "  常用 GeoIP 代码（可逗号分隔多个）："
+        echo "  $(t xray.routing.geoip_common)"
         echo "    us  jp  hk  sg  gb  de  kr  tw  au"
-        ask value  "GeoIP 代码" "us"
-        ask remark "备注"       "GeoIP:${value} → ${outbound_tag}"
+        ask value  "$(t xray.routing.ask_geoip)" "us"
+        ask remark "$(t xray.routing.ask_remark)" "GeoIP:${value} → ${outbound_tag}"
         ;;
     3)
         rule_type="domain"
-        ask value  "域名列表（逗号分隔）" ""
-        ask remark "备注" "${value} → ${outbound_tag}"
-        [[ -z "$value" ]] && { log_error "域名不能为空"; return 1; }
+        ask value  "$(t xray.routing.ask_domains)" ""
+        ask remark "$(t xray.routing.ask_remark)" "${value} → ${outbound_tag}"
+        [[ -z "$value" ]] && { log_error "$(t xray.routing.domain_empty)"; return 1; }
         ;;
     4)
         rule_type="ip"
-        ask value  "IP/CIDR 列表（逗号分隔）" ""
-        ask remark "备注" "IP:${value} → ${outbound_tag}"
-        [[ -z "$value" ]] && { log_error "IP 不能为空"; return 1; }
+        ask value  "$(t xray.routing.ask_ipcidr)" ""
+        ask remark "$(t xray.routing.ask_remark)" "IP:${value} → ${outbound_tag}"
+        [[ -z "$value" ]] && { log_error "$(t xray.routing.ip_empty)"; return 1; }
         ;;
     5)
         rule_type="inbound"
         echo ""
-        echo "  提示：入站标签可在 Xray「列出入站配置」中查看"
-        ask value  "入站标签（逗号分隔）" ""
-        ask remark "备注" "inbound:${value} → ${outbound_tag}"
-        [[ -z "$value" ]] && { log_error "入站标签不能为空"; return 1; }
+        echo "  $(t xray.routing.inbound_hint)"
+        ask value  "$(t xray.routing.ask_inbound)" ""
+        ask remark "$(t xray.routing.ask_remark)" "inbound:${value} → ${outbound_tag}"
+        [[ -z "$value" ]] && { log_error "$(t xray.routing.inbound_empty)"; return 1; }
         ;;
     *)
-        log_warn "无效选项"; return ;;
+        log_warn "$(t xray.invalid_option)"; return ;;
     esac
 
     local id; id=$(_route_next_id)
@@ -220,15 +220,15 @@ route_add_wizard() {
     _route_save "$rules"
     _route_apply_to_xray
     xray_test_restart   # config on disk is useless until Xray reloads it
-    log_ok "路由规则已添加：${remark}"
+    log_ok "$(t xray.routing.added "$remark")"
 }
 
 # ── Interactive: delete rule ──────────────────────────────────────────────────
 route_delete() {
     local count; count=$(_route_count)
-    (( count == 0 )) && { log_warn "没有自定义路由规则"; return; }
+    (( count == 0 )) && { log_warn "$(t xray.routing.no_rules)"; return; }
 
-    echo -e "\n${BOLD}删除路由规则${NC}"
+    echo -e "\n${BOLD}$(t xray.routing.delete_title)${NC}"
     local rules; rules=$(_route_load)
     local ids_arr=() i=0
     while IFS= read -r entry; do
@@ -245,26 +245,26 @@ route_delete() {
     done < <(echo "$rules" | jq -c '.[]')
 
     local sel
-    read -rp "$(echo -e "${CYAN}选择序号（0=取消）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t xray.select_index_cancel)${NC}")" sel
     [[ -z "$sel" || "$sel" == "0" ]] && return
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项"; return; fi
+        log_warn "$(t xray.invalid_option)"; return; fi
 
     local del_id="${ids_arr[$((sel-1))]}"
     local new_rules; new_rules=$(echo "$rules" | jq "del(.[] | select(.id == \"$del_id\"))")
     _route_save "$new_rules"
     _route_apply_to_xray
     xray_test_restart
-    log_ok "路由规则 ${del_id} 已删除"
+    log_ok "$(t xray.routing.deleted "$del_id")"
 }
 
 # ── Display ───────────────────────────────────────────────────────────────────
 route_show() {
     local count; count=$(_route_count)
-    echo -e "\n${BOLD}${BLUE}══ 路由分流规则 ════════════════════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}$(t xray.routing.list_title)${NC}"
     if (( count == 0 )); then
-        echo -e "  ${YELLOW}尚未配置路由规则${NC}"
-        echo -e "  提示：先添加出站节点，再添加路由规则，Xray 将按规则把流量转发到对应出站。"
+        echo -e "  ${YELLOW}$(t xray.routing.none)${NC}"
+        echo -e "  $(t xray.routing.hint)"
     else
         local rules; rules=$(_route_load)
         local i=0
@@ -286,16 +286,16 @@ route_show() {
 route_menu() {
     _xray_require_installed || return
     while true; do
-        show_menu "路由分流管理" \
-            "查看路由规则" \
-            "添加路由规则" \
-            "删除路由规则" \
-            "── 出站节点 ──" \
-            "查看出站节点" \
-            "添加出站节点" \
-            "删除出站节点" \
-            "── WARP 解锁 ──" \
-            "WARP 解锁出站（Netflix / OpenAI 等）"
+        show_menu "$(t xray.routing.menu.title)" \
+            "$(t xray.routing.menu.view)" \
+            "$(t xray.routing.menu.add)" \
+            "$(t xray.routing.menu.delete)" \
+            "$(t xray.routing.menu.outbound_sep)" \
+            "$(t xray.outbound.menu.view)" \
+            "$(t xray.outbound.menu.add)" \
+            "$(t xray.outbound.menu.delete)" \
+            "$(t xray.routing.menu.warp_sep)" \
+            "$(t xray.routing.menu.warp)"
 
         case "$MENU_CHOICE" in
             1) route_show;      press_enter ;;

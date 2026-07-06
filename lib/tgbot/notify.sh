@@ -72,14 +72,7 @@ tg_notify_traffic_warn() {
     local used_h limit_h
     used_h=$(declare -f _fmt_bytes &>/dev/null && _fmt_bytes "$used" || echo "${used} B")
     limit_h=$(declare -f _fmt_bytes &>/dev/null && _fmt_bytes "$limit" || echo "${limit} B")
-    tg_send "$uid" "$(printf \
-'⚠️ *流量预警*
-
-您的节点（端口 `%s`）流量已用 *%d%%*
-📊 已用：%s　／　上限：%s
-
-请及时联系管理员续费，避免服务中断。' \
-        "$port" "$pct" "$used_h" "$limit_h")"
+    tg_send "$uid" "$(t tgbot.notify.traffic_warn "$port" "$pct" "$used_h" "$limit_h")"
 }
 
 # Service-paused notification to the tenant bound to <port>.
@@ -91,12 +84,5 @@ tg_notify_traffic_paused() {
     local used_h limit_h
     used_h=$(declare -f _fmt_bytes &>/dev/null && _fmt_bytes "$used" || echo "${used} B")
     limit_h=$(declare -f _fmt_bytes &>/dev/null && _fmt_bytes "$limit" || echo "${limit} B")
-    tg_send "$uid" "$(printf \
-'🚫 *服务已暂停*
-
-您的节点（端口 `%s`）流量已耗尽
-📊 已用：%s　／　上限：%s
-
-请联系管理员重置配额后方可恢复使用。' \
-        "$port" "$used_h" "$limit_h")"
+    tg_send "$uid" "$(t tgbot.notify.traffic_paused "$port" "$used_h" "$limit_h")"
 }

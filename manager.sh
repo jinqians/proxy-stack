@@ -65,7 +65,7 @@ _auto_update() {
     [[ -d "$PSM_ROOT/.git" ]] || return 0
     local before
     before=$(git -C "$PSM_ROOT" rev-parse HEAD 2>/dev/null) || return 0
-    log_step "正在检查 PSM 更新..."
+    log_step "$(t mgr.update.checking)"
     # Discard any local modifications to script files before pulling.
     # User data lives in /etc/psm/, not in the git repo, so dropping
     # uncommitted changes to scripts is always safe.
@@ -74,7 +74,7 @@ _auto_update() {
     local after
     after=$(git -C "$PSM_ROOT" rev-parse HEAD 2>/dev/null) || return 0
     [[ "$before" == "$after" ]] && return 0
-    log_ok "PSM 已更新，正在重启..."
+    log_ok "$(t mgr.update.restarting)"
     chmod +x "$PSM_ROOT"/*.sh "$LIB_DIR"/*.sh 2>/dev/null || true
     exec bash "$PSM_ROOT/manager.sh"
 }
@@ -84,18 +84,22 @@ _banner() {
     clear
     local ipv4; ipv4=$(get_ipv4 2>/dev/null || echo "N/A")
 
-    local nginx_ver="未安装"
+    local nginx_ver="$(t mgr.status.not_installed)"
     command -v nginx &>/dev/null \
         && nginx_ver=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
-    local xray_ver="未安装"
+    local xray_ver="$(t mgr.status.not_installed)"
     [[ -x "${XRAY_BIN:-}" ]] \
         && xray_ver=$("$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2}')
 
-    local hy2_ver="未安装"
+    local sb_ver="$(t mgr.status.not_installed)"
+    [[ -x "${SINGBOX_BIN:-}" ]] \
+        && sb_ver=$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR==1{print $3}')
+
+    local hy2_ver="$(t mgr.status.not_installed)"
     if [[ -x "/usr/local/bin/hysteria" ]]; then
         hy2_ver=$(/usr/local/bin/hysteria version 2>/dev/null | awk 'NR==1{print $NF}')
-        [[ -z "$hy2_ver" ]] && hy2_ver="已安装"
+        [[ -z "$hy2_ver" ]] && hy2_ver="$(t mgr.status.installed)"
     fi
 
     local snell_ver="" ss_ver=""
@@ -108,7 +112,7 @@ _banner() {
     fi
     if [[ -x "/usr/local/bin/ss-rust" ]]; then
         ss_ver=$(/usr/local/bin/ss-rust --version 2>/dev/null | awk '{print $2}' | head -1)
-        [[ -z "$ss_ver" ]] && ss_ver="已安装"
+        [[ -z "$ss_ver" ]] && ss_ver="$(t mgr.status.installed)"
     fi
 
     # Bright color variants (local, not in common.sh)
@@ -135,6 +139,7 @@ _banner() {
     printf "  ${BLUE}──────────────────────────────────────────${NC}\n"
     printf "  ${CYAN}IP   ${NC}▶  %-20s  ${CYAN}Nginx${NC}     ▶  %s\n"  "$ipv4"     "$nginx_ver"
     printf "  ${CYAN}Xray ${NC}▶  %-20s  ${CYAN}Hysteria2${NC} ▶  %s\n"  "$xray_ver" "$hy2_ver"
+    printf "  ${CYAN}Sing-box${NC} ▶  %s\n"  "$sb_ver"
     [[ -n "$snell_ver" || -n "$ss_ver" ]] && \
         printf "  ${CYAN}Snell${NC} ▶  %-20s  ${CYAN}ss-rust${NC}   ▶  %s\n" \
                "${snell_ver:----}" "${ss_ver:----}"
@@ -157,38 +162,45 @@ _mpad() {
 _main_menu() {
     local C="${CYAN}" N="${NC}" B="${BOLD}${BLUE}"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
-    echo -e "${BOLD}                  JQ's Proxy Stack Manager${NC}"
+    echo -e "${BOLD}                  $(t menu.main.title)${NC}"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
-    printf "  ${C} 1.${N} %s  ${C} 9.${N} %s\n"  "$(_mpad "系统管理")"        "Cloudflare DDNS"
-    printf "  ${C} 2.${N} %s  ${C}10.${N} %s\n"  "$(_mpad "Nginx 管理")"      "网站管理"
-    printf "  ${C} 3.${N} %s  ${C}11.${N} %s\n"  "$(_mpad "Xray 管理")"       "查看所有节点"
-    printf "  ${C} 4.${N} %s  ${C}12.${N} %s\n"  "$(_mpad "Hysteria2 管理")"  "备份管理"
-    printf "  ${C} 5.${N} %s  ${C}13.${N} %s\n"  "$(_mpad "Snell 管理")"      "恢复备份"
-    printf "  ${C} 6.${N} %s  ${C}14.${N} %s\n"  "$(_mpad "SS 2022 管理")"    "更新 PSM"
-    printf "  ${C} 7.${N} %s  ${C}15.${N} %s\n"  "$(_mpad "Docker 管理")"     "流量管理"
-    printf "  ${C} 8.${N} %s  ${C}16.${N} %s\n"  "$(_mpad "SSL 证书管理")"    "Telegram Bot"
-    printf "  ${C}17.${N} %s  ${C}18.${N} %s\n"  "$(_mpad "安全加固")"        "中转管理 (realm)"
+    printf "  ${C} 1.${N} %s  ${C}11.${N} %s\n"  "$(_mpad "$(t menu.main.system)")"     "$(t menu.main.realm)"
+    printf "  ${C} 2.${N} %s  ${C}12.${N} %s\n"  "$(_mpad "$(t menu.main.singbox)")"    "$(t menu.main.ddns)"
+    printf "  ${C} 3.${N} %s  ${C}13.${N} %s\n"  "$(_mpad "$(t menu.main.xray)")"       "$(t menu.main.docker)"
+    printf "  ${C} 4.${N} %s  ${C}14.${N} %s\n"  "$(_mpad "$(t menu.main.snell)")"      "$(t menu.main.traffic)"
+    printf "  ${C} 5.${N} %s  ${C}15.${N} %s\n"  "$(_mpad "$(t menu.main.ssrust)")"     "$(t menu.main.tgbot)"
+    printf "  ${C} 6.${N} %s  ${C}16.${N} %s\n"  "$(_mpad "$(t menu.main.hysteria2)")"  "$(t menu.main.backup)"
+    printf "  ${C} 7.${N} %s  ${C}17.${N} %s\n"  "$(_mpad "$(t menu.main.nginx)")"      "$(t menu.main.restore)"
+    printf "  ${C} 8.${N} %s  ${C}18.${N} %s\n"  "$(_mpad "$(t menu.main.website)")"    "$(t menu.main.update)"
+    printf "  ${C} 9.${N} %s  ${C}19.${N} %s\n"  "$(_mpad "$(t menu.main.cert)")"       "$(t menu.main.security)"
+    printf "  ${C}10.${N} %s  ${C}20.${N} %s\n"  "$(_mpad "$(t menu.main.view_nodes)")" "$(t menu.main.language)"
     echo -e "${B}──────────────────────────────────────────────────────────────${NC}"
-    printf "  ${C} 0.${N} %s\n" "退出"
+    printf "  ${C} 0.${N} %s\n" "$(t menu.main.exit)"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
-    read -rp "$(echo -e "${CYAN}请选择: ${NC}")" MENU_CHOICE
+    read -rp "$(echo -e "${CYAN}$(t common.select)${NC}")" MENU_CHOICE
 }
 
 _view_all_nodes() {
-    echo -e "\n${BOLD}${BLUE}══ 已配置节点总览 ══════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t mgr.nodes.title) ══════════════════${NC}"
 
     source "$LIB_DIR/xray/reality.sh"   2>/dev/null; _show_node_list 2>/dev/null || true
     source "$LIB_DIR/xray/vision.sh"    2>/dev/null; _show_node_list 2>/dev/null || true
     source "$LIB_DIR/xray/xhttp.sh"     2>/dev/null; _show_node_list 2>/dev/null || true
     source "$LIB_DIR/xray/ss2022.sh"    2>/dev/null; _xss_show_node_list 2>/dev/null || true
 
+    source "$LIB_DIR/singbox/reality.sh"   2>/dev/null; _sb_reality_show_node_list 2>/dev/null || true
+    source "$LIB_DIR/singbox/ss2022.sh"    2>/dev/null; _sb_ss_show_node_list      2>/dev/null || true
+    source "$LIB_DIR/singbox/hysteria2.sh" 2>/dev/null; _sb_hy2_show_node_list     2>/dev/null || true
+    source "$LIB_DIR/singbox/anytls.sh"    2>/dev/null; _sb_anytls_show_node_list  2>/dev/null || true
+    source "$LIB_DIR/singbox/snell.sh"     2>/dev/null; _sb_snell_show_node_list   2>/dev/null || true
+
     echo -e "\n${BOLD}Hysteria2:${NC}"
     if [[ -f /etc/hysteria/config.yaml ]]; then
         local domain; domain=$(state_get "hy2_domain" 2>/dev/null || echo "?")
         local pw;     pw=$(state_get "hy2_password"   2>/dev/null || echo "?")
-        printf "  UDP 443 | 域名: %s | 密码: %s\n" "$domain" "$pw"
+        printf "$(t mgr.nodes.hy2_line)" "$domain" "$pw"
     else
-        echo "  未配置"
+        echo "  $(t mgr.nodes.none)"
     fi
 
     source "$LIB_DIR/snell.sh"   2>/dev/null; _snell_show_node_list   2>/dev/null || true
@@ -207,79 +219,86 @@ main() {
                 system_menu
                 ;;
             2)
-                source "$LIB_DIR/nginx.sh"
-                nginx_menu
+                source "$LIB_DIR/singbox/core.sh"
+                sb_menu
                 ;;
             3)
                 source "$LIB_DIR/xray/core.sh"
                 xray_menu
                 ;;
             4)
-                source "$LIB_DIR/hysteria2.sh"
-                hysteria2_menu
-                ;;
-            5)
                 source "$LIB_DIR/snell.sh"
                 snell_menu
                 ;;
-            6)
+            5)
                 source "$LIB_DIR/ssrust.sh"
                 ssrust_menu
                 ;;
+            6)
+                source "$LIB_DIR/hysteria2.sh"
+                hysteria2_menu
+                ;;
             7)
-                source "$LIB_DIR/docker.sh"
-                docker_menu
-                ;;
-            8)
-                source "$LIB_DIR/cert.sh"
-                cert_menu
-                ;;
-            9)
-                source "$LIB_DIR/cloudflare.sh"
-                cloudflare_menu
-                ;;
-            10)
                 source "$LIB_DIR/nginx.sh"
                 nginx_menu
                 ;;
-            11)
+            8)
+                source "$LIB_DIR/nginx.sh"
+                nginx_menu
+                ;;
+            9)
+                source "$LIB_DIR/cert.sh"
+                cert_menu
+                ;;
+            10)
                 _view_all_nodes
                 press_enter
                 ;;
-            12)
-                source "$LIB_DIR/backup.sh"
-                backup_menu
-                ;;
-            13)
-                source "$LIB_DIR/backup.sh"
-                do_restore
-                ;;
-            14)
-                source "$PSM_ROOT/update.sh"
-                psm_update
-                ;;
-            15)
-                source "$LIB_DIR/traffic.sh"
-                traffic_menu
-                ;;
-            16)
-                source "$LIB_DIR/tg_bot.sh"
-                tgbot_menu
-                ;;
-            17)
-                source "$LIB_DIR/security/core.sh"
-                security_menu
-                ;;
-            18)
+            11)
                 source "$LIB_DIR/realm.sh"
                 realm_menu
                 ;;
+            12)
+                source "$LIB_DIR/cloudflare.sh"
+                cloudflare_menu
+                ;;
+            13)
+                source "$LIB_DIR/docker.sh"
+                docker_menu
+                ;;
+            14)
+                source "$LIB_DIR/traffic.sh"
+                traffic_menu
+                ;;
+            15)
+                source "$LIB_DIR/tg_bot.sh"
+                tgbot_menu
+                ;;
+            16)
+                source "$LIB_DIR/backup.sh"
+                backup_menu
+                ;;
+            17)
+                source "$LIB_DIR/backup.sh"
+                do_restore
+                ;;
+            18)
+                source "$PSM_ROOT/update.sh"
+                psm_update
+                ;;
+            19)
+                source "$LIB_DIR/security/core.sh"
+                security_menu
+                ;;
+            20)
+                i18n_pick_lang
+                ;;
             0)
-                echo -e "\n${GREEN}已退出。${NC}\n"
+                echo -e "\n${GREEN}$(t mgr.exited)${NC}\n"
                 exit 0
                 ;;
             *)
-                log_warn "无效选项：$MENU_CHOICE"
+                log_warn "$(t mgr.invalid_option "$MENU_CHOICE")"
                 ;;
         esac
     done

@@ -9,10 +9,10 @@ SSL_DIR="$NGINX_SSL_DIR"    # /etc/nginx/ssl
 # ── Install acme.sh ───────────────────────────────────────────────────────────
 acme_install() {
     if [[ -f "$ACME_HOME/acme.sh" ]]; then
-        log_info "acme.sh 已安装。"
+        log_info "$(t cert.acme.already_installed)"
         return 0
     fi
-    local email; ask email "证书注册邮箱" ""
+    local email; ask email "$(t cert.acme.ask_email)" ""
     [[ -z "$email" ]] && email="admin@$(hostname -f 2>/dev/null || echo 'example.com')"
 
     # acme.sh 用 crontab 做自动续期——RHEL 系最小安装没有 cronie，装好 acme.sh
@@ -24,10 +24,10 @@ acme_install() {
 
     export PATH="$ACME_HOME:$PATH"
     if [[ ! -f "$ACME_HOME/acme.sh" ]]; then
-        log_error "acme.sh 安装失败——未找到可执行文件：$ACME_HOME/acme.sh"
+        log_error "$(t cert.acme.install_failed "$ACME_HOME/acme.sh")"
         return 1
     fi
-    log_ok "acme.sh 已安装，自动续期定时任务已设置。"
+    log_ok "$(t cert.acme.installed)"
 }
 
 _acme() {
@@ -45,8 +45,8 @@ _acme_cert_cached() {
 
 # ── CA selection ──────────────────────────────────────────────────────────────
 _select_ca() {
-    echo -e "  CA:\n  1. Let's Encrypt（默认）\n  2. ZeroSSL\n  3. Google Trust Services"
-    read -rp "$(echo -e "${CYAN}请选择 [1]: ${NC}")" ca_choice
+    echo -e "$(t cert.ca.menu)"
+    read -rp "$(echo -e "${CYAN}$(t cert.ca.select)${NC}")" ca_choice
     case "${ca_choice:-1}" in
         1) _acme --set-default-ca --server letsencrypt ;;
         2) _acme --set-default-ca --server zerossl ;;
@@ -83,27 +83,25 @@ _cert_is_ratelimited() {
 # 换 CA 重试成功返回 0，否则返回 1。
 _cert_ratelimit_handle() {
     local domain="$1" output="$2"; shift 2
-    log_error "$domain 触发 Let's Encrypt 限流（rateLimited / too many certificates）。"
-    log_warn "这是按「完全相同域名集合」计算的签发限制：同一组域名 7 天内最多 5 张，"
-    log_warn "与验证方式无关——改用 DNS-01 也无法绕过，因此不再自动切换验证方式重试。"
+    log_error "$(t cert.rate.limit_error "$domain")"
+    log_warn "$(t cert.rate.rule_same_set)"
+    log_warn "$(t cert.rate.no_dns_bypass)"
     # 尽量从输出中提取解封时间
     local retry
     retry=$(grep -oiE 'retry after[^,"]*' <<<"$output" | head -1)
-    [[ -n "$retry" ]] && log_warn "Let's Encrypt 解封时间：$retry"
-    echo -e "\n  两条出路："
-    echo -e "    A. 等待上述解封时间后再签发"
-    echo -e "    B. 换一家 CA（ZeroSSL / Google Trust Services 配额独立）\n"
-    if ask_yn "是否立即切换到 ZeroSSL 重试？" N; then
+    [[ -n "$retry" ]] && log_warn "$(t cert.rate.retry_time "$retry")"
+    echo -e "$(t cert.rate.options)"
+    if ask_yn "$(t cert.rate.ask_zerossl)" N; then
         _acme --set-default-ca --server zerossl \
-            || { log_error "切换默认 CA 到 ZeroSSL 失败。"; return 1; }
+            || { log_error "$(t cert.rate.switch_zerossl_failed)"; return 1; }
         if _acme --issue "$@"; then
             cert_install_domain "$domain"
             return 0
         fi
-        log_error "ZeroSSL 签发失败。"
-        log_warn "ZeroSSL 需要已注册的账户邮箱，可先运行："
-        echo -e "    acme.sh --register-account -m <你的邮箱> --server zerossl"
-        log_warn "注册后重新签发即可。"
+        log_error "$(t cert.rate.zerossl_failed)"
+        log_warn "$(t cert.rate.zerossl_need_email)"
+        echo -e "$(t cert.rate.zerossl_register_cmd)"
+        log_warn "$(t cert.rate.zerossl_retry_after_register)"
     fi
     return 1
 }
@@ -139,13 +137,13 @@ NGINXEOF
         nginx -s reload 2>/dev/null || true
     else
         # Nginx not running → standalone (acme.sh binds port 80 directly)
-        log_info "Nginx 未运行，使用独立模式..."
-        log_warn "请确认以下两点，否则签发会失败："
-        echo -e "    1. 云服务商安全组 / 控制台防火墙 已放行 TCP 80"
-        echo -e "    2. 本机没有其他程序占用端口 80\n"
+        log_info "$(t cert.http.standalone)"
+        log_warn "$(t cert.http.check_points)"
+        echo -e "$(t cert.http.need_port80_cloud)"
+        echo -e "$(t cert.http.need_port80_local)"
 
         local fw_tag; fw_tag=$(_fw_open80)
-        [[ -n "$fw_tag" ]] && log_info "已临时开放本机防火墙端口 80（$fw_tag）"
+        [[ -n "$fw_tag" ]] && log_info "$(t cert.http.fw_opened "$fw_tag")"
 
         issue_args=(-d "$domain" --standalone)
         local rc=0
@@ -154,12 +152,12 @@ NGINXEOF
 
         if [[ -n "$fw_tag" ]]; then
             _fw_close80 "$fw_tag"
-            log_info "已还原防火墙规则（$fw_tag）"
+            log_info "$(t cert.http.fw_restored "$fw_tag")"
         fi
     fi
 
     if (( !issued )) && _acme_cert_cached "$domain"; then
-        log_info "证书已在 acme.sh 缓存中——正在安装到 $SSL_DIR。"
+        log_info "$(t cert.cached.installing "$SSL_DIR")"
         issued=1
     fi
 
@@ -175,23 +173,23 @@ NGINXEOF
         return 1
     fi
 
-    log_error "$domain 的证书签发失败。"
-    log_warn "如果错误是 'Connection refused'，说明云安全组在网络层封锁了端口 80，"
-    log_warn "本机 iptables 无法解决此问题。解决方法："
-    echo -e "    A. 登录云控制台将 TCP 80 入方向放行，申请完再关闭"
-    echo -e "    B. 改用 DNS-01 方式（无需开放任何端口）\n"
+    log_error "$(t cert.issue.failed_domain "$domain")"
+    log_warn "$(t cert.http.conn_refused_hint)"
+    log_warn "$(t cert.http.iptables_cannot_fix)"
+    echo -e "$(t cert.http.solution_open80)"
+    echo -e "$(t cert.http.solution_dns01)"
 
     # Auto-fallback: if Cloudflare token already configured, offer DNS-01 immediately
     local cf_token; cf_token=$(state_get "cf_api_token" 2>/dev/null || true)
     if [[ -n "$cf_token" ]]; then
-        log_info "检测到已配置 Cloudflare API Token，可直接用 DNS-01 方式重试。"
-        if ask_yn "是否立即切换 DNS-01（Cloudflare）重新签发？" Y; then
+        log_info "$(t cert.http.cf_token_detected)"
+        if ask_yn "$(t cert.http.ask_dns_retry)" Y; then
             _ensure_cf_env
             if _acme --issue --dns dns_cf -d "$domain"; then
                 cert_install_domain "$domain"
                 return 0
             else
-                log_error "DNS-01 签发同样失败，请检查 Cloudflare Token 权限（需 Zone:DNS:Edit）。"
+                log_error "$(t cert.http.dns_failed_cf)"
             fi
         fi
     fi
@@ -203,8 +201,8 @@ NGINXEOF
 cert_issue_http() {
     [[ -f "$ACME_HOME/acme.sh" ]] || acme_install
     _select_ca
-    local domain; ask domain "域名"
-    is_domain "$domain" || { log_error "无效的域名"; return 1; }
+    local domain; ask domain "$(t cert.ask_domain)"
+    is_domain "$domain" || { log_error "$(t cert.invalid_domain)"; return 1; }
     _cert_http01_issue "$domain"
 }
 
@@ -213,11 +211,11 @@ cert_issue_dns() {
     [[ -f "$ACME_HOME/acme.sh" ]] || acme_install
     _select_ca
 
-    local domain; ask domain "域名（支持通配符 *.example.com）"
-    is_domain "${domain#\*.}" || { log_error "无效的域名"; return 1; }
+    local domain; ask domain "$(t cert.ask_domain_wildcard)"
+    is_domain "${domain#\*.}" || { log_error "$(t cert.invalid_domain)"; return 1; }
 
-    echo -e "\n  DNS API:\n  1. Cloudflare\n  2. DNSPod\n  3. 阿里云\n  4. CloudXNS\n  5. 手动"
-    read -rp "$(echo -e "${CYAN}DNS 提供商 [1]: ${NC}")" dns_choice
+    echo -e "$(t cert.dns_api.menu5)"
+    read -rp "$(echo -e "${CYAN}$(t cert.dns_provider.select)${NC}")" dns_choice
 
     local dns_plugin extra_args=""
     case "${dns_choice:-1}" in
@@ -235,8 +233,8 @@ cert_issue_dns() {
         3)
             dns_plugin="dns_ali"
             local ali_key ali_secret
-            ask ali_key    "阿里云 Access Key ID"
-            ask ali_secret "阿里云 Access Key Secret"
+            ask ali_key    "$(t cert.ask_ali_key)"
+            ask ali_secret "$(t cert.ask_ali_secret)"
             export Ali_Key="$ali_key" Ali_Secret="$ali_secret"
             ;;
         4)
@@ -249,7 +247,7 @@ cert_issue_dns() {
         5)
             dns_plugin="dns_manual"
             ;;
-        *) log_error "无效选项"; return 1 ;;
+        *) log_error "$(t cert.invalid_option)"; return 1 ;;
     esac
 
     local dns_out rc=0
@@ -260,7 +258,7 @@ cert_issue_dns() {
             _cert_ratelimit_handle "${domain#\*.}" "$dns_out" \
                 --dns "$dns_plugin" -d "$domain" $extra_args && return 0
         fi
-        log_error "签发失败"; return 1
+        log_error "$(t cert.issue.failed)"; return 1
     fi
 
     cert_install_domain "${domain#\*.}"
@@ -268,15 +266,15 @@ cert_issue_dns() {
 
 # ── Manual import ─────────────────────────────────────────────────────────────
 cert_import_manual() {
-    local domain; ask domain "域名"
+    local domain; ask domain "$(t cert.ask_domain)"
     local cert_file key_file ca_file
 
-    ask cert_file "证书文件完整路径（fullchain.pem）"
-    ask key_file  "私钥文件完整路径（privkey.pem）"
-    ask ca_file   "CA 链文件完整路径（可选，直接回车跳过）" ""
+    ask cert_file "$(t cert.import.ask_cert_file)"
+    ask key_file  "$(t cert.import.ask_key_file)"
+    ask ca_file   "$(t cert.import.ask_ca_file)" ""
 
-    [[ -f "$cert_file" ]] || { log_error "证书文件未找到"; return 1; }
-    [[ -f "$key_file"  ]] || { log_error "私钥文件未找到";  return 1; }
+    [[ -f "$cert_file" ]] || { log_error "$(t cert.import.cert_not_found)"; return 1; }
+    [[ -f "$key_file"  ]] || { log_error "$(t cert.import.key_not_found)";  return 1; }
 
     local dest="$SSL_DIR/$domain"
     mkdir -p "$dest"
@@ -284,7 +282,7 @@ cert_import_manual() {
     cp "$key_file"  "$dest/privkey.pem"
     [[ -n "$ca_file" && -f "$ca_file" ]] && cp "$ca_file" "$dest/chain.pem"
     chmod 600 "$dest/privkey.pem"
-    log_ok "证书已导入到 $dest"
+    log_ok "$(t cert.import.imported_to "$dest")"
 }
 
 # ── Install cert to nginx ssl dir ─────────────────────────────────────────────
@@ -300,33 +298,33 @@ cert_install_domain() {
         --reloadcmd      "systemctl reload nginx 2>/dev/null; systemctl reload hysteria-server 2>/dev/null || true"
 
     chmod 600 "$dest/privkey.pem"
-    log_ok "证书已安装：$dest"
+    log_ok "$(t cert.install.installed "$dest")"
 }
 
 # ── Renew ─────────────────────────────────────────────────────────────────────
 cert_renew() {
-    local domain; ask domain "域名（留空则续期全部）" ""
+    local domain; ask domain "$(t cert.renew.ask_domain)" ""
     # 默认普通续期，由 acme.sh 自行判断是否到期；强制续期会忽略有效期，易触发限流
     local force=""
-    ask_yn "是否强制续期（忽略有效期，注意 Let's Encrypt 限流）？" N && force="--force"
+    ask_yn "$(t cert.renew.ask_force)" N && force="--force"
     # 普通续期时 acme.sh 对「未到续期时间」返回 2，需吞掉，避免 errexit 中断菜单
     local rc=0
     if [[ -z "$domain" ]]; then
         _acme --renew-all $force || {
             rc=$?
             if (( rc == 2 )); then
-                log_info "证书未到续期时间，已跳过（需要可选强制续期）。"
+                log_info "$(t cert.renew.not_due)"
             else
-                log_error "续期失败"
+                log_error "$(t cert.renew.failed)"
             fi
         }
     else
         _acme --renew -d "$domain" $force || {
             rc=$?
             if (( rc == 2 )); then
-                log_info "证书未到续期时间，已跳过（需要可选强制续期）。"
+                log_info "$(t cert.renew.not_due)"
             else
-                log_error "续期失败"
+                log_error "$(t cert.renew.failed)"
             fi
         }
     fi
@@ -335,7 +333,7 @@ cert_renew() {
 cert_auto_renew() {
     # acme.sh sets up a cron job on install; this makes it explicit
     _acme --install-cronjob
-    log_ok "自动续期定时任务已安装。"
+    log_ok "$(t cert.auto_renew.installed)"
 }
 
 # ── List / delete ─────────────────────────────────────────────────────────────
@@ -348,20 +346,20 @@ cert_list() {
 
 cert_delete() {
     cert_list
-    local domain; ask domain "要删除的域名"
+    local domain; ask domain "$(t cert.delete.ask_domain)"
     # 域名为空时直接返回，避免 rm -rf 在空值下清空整个证书目录
-    [[ -z "$domain" ]] && { log_error "域名不能为空。"; return 1; }
+    [[ -z "$domain" ]] && { log_error "$(t cert.domain_required)"; return 1; }
     _acme --remove -d "$domain" 2>/dev/null
-    ask_yn "同时删除本地文件 $SSL_DIR/$domain？" N \
+    ask_yn "$(t cert.delete.ask_local "$SSL_DIR/$domain")" N \
         && rm -rf "${SSL_DIR:?}/${domain:?}"
-    log_ok "证书已删除。"
+    log_ok "$(t cert.delete.deleted)"
 }
 
 # ── Cloudflare env helper ─────────────────────────────────────────────────────
 _ensure_cf_env() {
     local cf_token; cf_token=$(state_get "cf_api_token")
     if [[ -z "$cf_token" ]]; then
-        ask cf_token "Cloudflare API Token（含 Zone DNS 编辑权限）"
+        ask cf_token "$(t cert.cf.ask_token)"
         state_set "cf_api_token" "$cf_token"
     fi
     export CF_Token="$cf_token"
@@ -372,41 +370,38 @@ _ensure_cf_env() {
 # Returns 0 if cert is ready, 1 if not/skipped.
 cert_ensure_domain() {
     local domain="$1"
-    local reason="${2:-此域名需要 TLS 证书。}"
+    local reason="${2:-$(t cert.ensure.default_reason)}"
     local cert_dir="$SSL_DIR/$domain"
 
     if [[ -f "$cert_dir/fullchain.pem" && -f "$cert_dir/privkey.pem" ]]; then
-        log_ok "已找到 $domain 的证书。"
+        log_ok "$(t cert.ensure.found "$domain")"
         return 0
     fi
 
     # acme.sh cache exists but nginx ssl dir was deleted (e.g. after uninstall) → reinstall
     if _acme_cert_cached "$domain"; then
-        log_info "证书已在 acme.sh 缓存中——正在安装到 $cert_dir"
+        log_info "$(t cert.cached.installing "$cert_dir")"
         cert_install_domain "$domain"
         return 0
     fi
 
-    log_warn "未找到域名 $domain 的证书"
+    log_warn "$(t cert.ensure.missing "$domain")"
     echo -e "\n  ${reason}"
-    echo -e "  1. HTTP-01 签发  （域名 DNS 需指向本机，端口 80 必须开放）"
-    echo -e "  2. DNS-01 签发   （支持通配符，无需开放端口 80）"
-    echo -e "  3. 导入已有证书"
-    echo -e "  0. 跳过"
-    read -rp "$(echo -e "${CYAN}请选择: ${NC}")" cc
+    echo -e "$(t cert.ensure.menu)"
+    read -rp "$(echo -e "${CYAN}$(t common.select)${NC}")" cc
 
     case "${cc:-0}" in
         1)
             [[ -f "$ACME_HOME/acme.sh" ]] || acme_install
-            [[ -f "$ACME_HOME/acme.sh" ]] || { log_error "acme.sh 不可用，无法签发证书。"; return 1; }
+            [[ -f "$ACME_HOME/acme.sh" ]] || { log_error "$(t cert.ensure.acme_unavailable)"; return 1; }
             _select_ca
             _cert_http01_issue "$domain" || return 1
             ;;
         2)
             [[ -f "$ACME_HOME/acme.sh" ]] || acme_install
             _select_ca
-            echo -e "\n  DNS API:\n  1. Cloudflare\n  2. DNSPod\n  3. 阿里云\n  4. 手动"
-            read -rp "$(echo -e "${CYAN}DNS 提供商 [1]: ${NC}")" dns_choice
+            echo -e "$(t cert.dns_api.menu4)"
+            read -rp "$(echo -e "${CYAN}$(t cert.dns_provider.select)${NC}")" dns_choice
             local dns_plugin
             case "${dns_choice:-1}" in
                 1) dns_plugin="dns_cf"; _ensure_cf_env ;;
@@ -416,10 +411,10 @@ cert_ensure_domain() {
                    export DP_Id="$dp_id" DP_Key="$dp_key" ;;
                 3) dns_plugin="dns_ali"
                    local ali_key ali_secret
-                   ask ali_key "阿里云 Key ID"; ask ali_secret "阿里云 Secret"
+                   ask ali_key "$(t cert.ask_ali_key_short)"; ask ali_secret "$(t cert.ask_ali_secret_short)"
                    export Ali_Key="$ali_key" Ali_Secret="$ali_secret" ;;
                 4) dns_plugin="dns_manual" ;;
-                *) log_error "无效选项"; return 1 ;;
+                *) log_error "$(t cert.invalid_option)"; return 1 ;;
             esac
             local dns_out rc=0
             dns_out=$(set -o pipefail; _acme --issue --dns "$dns_plugin" -d "$domain" 2>&1 | tee /dev/stderr) || rc=$?
@@ -430,28 +425,28 @@ cert_ensure_domain() {
                 _cert_ratelimit_handle "$domain" "$dns_out" \
                     --dns "$dns_plugin" -d "$domain" || return 1
             else
-                log_error "$domain 的证书签发失败。"
+                log_error "$(t cert.issue.failed_domain "$domain")"
                 return 1
             fi
             ;;
         3)
             local cert_file key_file
-            ask cert_file "证书文件完整路径（fullchain.pem）"
-            ask key_file  "私钥文件完整路径（privkey.pem）"
-            [[ -f "$cert_file" ]] || { log_error "证书文件未找到：$cert_file"; return 1; }
-            [[ -f "$key_file"  ]] || { log_error "私钥文件未找到：$key_file";   return 1; }
+            ask cert_file "$(t cert.import.ask_cert_file)"
+            ask key_file  "$(t cert.import.ask_key_file)"
+            [[ -f "$cert_file" ]] || { log_error "$(t cert.import.cert_not_found_path "$cert_file")"; return 1; }
+            [[ -f "$key_file"  ]] || { log_error "$(t cert.import.key_not_found_path "$key_file")";   return 1; }
             mkdir -p "$cert_dir"
             cp "$cert_file" "$cert_dir/fullchain.pem"
             cp "$key_file"  "$cert_dir/privkey.pem"
             chmod 600 "$cert_dir/privkey.pem"
-            log_ok "证书已安装到 $cert_dir"
+            log_ok "$(t cert.install.installed_to "$cert_dir")"
             ;;
         0)
-            log_warn "已跳过证书。"
+            log_warn "$(t cert.ensure.skipped)"
             return 1
             ;;
         *)
-            log_error "无效选项。"
+            log_error "$(t cert.invalid_option)"
             return 1
             ;;
     esac
@@ -461,8 +456,8 @@ cert_ensure_domain() {
 _cert_check_deps() {
     ensure_pkg_deps curl openssl socat
     if ! [[ -f "$ACME_HOME/acme.sh" ]]; then
-        log_warn "acme.sh 未安装。"
-        ask_yn "是否现在安装 acme.sh？" Y && acme_install || log_warn "acme.sh 是自动签发证书的必要工具。"
+        log_warn "$(t cert.deps.acme_missing)"
+        ask_yn "$(t cert.deps.ask_install)" Y && acme_install || log_warn "$(t cert.deps.required)"
     fi
 }
 
@@ -470,15 +465,15 @@ _cert_check_deps() {
 cert_menu() {
     _cert_check_deps
     while true; do
-        show_menu "SSL 证书管理" \
-            "安装 acme.sh" \
-            "签发证书（HTTP-01）" \
-            "签发证书（DNS-01 / 通配符）" \
-            "手动导入证书" \
-            "续期证书" \
-            "启用自动续期" \
-            "列出证书" \
-            "删除证书"
+        show_menu "$(t cert.menu.title)" \
+            "$(t cert.menu.install_acme)" \
+            "$(t cert.menu.issue_http)" \
+            "$(t cert.menu.issue_dns)" \
+            "$(t cert.menu.import)" \
+            "$(t cert.menu.renew)" \
+            "$(t cert.menu.auto_renew)" \
+            "$(t cert.menu.list)" \
+            "$(t cert.menu.delete)"
 
         case "$MENU_CHOICE" in
             1) acme_install ;;

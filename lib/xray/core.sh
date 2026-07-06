@@ -11,14 +11,14 @@ XRAY_RELEASES="https://github.com/XTLS/Xray-core/releases"
 _tz_set_wizard() {
     local cur; cur=$(timedatectl show -p Timezone --value 2>/dev/null \
                      || cat /etc/timezone 2>/dev/null || echo "unknown")
-    echo -e "\n${BOLD}时区设置${NC}  当前：${CYAN}${cur}${NC}"
-    echo -e "  ${CYAN}1.${NC} Asia/Hong_Kong   (UTC+8 · 香港)  [默认]"
-    echo -e "  ${CYAN}2.${NC} Asia/Singapore   (UTC+8 · 新加坡)"
-    echo -e "  ${CYAN}3.${NC} Asia/Shanghai    (UTC+8 · 上海)"
-    echo -e "  ${CYAN}4.${NC} UTC              (协调世界时)"
-    echo -e "  ${CYAN}0.${NC} 跳过，保持当前时区"
+    echo -e "\n${BOLD}$(t xray.tz.title)${NC}  $(t xray.tz.current "${CYAN}${cur}${NC}")"
+    echo -e "  ${CYAN}1.${NC} $(t xray.tz.hk)"
+    echo -e "  ${CYAN}2.${NC} $(t xray.tz.sg)"
+    echo -e "  ${CYAN}3.${NC} $(t xray.tz.sh)"
+    echo -e "  ${CYAN}4.${NC} $(t xray.tz.utc)"
+    echo -e "  ${CYAN}0.${NC} $(t xray.tz.skip)"
     local choice
-    read -rp "$(echo -e "${CYAN}选择时区 [默认 1]: ${NC}")" choice
+    read -rp "$(echo -e "${CYAN}$(t xray.tz.ask)${NC}")" choice
     choice="${choice:-1}"
 
     local tz=""
@@ -27,8 +27,8 @@ _tz_set_wizard() {
         2) tz="Asia/Singapore" ;;
         3) tz="Asia/Shanghai"  ;;
         4) tz="UTC"            ;;
-        0) log_info "跳过时区设置。"; return ;;
-        *) log_warn "无效选项，跳过时区设置。"; return ;;
+        0) log_info "$(t xray.tz.skipped)"; return ;;
+        *) log_warn "$(t xray.tz.invalid)"; return ;;
     esac
 
     if timedatectl set-timezone "$tz" 2>/dev/null; then
@@ -39,7 +39,7 @@ _tz_set_wizard() {
         echo "$tz" > /etc/timezone 2>/dev/null || true
     fi
     timedatectl set-ntp true 2>/dev/null || true
-    log_ok "时区已设置为 ${CYAN}${tz}${NC}，NTP 同步已启用。"
+    log_ok "$(t xray.tz.done "$CYAN" "$tz" "$NC")"
 }
 
 # ── Install ───────────────────────────────────────────────────────────────────
@@ -48,8 +48,8 @@ xray_install() {
     require_cmd curl unzip jq
 
     if is_installed xray || [[ -f "$XRAY_BIN" ]]; then
-        log_info "Xray 已安装：$($XRAY_BIN version 2>/dev/null | head -1)"
-        ask_yn "是否重新安装 Xray？" N || return 0
+        log_info "$(t xray.installed "$($XRAY_BIN version 2>/dev/null | head -1)")"
+        ask_yn "$(t xray.ask_reinstall)" N || return 0
     fi
 
     _tz_set_wizard
@@ -60,23 +60,23 @@ xray_install() {
         amd64) xray_arch="64" ;;
         arm64) xray_arch="arm64-v8a" ;;
         arm32) xray_arch="arm32-v7a" ;;
-        *)     die "Xray 不支持此架构：$arch" ;;
+        *)     die "$(t xray.unsupported_arch "$arch")" ;;
     esac
 
     local tag
 
-    log_step "正在获取 Xray 最新版本..."
+    log_step "$(t xray.fetching_latest)"
     tag=$(curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" 2>/dev/null \
           | jq -r '.tag_name // empty' || true)
-    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "无法获取最新版本，使用备用版本 v24.9.30"; tag="v24.9.30"; }
+    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t xray.latest_fallback)"; tag="v24.9.30"; }
 
     local zip_name="Xray-linux-${xray_arch}.zip"
     local url="${XRAY_RELEASES}/download/${tag}/${zip_name}"
     local tmp_dir; tmp_dir=$(mktemp -d)
 
-    log_step "正在下载 Xray ${tag} (${xray_arch})..."
+    log_step "$(t xray.downloading "$tag" "$xray_arch")"
     curl -fsSL -o "$tmp_dir/$zip_name" "$url" \
-        || die "下载失败：$url"
+        || die "$(t xray.download_fail "$url")"
 
     unzip -q "$tmp_dir/$zip_name" -d "$tmp_dir/xray"
 
@@ -92,7 +92,7 @@ xray_install() {
     cp -f "$tmp_dir/xray"/geoip.dat   /usr/local/share/xray/ 2>/dev/null || true
     cp -f "$tmp_dir/xray"/geosite.dat /usr/local/share/xray/ 2>/dev/null || true
     if [[ ! -s /usr/local/share/xray/geoip.dat || ! -s /usr/local/share/xray/geosite.dat ]]; then
-        log_warn "未能安装 geoip.dat/geosite.dat，geosite/geoip 分流规则（含 WARP 解锁）可能不生效。"
+        log_warn "$(t xray.geo_warn)"
     fi
 
     rm -rf "$tmp_dir"
@@ -107,7 +107,7 @@ xray_install() {
             && ! "$XRAY_BIN" -test -config "$XRAY_CFG" &>/dev/null; then
             local backup_cfg="${XRAY_CFG}.bad.$(date +%Y%m%d%H%M%S)"
             cp -a "$XRAY_CFG" "$backup_cfg"
-            log_warn "现有 Xray 配置无效，已备份到 $backup_cfg，并写入干净的基础配置。"
+            log_warn "$(t xray.bad_config_backup "$backup_cfg")"
             _write_skeleton_config
         fi
     else
@@ -118,7 +118,7 @@ xray_install() {
     systemctl daemon-reload
     svc_enable xray
     svc_restart xray || svc_start xray
-    log_ok "Xray ${tag} 已安装。"
+    log_ok "$(t xray.install_done "$tag")"
     _xray_post_install_wizard
 }
 
@@ -181,7 +181,7 @@ EOF
 xray_gen_x25519_keys() {
     local output private_key public_key
     output=$("$XRAY_BIN" x25519 2>&1) || {
-        log_error "生成 x25519 密钥失败。"
+        log_error "$(t xray.x25519_gen_fail)"
         echo "$output" >&2
         return 1
     }
@@ -190,7 +190,7 @@ xray_gen_x25519_keys() {
     public_key=$(echo "$output" | awk -F': *' 'tolower($1) ~ /public|password/ {print $2; exit}')
 
     if [[ -z "$private_key" || -z "$public_key" ]]; then
-        log_error "解析 x25519 密钥失败，原始输出："
+        log_error "$(t xray.x25519_parse_fail)"
         echo "$output" >&2
         return 1
     fi
@@ -200,14 +200,14 @@ xray_gen_x25519_keys() {
 
 # ── Upgrade ───────────────────────────────────────────────────────────────────
 xray_upgrade() {
-    log_step "正在升级 Xray（重新运行安装流程）..."
+    log_step "$(t xray.upgrading)"
     xray_install
 }
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 xray_uninstall() {
-    echo -e "\n${YELLOW}将同时删除：Xray 程序/服务/配置，以及所有 Reality、Vision、XHTTP、SS2022 节点。${NC}"
-    ask_yn "确认完全卸载？" N || return 0
+    echo -e "\n${YELLOW}$(t xray.uninstall_warn)${NC}"
+    ask_yn "$(t xray.ask_uninstall)" N || return 0
 
     # ── Stop service ──────────────────────────────────────────────────────────
     svc_stop xray 2>/dev/null || true
@@ -268,7 +268,7 @@ xray_uninstall() {
     rm -rf "$XRAY_CFG_DIR" /usr/local/share/xray /var/log/xray
     systemctl daemon-reload
 
-    log_ok "Xray 及所有 Reality / Vision / XHTTP / SS2022 节点配置已完全删除。"
+    log_ok "$(t xray.uninstalled)"
 }
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ xray_update_inbound() {
 _xray_write_cfg_checked() {
     local candidate="$1"
     if [[ ! -s "$candidate" ]] || ! jq -e . "$candidate" >/dev/null 2>&1; then
-        log_error "生成的 Xray 配置为空或非法 JSON，已放弃写入（保留原配置）。"
+        log_error "$(t xray.write_invalid)"
         rm -f "$candidate"
         return 1
     fi
@@ -316,8 +316,8 @@ xray_version() {
 }
 
 xray_logs() {
-    echo -e "\n  1. 访问日志\n  2. 错误日志\n  3. Systemd 日志"
-    read -rp "$(echo -e "${CYAN}请选择: ${NC}")" lc
+    echo -e "$(t xray.logs.menu)"
+    read -rp "$(echo -e "${CYAN}$(t xray.ask_select)${NC}")" lc
     case "$lc" in
         1) tail -f /var/log/xray/access.log ;;
         2) tail -f /var/log/xray/error.log ;;
@@ -328,20 +328,20 @@ xray_logs() {
 # ── Post-install protocol wizard ─────────────────────────────────────────────
 _xray_post_install_wizard() {
     echo ""
-    ask_yn "是否现在配置一个协议节点？" Y || return 0
-    echo -e "\n  请选择协议："
-    echo -e "  1. VLESS + Reality   (可用任意伪装 SNI，无需 TLS 证书)"
-    echo -e "  2. VLESS + Vision    (需要自己的域名和 TLS 证书)"
-    echo -e "  3. VLESS + XHTTP     (支持多种传输模式)"
-    echo -e "  4. Shadowsocks 2022  (AEAD-2022 加密，无需域名/TLS)"
-    read -rp "$(echo -e "${CYAN}请选择 [1]: ${NC}")" pc
+    ask_yn "$(t xray.ask_protocol_now)" Y || return 0
+    echo -e "\n  $(t xray.protocol_choose)"
+    echo -e "  1. $(t xray.protocol.reality)"
+    echo -e "  2. $(t xray.protocol.vision)"
+    echo -e "  3. $(t xray.protocol.xhttp)"
+    echo -e "  4. $(t xray.protocol.ss2022)"
+    read -rp "$(echo -e "${CYAN}$(t xray.ask_select_default)${NC}")" pc
     echo ""
     case "${pc:-1}" in
         1) source "$(dirname "${BASH_SOURCE[0]}")/reality.sh"; reality_add_node ;;
         2) source "$(dirname "${BASH_SOURCE[0]}")/vision.sh";  vision_add_node ;;
         3) source "$(dirname "${BASH_SOURCE[0]}")/xhttp.sh";   xhttp_add_node ;;
         4) source "$(dirname "${BASH_SOURCE[0]}")/ss2022.sh";  xss_add_node ;;
-        *) log_info "已跳过。之后可在“协议节点”菜单中配置。" ;;
+        *) log_info "$(t xray.protocol_skipped)" ;;
     esac
 }
 
@@ -352,7 +352,7 @@ _xray_check_deps() {
 
 _xray_require_installed() {
     if [[ ! -f "$XRAY_BIN" ]]; then
-        log_warn "Xray 尚未安装，请先选择“安装”。"
+        log_warn "$(t xray.need_install)"
         press_enter
         return 1
     fi
@@ -369,8 +369,8 @@ _xray_check_port_conflict() {
     source "$LIB_DIR/security/honeypot.sh" 2>/dev/null || return 0
     declare -f _hp_is_reserved_port &>/dev/null || return 0
     _hp_is_reserved_port "$port" || return 0
-    log_warn "端口 ${port} 似乎已被占用（本机服务、防火墙已放行的端口，或已配置的代理节点/蜜罐）"
-    ask_yn "仍要使用这个端口吗？" N
+    log_warn "$(t xray.port_conflict "$port")"
+    ask_yn "$(t xray.ask_use_port)" N
 }
 
 # ── Centralized node viewer ───────────────────────────────────────────────────
@@ -390,7 +390,7 @@ _xray_view_all_nodes() {
     local -a _protos _tags
     local i=0
 
-    echo -e "\n${BOLD}${BLUE}══ 已配置的 Xray 节点 ════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}══ $(t xray.nodes.title) ════════════════${NC}"
 
     while IFS=$'\t' read -r tag port listen sn; do
         i=$((i+1)); _protos+=("reality"); _tags+=("$tag")
@@ -417,16 +417,16 @@ _xray_view_all_nodes() {
     done < <(_xss_list 2>/dev/null)
 
     if (( i == 0 )); then
-        log_warn "尚未配置任何节点。"
+        log_warn "$(t xray.no_nodes)"
         return
     fi
 
     echo -e "${BOLD}${BLUE}════════════════════════════════════════${NC}"
-    read -rp "$(echo -e "${CYAN}选择节点查看链接和二维码（0 = 返回）: ${NC}")" sel
+    read -rp "$(echo -e "${CYAN}$(t xray.ask_node_share): ${NC}")" sel
 
     [[ -z "$sel" || "$sel" == "0" ]] && return
     if ! [[ "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > i )); then
-        log_warn "无效选项。"; return
+        log_warn "$(t xray.invalid_option)"; return
     fi
 
     local proto="${_protos[$((sel-1))]}"
@@ -443,11 +443,11 @@ _xray_view_all_nodes() {
 # ── Protocol nodes sub-menu ───────────────────────────────────────────────────
 _xray_protocol_menu() {
     while true; do
-        show_menu "节点管理 — 选择协议进入" \
-            "Reality   (VLESS + XTLS-Reality，无需 TLS 证书)" \
-            "Vision    (VLESS + TLS + TCP，需要域名和证书)" \
-            "XHTTP     (VLESS + XHTTP / WebSocket，需要域名和证书)" \
-            "SS2022    (Shadowsocks 2022，AEAD-2022 加密)"
+        show_menu "$(t xray.protocol_menu.title)" \
+            "$(t xray.protocol_menu.reality)" \
+            "$(t xray.protocol_menu.vision)" \
+            "$(t xray.protocol_menu.xhttp)" \
+            "$(t xray.protocol_menu.ss2022)"
 
         case "$MENU_CHOICE" in
             1) source "$(dirname "${BASH_SOURCE[0]}")/reality.sh"; reality_menu ;;
@@ -463,19 +463,19 @@ _xray_protocol_menu() {
 xray_menu() {
     _xray_check_deps
     while true; do
-        show_menu "Xray 管理" \
-            "安装" \
-            "升级" \
-            "卸载" \
-            "节点管理" \
-            "路由分流管理" \
-            "显示版本" \
-            "列出入站配置" \
-            "测试配置" \
-            "重启服务" \
-            "服务状态" \
-            "查看日志" \
-            "查看节点链接和二维码"
+        show_menu "$(t xray.menu.title)" \
+            "$(t xray.menu.install)" \
+            "$(t xray.menu.upgrade)" \
+            "$(t xray.menu.uninstall)" \
+            "$(t xray.menu.nodes)" \
+            "$(t xray.menu.routing)" \
+            "$(t xray.menu.version)" \
+            "$(t xray.menu.inbounds)" \
+            "$(t xray.menu.test)" \
+            "$(t xray.menu.restart)" \
+            "$(t xray.menu.status)" \
+            "$(t xray.menu.logs)" \
+            "$(t xray.menu.share)"
 
         case "$MENU_CHOICE" in
             1)  xray_install;    press_enter ;;
@@ -487,8 +487,8 @@ xray_menu() {
                     route_menu
                 } ;;
             6)  xray_version;    press_enter ;;
-            7)  echo -e "\n${BOLD}入站配置:${NC}"; xray_get_inbounds; press_enter ;;
-            8)  "$XRAY_BIN" -test -config "$XRAY_CFG" && log_ok "配置正常" || log_error "配置有误"; press_enter ;;
+            7)  echo -e "\n${BOLD}$(t xray.inbounds_title)${NC}"; xray_get_inbounds; press_enter ;;
+            8)  "$XRAY_BIN" -test -config "$XRAY_CFG" && log_ok "$(t xray.config_ok)" || log_error "$(t xray.config_bad)"; press_enter ;;
             9)  xray_test_restart; press_enter ;;
             10) svc_status xray;   press_enter ;;
             11) xray_logs ;;

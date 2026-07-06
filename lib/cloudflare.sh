@@ -7,22 +7,22 @@ CF_API="https://api.cloudflare.com/client/v4"
 
 # ── API credentials ───────────────────────────────────────────────────────────
 cf_setup_api() {
-    echo -e "  认证方式：\n  1. API Token（推荐）\n  2. Global API Key"
-    read -rp "$(echo -e "${CYAN}请选择 [1]: ${NC}")" am
+    echo -e "$(t cf.auth.menu)"
+    read -rp "$(echo -e "${CYAN}$(t cf.auth.select)${NC}")" am
 
     local cf_email="" cf_token="" cf_key=""
     if [[ "${am:-1}" == "2" ]]; then
-        ask cf_email "Cloudflare 账号邮箱"
+        ask cf_email "$(t cf.auth.ask_email)"
         ask cf_key   "Global API Key"
         state_set "cf_auth_method" "apikey"
         state_set "cf_email"       "$cf_email"
         state_set "cf_global_key"  "$cf_key"
     else
-        ask cf_token "Cloudflare API Token（含 Zone DNS 编辑权限）"
+        ask cf_token "$(t cf.auth.ask_token)"
         state_set "cf_auth_method" "token"
         state_set "cf_api_token"   "$cf_token"
     fi
-    log_ok "Cloudflare 凭据已保存。"
+    log_ok "$(t cf.auth.saved)"
 }
 
 _cf_headers() {
@@ -64,9 +64,9 @@ cf_get_zone_id() {
 
 # ── DNS record management ─────────────────────────────────────────────────────
 cf_list_dns() {
-    local domain; ask domain "域名（例如 example.com）"
+    local domain; ask domain "$(t cf.ask_domain_example)"
     local zone_id; zone_id=$(cf_get_zone_id "$domain")
-    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "未找到该域名的 Zone"; return 1; }
+    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "$(t cf.zone.not_found)"; return 1; }
     _cf_curl "$CF_API/zones/$zone_id/dns_records?per_page=100" \
         | jq -r '.result[] | "\(.id)\t\(.type)\t\(.name)\t\(.content)\tproxied:\(.proxied)"' 2>/dev/null \
         | column -t
@@ -74,46 +74,54 @@ cf_list_dns() {
 
 cf_add_dns() {
     local domain type name content proxied ttl
-    ask domain  "根域名（Zone）"
-    ask type    "记录类型" "A"
-    ask name    "记录名称（例如 www 或 @）"
-    ask content "记录值（IP 或目标）"
-    ask_yn "是否开启 Cloudflare 代理？" N && proxied="true" || proxied="false"
-    ask ttl "TTL（1=自动）" "1"
+    ask domain  "$(t cf.ask_root_domain)"
+    ask type    "$(t cf.ask_record_type)" "A"
+    ask name    "$(t cf.ask_record_name)"
+    ask content "$(t cf.ask_record_content)"
+    ask_yn "$(t cf.ask_proxied)" N && proxied="true" || proxied="false"
+    ask ttl "$(t cf.ask_ttl)" "1"
 
     local zone_id; zone_id=$(cf_get_zone_id "$domain")
-    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "未找到该域名的 Zone"; return 1; }
+    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "$(t cf.zone.not_found)"; return 1; }
 
     local full_name; [[ "$name" == "@" ]] && full_name="$domain" || full_name="${name}.${domain}"
 
     local result
     result=$(_cf_curl -X POST "$CF_API/zones/$zone_id/dns_records" \
         -d "{\"type\":\"$type\",\"name\":\"$full_name\",\"content\":\"$content\",\"ttl\":$ttl,\"proxied\":$proxied}")
-    echo "$result" | jq -r 'if .success then "记录已创建：\(.result.id)" else "错误：\(.errors[0].message)" end'
+    if [[ "$(echo "$result" | jq -r '.success')" == "true" ]]; then
+        echo "$(t cf.record.created "$(echo "$result" | jq -r '.result.id')")"
+    else
+        echo "$(t cf.error "$(echo "$result" | jq -r '.errors[0].message // empty')")"
+    fi
 }
 
 cf_delete_dns() {
-    local domain; ask domain "根域名"
+    local domain; ask domain "$(t cf.ask_root_domain)"
     local zone_id; zone_id=$(cf_get_zone_id "$domain")
-    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "未找到该域名的 Zone"; return 1; }
+    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "$(t cf.zone.not_found)"; return 1; }
 
     cf_list_dns <<< "$domain" 2>/dev/null || true
-    local record_id; ask record_id "要删除的记录 ID"
+    local record_id; ask record_id "$(t cf.ask_record_id_delete)"
     local result
     result=$(_cf_curl -X DELETE "$CF_API/zones/$zone_id/dns_records/$record_id")
-    echo "$result" | jq -r 'if .success then "已删除。" else "错误：\(.errors[0].message)" end'
+    if [[ "$(echo "$result" | jq -r '.success')" == "true" ]]; then
+        echo "$(t cf.record.deleted)"
+    else
+        echo "$(t cf.error "$(echo "$result" | jq -r '.errors[0].message // empty')")"
+    fi
 }
 
 # ── DDNS ──────────────────────────────────────────────────────────────────────
 cf_ddns_update() {
     local domain; domain=$(state_get "ddns_domain")
-    [[ -z "$domain" ]] && ask domain "DDNS 域名（例如 home.example.com）"
+    [[ -z "$domain" ]] && ask domain "$(t cf.ddns.ask_domain)"
 
     local zone_id; zone_id=$(cf_get_zone_id "$domain")
-    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "未找到 $domain 的 Zone"; return 1; }
+    [[ -z "$zone_id" || "$zone_id" == "null" ]] && { log_error "$(t cf.zone.not_found_domain "$domain")"; return 1; }
 
     local current_ip; current_ip=$(get_ipv4)
-    [[ -z "$current_ip" ]] && { log_error "无法获取公网 IP"; return 1; }
+    [[ -z "$current_ip" ]] && { log_error "$(t cf.ddns.public_ip_failed)"; return 1; }
 
     # Find existing A record
     local record; record=$(_cf_curl "$CF_API/zones/$zone_id/dns_records?type=A&name=$domain")
@@ -121,20 +129,30 @@ cf_ddns_update() {
     local old_ip;    old_ip=$(echo "$record"    | jq -r '.result[0].content')
 
     if [[ "$current_ip" == "$old_ip" ]]; then
-        log_info "DDNS：IP 未变化（$current_ip）"
+        log_info "$(t cf.ddns.no_change "$current_ip")"
         return 0
     fi
 
     if [[ -z "$record_id" || "$record_id" == "null" ]]; then
         # Create new record
-        _cf_curl -X POST "$CF_API/zones/$zone_id/dns_records" \
-            -d "{\"type\":\"A\",\"name\":\"$domain\",\"content\":\"$current_ip\",\"ttl\":60,\"proxied\":false}" \
-            | jq -r 'if .success then "DDNS 记录已创建：\(.result.content)" else .errors end'
+        local result
+        result=$(_cf_curl -X POST "$CF_API/zones/$zone_id/dns_records" \
+            -d "{\"type\":\"A\",\"name\":\"$domain\",\"content\":\"$current_ip\",\"ttl\":60,\"proxied\":false}")
+        if [[ "$(echo "$result" | jq -r '.success')" == "true" ]]; then
+            echo "$(t cf.ddns.created "$(echo "$result" | jq -r '.result.content')")"
+        else
+            echo "$result" | jq -r '.errors'
+        fi
     else
         # Update existing
-        _cf_curl -X PATCH "$CF_API/zones/$zone_id/dns_records/$record_id" \
-            -d "{\"content\":\"$current_ip\"}" \
-            | jq -r 'if .success then "DDNS 已更新：\(.result.content)" else .errors end'
+        local result
+        result=$(_cf_curl -X PATCH "$CF_API/zones/$zone_id/dns_records/$record_id" \
+            -d "{\"content\":\"$current_ip\"}")
+        if [[ "$(echo "$result" | jq -r '.success')" == "true" ]]; then
+            echo "$(t cf.ddns.updated "$(echo "$result" | jq -r '.result.content')")"
+        else
+            echo "$result" | jq -r '.errors'
+        fi
     fi
 
     state_set "ddns_domain"    "$domain"
@@ -143,13 +161,13 @@ cf_ddns_update() {
 }
 
 cf_ddns_install_cron() {
-    local domain; ask domain "DDNS 域名"
+    local domain; ask domain "$(t cf.ddns.ask_domain)"
     state_set "ddns_domain" "$domain"
 
     local interval
-    ask interval "更新间隔（分钟，1-60）" "5"
+    ask interval "$(t cf.ddns.ask_interval)" "5"
     [[ "$interval" =~ ^[0-9]+$ ]] && (( interval >= 1 && interval <= 60 )) \
-        || { log_error "无效间隔，必须为 1-60。"; return 1; }
+        || { log_error "$(t cf.ddns.invalid_interval)"; return 1; }
 
     local cron_expr
     if (( interval == 60 )); then
@@ -162,17 +180,17 @@ cf_ddns_install_cron() {
     echo "${cron_expr} root ${PSM_ROOT}/manager.sh --ddns-update >> /var/log/psm-ddns.log 2>&1" \
         > /etc/cron.d/psm-ddns
     state_set "ddns_interval" "$interval"
-    log_ok "DDNS 定时任务已安装（每 ${interval} 分钟）for $domain"
+    log_ok "$(t cf.ddns.cron_installed "$interval" "$domain")"
 }
 
 cf_ddns_remove_cron() {
     rm -f /etc/cron.d/psm-ddns
-    log_ok "DDNS 定时任务已删除。"
+    log_ok "$(t cf.ddns.cron_removed)"
 }
 
 # ── Auto cert via DNS ─────────────────────────────────────────────────────────
 cf_auto_cert() {
-    local domain; ask domain "域名（支持通配符，例如 *.example.com）"
+    local domain; ask domain "$(t cf.cert.ask_domain_wildcard)"
     local token; token=$(state_get "cf_api_token")
     [[ -z "$token" ]] && { cf_setup_api; token=$(state_get "cf_api_token"); }
 
@@ -184,21 +202,25 @@ cf_auto_cert() {
             --fullchain-file "$NGINX_SSL_DIR/${domain#\*.}/fullchain.pem" \
             --key-file       "$NGINX_SSL_DIR/${domain#\*.}/privkey.pem" \
             --reloadcmd      "systemctl reload nginx" \
-        && log_ok "通配符证书已签发并安装：$domain" \
-        || log_error "证书签发失败。"
+        && log_ok "$(t cf.cert.issued_installed "$domain")" \
+        || log_error "$(t cf.cert.failed)"
 }
 
 # ── Show saved config ─────────────────────────────────────────────────────────
 cf_show_config() {
-    echo -e "\n${BOLD}Cloudflare 配置：${NC}"
+    echo -e "\n${BOLD}$(t cf.config.title)${NC}"
     local method;   method=$(state_get "cf_auth_method")
     local ddns;     ddns=$(state_get "ddns_domain")
     local interval; interval=$(state_get "ddns_interval")
-    printf "  %-20s %s\n" "认证方式:"    "${method:-未设置}"
-    printf "  %-20s %s\n" "DDNS 域名:"   "${ddns:-未设置}"
-    printf "  %-20s %s\n" "DDNS 间隔:"   "${interval:+${interval} 分钟}${interval:-未设置}"
-    printf "  %-20s %s\n" "上次 DDNS IP:" "$(state_get ddns_last_ip)"
-    printf "  %-20s %s\n" "上次更新时间:" "$(state_get ddns_last_time)"
+    local last_ip;  last_ip=$(state_get "ddns_last_ip")
+    local last_time; last_time=$(state_get "ddns_last_time")
+    local interval_display
+    [[ -n "$interval" ]] && interval_display="$(t cf.config.minutes "$interval")" || interval_display="$(t cf.config.not_set)"
+    printf "  %-20s %s\n" "$(t cf.config.auth_method)"    "${method:-$(t cf.config.not_set)}"
+    printf "  %-20s %s\n" "$(t cf.config.ddns_domain)"   "${ddns:-$(t cf.config.not_set)}"
+    printf "  %-20s %s\n" "$(t cf.config.ddns_interval)" "$interval_display"
+    printf "  %-20s %s\n" "$(t cf.config.last_ip)" "${last_ip:-$(t cf.config.not_set)}"
+    printf "  %-20s %s\n" "$(t cf.config.last_time)" "${last_time:-$(t cf.config.not_set)}"
 }
 
 # ── Dependency check ─────────────────────────────────────────────────────────
@@ -210,18 +232,18 @@ _cf_check_deps() {
 cloudflare_menu() {
     _cf_check_deps
     while true; do
-        show_menu "Cloudflare 管理" \
-            "设置 API 凭据" \
-            "列出 DNS 记录" \
-            "添加 DNS 记录" \
-            "删除 DNS 记录" \
-            "DDNS：立即更新" \
-            "DDNS：安装定时任务（5 分钟）" \
-            "DDNS：删除定时任务" \
-            "自动签发证书（DNS-01 通配符）" \
-            "显示配置" \
-            "Cloudflare Tunnel（免开端口暴露服务）" \
-            "Cloudflare Access（管理面板前置门禁）"
+        show_menu "$(t cf.menu.title)" \
+            "$(t cf.menu.setup_api)" \
+            "$(t cf.menu.list_dns)" \
+            "$(t cf.menu.add_dns)" \
+            "$(t cf.menu.delete_dns)" \
+            "$(t cf.menu.ddns_update)" \
+            "$(t cf.menu.ddns_install)" \
+            "$(t cf.menu.ddns_remove)" \
+            "$(t cf.menu.auto_cert)" \
+            "$(t cf.menu.show_config)" \
+            "$(t cf.menu.tunnel)" \
+            "$(t cf.menu.access)"
 
         case "$MENU_CHOICE" in
             1) cf_setup_api ;;

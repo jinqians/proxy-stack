@@ -16,17 +16,17 @@ show_system_info() {
     local bbr_status; bbr_status=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
     local swap_total; swap_total=$(awk '/SwapTotal/{printf "%.0f MB", $2/1024}' /proc/meminfo)
 
-    echo -e "\n${BOLD}${BLUE}══ 系统信息 ════════════════════════════${NC}"
-    printf "  %-18s %s\n" "操作系统:"   "$os_name"
-    printf "  %-18s %s\n" "内核:"       "$kernel"
-    printf "  %-18s %s\n" "处理器:"     "$cpu_model"
-    printf "  %-18s %s\n" "内存:"       "$mem_total"
-    printf "  %-18s %s\n" "交换空间:"   "$swap_total"
-    printf "  %-18s %s\n" "磁盘可用:"   "$disk_free"
+    echo -e "\n${BOLD}${BLUE}══ $(t system.info.title) ════════════════════════════${NC}"
+    printf "  %-18s %s\n" "$(t system.info.os)"     "$os_name"
+    printf "  %-18s %s\n" "$(t system.info.kernel)" "$kernel"
+    printf "  %-18s %s\n" "$(t system.info.cpu)"    "$cpu_model"
+    printf "  %-18s %s\n" "$(t system.info.mem)"    "$mem_total"
+    printf "  %-18s %s\n" "$(t system.info.swap)"   "$swap_total"
+    printf "  %-18s %s\n" "$(t system.info.disk)"   "$disk_free"
     printf "  %-18s %s\n" "IPv4:"       "${ipv4:-N/A}"
     printf "  %-18s %s\n" "IPv6:"       "${ipv6:-N/A}"
-    printf "  %-18s %s\n" "BBR:"        "${bbr_status:-未知}"
-    printf "  %-18s %s\n" "运行时间:"   "$uptime_str"
+    printf "  %-18s %s\n" "BBR:"        "${bbr_status:-$(t system.info.unknown)}"
+    printf "  %-18s %s\n" "$(t system.info.uptime)" "$uptime_str"
     echo -e "${BOLD}${BLUE}════════════════════════════════════════${NC}\n"
 }
 
@@ -39,7 +39,7 @@ check_bbr() {
 
 enable_bbr() {
     if check_bbr; then
-        log_info "BBR 已启用（$(sysctl -n net.ipv4.tcp_congestion_control) / $(sysctl -n net.core.default_qdisc)）"
+        log_info "$(t system.bbr.enabled "$(sysctl -n net.ipv4.tcp_congestion_control)" "$(sysctl -n net.core.default_qdisc)")"
         return 0
     fi
 
@@ -47,8 +47,8 @@ enable_bbr() {
     kmajor=$(uname -r | cut -d. -f1)
     kminor=$(uname -r | cut -d. -f2 | grep -oE '^[0-9]+')
     if (( kmajor < 4 )) || { (( kmajor == 4 )) && (( kminor < 12 )); }; then
-        log_warn "内核 $(uname -r) 可能不支持 BBR（最低要求：4.12）"
-        ask_yn "是否继续？" N || return 1
+        log_warn "$(t system.bbr.kernel_warn "$(uname -r)")"
+        ask_yn "$(t system.ask_continue)" N || return 1
     fi
 
     # Load BBR now (no-op if built-in) AND ensure it loads at every boot. This
@@ -77,13 +77,13 @@ EOF
     local qdisc; qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null)
 
     if [[ "$cc" == "bbr" ]]; then
-        log_ok "BBR 已启用，配置写入 /etc/sysctl.d/99-bbr.conf（开机由 systemd-sysctl 自动应用）"
-        log_info "拥塞算法：$cc   队列：$qdisc"
+        log_ok "$(t system.bbr.done)"
+        log_info "$(t system.bbr.algo "$cc" "$qdisc")"
         # sysctl -p (no arg) only reads /etc/sysctl.conf and will NOT show a
         # drop-in — steer users to a check that reflects the live value.
-        log_info "验证用 ${BOLD}sysctl net.ipv4.tcp_congestion_control${NC} 或 ${BOLD}sysctl --system${NC}（sysctl -p 看不到 drop-in）"
+        log_info "$(t system.bbr.verify "$BOLD" "$NC" "$BOLD" "$NC")"
     else
-        log_warn "BBR 未立即生效（当前：${cc:-未知}），请重启后验证："
+        log_warn "$(t system.bbr.not_active "${cc:-$(t system.info.unknown)}")"
         log_warn "  sysctl net.ipv4.tcp_congestion_control"
     fi
 }
@@ -92,7 +92,7 @@ EOF
 show_swap() {
     local swap; swap=$(swapon --show 2>/dev/null)
     if [[ -z "$swap" ]]; then
-        log_info "未配置交换空间。"
+        log_info "$(t system.swap.none)"
     else
         echo "$swap"
     fi
@@ -100,17 +100,17 @@ show_swap() {
 
 create_swap() {
     local size_mb
-    ask size_mb "交换空间大小（MB）" "512"
-    [[ "$size_mb" =~ ^[0-9]+$ ]] || { log_error "无效的大小"; return 1; }
+    ask size_mb "$(t system.swap.ask_size)" "512"
+    [[ "$size_mb" =~ ^[0-9]+$ ]] || { log_error "$(t system.invalid_size)"; return 1; }
 
     local swapfile="/swapfile"
     if [[ -f "$swapfile" ]]; then
-        ask_yn "Swap 文件已存在，是否删除并重新创建？" N || return 0
+        ask_yn "$(t system.swap.ask_recreate)" N || return 0
         swapoff "$swapfile" 2>/dev/null
         rm -f "$swapfile"
     fi
 
-    log_step "正在创建 ${size_mb}MB 交换空间..."
+    log_step "$(t system.swap.creating "$size_mb")"
     fallocate -l "${size_mb}M" "$swapfile" 2>/dev/null \
         || dd if=/dev/zero of="$swapfile" bs=1M count="$size_mb" status=none
     chmod 600 "$swapfile"
@@ -120,30 +120,30 @@ create_swap() {
     grep -q "$swapfile" /etc/fstab \
         || echo "$swapfile none swap sw 0 0" >> /etc/fstab
 
-    log_ok "已创建并激活 ${size_mb}MB 交换空间。"
+    log_ok "$(t system.swap.created "$size_mb")"
 }
 
 delete_swap() {
     swapoff /swapfile 2>/dev/null
     rm -f /swapfile
     sed -i '/swapfile/d' /etc/fstab
-    log_ok "Swap 文件已删除。"
+    log_ok "$(t system.swap.deleted)"
 }
 
 # ── DNS ───────────────────────────────────────────────────────────────────────
 set_dns() {
     echo -e "\n  1. Cloudflare (1.1.1.1 / 1.0.0.1)"
     echo    "  2. Google     (8.8.8.8 / 8.8.4.4)"
-    echo    "  3. 自定义"
-    read -rp "$(echo -e "${CYAN}请选择 [1]: ${NC}")" dns_choice
+    echo    "  3. $(t system.dns.custom)"
+    read -rp "$(echo -e "${CYAN}$(t system.select_default)${NC}")" dns_choice
     dns_choice="${dns_choice:-1}"
 
     local ns1 ns2
     case "$dns_choice" in
         1) ns1="1.1.1.1"; ns2="1.0.0.1" ;;
         2) ns1="8.8.8.8";  ns2="8.8.4.4" ;;
-        3) ask ns1 "主 DNS"; ask ns2 "备用 DNS" ;;
-        *) log_warn "无效选项"; return 1 ;;
+        3) ask ns1 "$(t system.dns.primary)"; ask ns2 "$(t system.dns.secondary)" ;;
+        *) log_warn "$(t system.invalid_option)"; return 1 ;;
     esac
 
     # disable systemd-resolved stub if present
@@ -158,30 +158,30 @@ nameserver $ns1
 nameserver $ns2
 EOF
     chattr +i /etc/resolv.conf 2>/dev/null   # prevent overwrite
-    log_ok "DNS 已设置为 $ns1 / $ns2"
+    log_ok "$(t system.dns.set "$ns1" "$ns2")"
 }
 
 # ── Timezone ──────────────────────────────────────────────────────────────────
 set_timezone() {
-    local tz; ask tz "时区" "Asia/Shanghai"
+    local tz; ask tz "$(t system.timezone.ask)" "Asia/Shanghai"
     timedatectl set-timezone "$tz" 2>/dev/null \
         || { ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime && echo "$tz" > /etc/timezone; }
-    log_ok "时区已设置为 $tz"
+    log_ok "$(t system.timezone.set "$tz")"
 }
 
 sync_time() {
     if command -v chronyc &>/dev/null; then
         chronyc makestep &>/dev/null
-        log_ok "已通过 chrony 同步时间"
+        log_ok "$(t system.time.synced_chrony)"
     elif command -v ntpdate &>/dev/null; then
         ntpdate -u pool.ntp.org &>/dev/null
-        log_ok "已通过 ntpdate 同步时间"
+        log_ok "$(t system.time.synced_ntpdate)"
     else
         pkg_install chrony
         svc_enable chronyd 2>/dev/null || svc_enable chrony 2>/dev/null || true
         svc_start chronyd 2>/dev/null || svc_start chrony 2>/dev/null || true
         chronyc makestep &>/dev/null
-        log_ok "chrony 已安装并同步时间"
+        log_ok "$(t system.time.chrony_installed)"
     fi
 }
 
@@ -213,7 +213,7 @@ net.core.wmem_default = 262144
 fs.file-max = 1048576
 EOF
     sysctl -p /etc/sysctl.d/99-psm.conf &>/dev/null
-    log_ok "内核参数已优化。"
+    log_ok "$(t system.tuning.kernel_done)"
 
     # ulimit
     local limit_file="/etc/security/limits.d/99-psm.conf"
@@ -223,7 +223,7 @@ EOF
 root soft nofile 1048576
 root hard nofile 1048576
 EOF
-    log_ok "文件描述符限制已设置。"
+    log_ok "$(t system.tuning.nofile_done)"
 }
 
 # ── Firewall backend detection — prefer a RUNNING backend over a merely
@@ -257,30 +257,33 @@ firewall_open_port() {
         command -v firewall-cmd &>/dev/null && installed+=("firewalld")
         command -v iptables &>/dev/null     && installed+=("iptables")
         if (( ${#installed[@]} == 0 )); then
-            log_warn "未找到防火墙工具（ufw / firewalld / iptables），请手动开放端口 $port/$proto。"
+            log_warn "$(t system.fw.no_tools "$port" "$proto")"
             return 0
         fi
-        local idle; idle=$(IFS='、'; echo "${installed[*]}")
-        log_warn "未检测到正在运行的防火墙（检测到已安装但未运行：${idle}）；端口 $port/$proto 当前在本机可直接访问。请确认云服务商安全组已放行该端口；若日后启用 ufw/firewalld，请手动放行此端口。"
+        local idle="" sep _fw_name; sep="$(t system.fw.list_sep)"
+        for _fw_name in "${installed[@]}"; do
+            idle="${idle:+${idle}${sep}}${_fw_name}"
+        done
+        log_warn "$(t system.fw.no_running "$idle" "$port" "$proto")"
         return 0
     fi
 
     if [[ "$fw" == "ufw" ]]; then
         if [[ "$proto" == "both" ]]; then
-            ufw allow "$port/tcp" || { log_error "ufw 放行端口失败，请手动执行：ufw allow $port/tcp"; return 1; }
-            ufw allow "$port/udp" || { log_error "ufw 放行端口失败，请手动执行：ufw allow $port/udp"; return 1; }
+            ufw allow "$port/tcp" || { log_error "$(t system.fw.ufw_allow_fail "ufw allow $port/tcp")"; return 1; }
+            ufw allow "$port/udp" || { log_error "$(t system.fw.ufw_allow_fail "ufw allow $port/udp")"; return 1; }
         else
-            ufw allow "$port/$proto" || { log_error "ufw 放行端口失败，请手动执行：ufw allow $port/$proto"; return 1; }
+            ufw allow "$port/$proto" || { log_error "$(t system.fw.ufw_allow_fail "ufw allow $port/$proto")"; return 1; }
         fi
         ufw reload 2>/dev/null || true
     elif [[ "$fw" == "firewalld" ]]; then
         if [[ "$proto" == "both" ]]; then
-            firewall-cmd --permanent --add-port="$port/tcp" || { log_error "firewalld 放行端口失败，请手动执行：firewall-cmd --permanent --add-port=$port/tcp && firewall-cmd --reload"; return 1; }
-            firewall-cmd --permanent --add-port="$port/udp" || { log_error "firewalld 放行端口失败，请手动执行：firewall-cmd --permanent --add-port=$port/udp && firewall-cmd --reload"; return 1; }
+            firewall-cmd --permanent --add-port="$port/tcp" || { log_error "$(t system.fw.firewalld_allow_fail "firewall-cmd --permanent --add-port=$port/tcp && firewall-cmd --reload")"; return 1; }
+            firewall-cmd --permanent --add-port="$port/udp" || { log_error "$(t system.fw.firewalld_allow_fail "firewall-cmd --permanent --add-port=$port/udp && firewall-cmd --reload")"; return 1; }
         else
-            firewall-cmd --permanent --add-port="$port/$proto" || { log_error "firewalld 放行端口失败，请手动执行：firewall-cmd --permanent --add-port=$port/$proto && firewall-cmd --reload"; return 1; }
+            firewall-cmd --permanent --add-port="$port/$proto" || { log_error "$(t system.fw.firewalld_allow_fail "firewall-cmd --permanent --add-port=$port/$proto && firewall-cmd --reload")"; return 1; }
         fi
-        firewall-cmd --reload || { log_error "firewalld 重新加载失败，请手动执行：firewall-cmd --reload"; return 1; }
+        firewall-cmd --reload || { log_error "$(t system.fw.firewalld_reload_fail)"; return 1; }
     else
         # iptables fallback (RHEL without firewalld, or minimal installs)
         local protos=()
@@ -298,7 +301,7 @@ firewall_open_port() {
             || iptables-save  > /etc/iptables/rules.v4 2>/dev/null || true
         ip6tables-save > /etc/iptables/rules.v6  2>/dev/null || true
     fi
-    log_ok "防火墙（$fw）：端口 $port/$proto 已开放。"
+    log_ok "$(t system.fw.opened "$fw" "$port" "$proto")"
 }
 
 # ── Firewall quick-lock ───────────────────────────────────────────────────────
@@ -311,11 +314,11 @@ configure_firewall() {
     elif command -v ufw &>/dev/null; then fw="ufw"
     elif command -v firewall-cmd &>/dev/null; then fw="firewalld"
     else
-        log_warn "未找到支持的防火墙（ufw / firewalld）。"
+        log_warn "$(t system.fw.no_supported)"
         return 0
     fi
 
-    log_step "正在配置防火墙（$fw）——仅放行 22、443/tcp、443/udp"
+    log_step "$(t system.fw.configuring "$fw")"
     if [[ "$fw" == "ufw" ]]; then
         ufw --force reset &>/dev/null
         ufw default deny incoming &>/dev/null
@@ -329,17 +332,17 @@ configure_firewall() {
         if ! _fw_firewalld_active; then
             command -v systemctl &>/dev/null && systemctl enable --now firewalld &>/dev/null
             if ! firewall-cmd --state &>/dev/null; then
-                log_error "firewalld 未能启动，请手动执行：systemctl enable --now firewalld"
+                log_error "$(t system.fw.firewalld_start_fail)"
                 return 1
             fi
         fi
-        firewall-cmd --permanent --set-default-zone=drop || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --set-default-zone=drop"; return 1; }
-        firewall-cmd --permanent --add-port=22/tcp  || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --add-port=22/tcp"; return 1; }
-        firewall-cmd --permanent --add-port=443/tcp || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --add-port=443/tcp"; return 1; }
-        firewall-cmd --permanent --add-port=443/udp || { log_error "firewalld 配置失败，请手动执行：firewall-cmd --permanent --add-port=443/udp"; return 1; }
-        firewall-cmd --reload || { log_error "firewalld 重新加载失败，请手动执行：firewall-cmd --reload"; return 1; }
+        firewall-cmd --permanent --set-default-zone=drop || { log_error "$(t system.fw.firewalld_config_fail "firewall-cmd --permanent --set-default-zone=drop")"; return 1; }
+        firewall-cmd --permanent --add-port=22/tcp  || { log_error "$(t system.fw.firewalld_config_fail "firewall-cmd --permanent --add-port=22/tcp")"; return 1; }
+        firewall-cmd --permanent --add-port=443/tcp || { log_error "$(t system.fw.firewalld_config_fail "firewall-cmd --permanent --add-port=443/tcp")"; return 1; }
+        firewall-cmd --permanent --add-port=443/udp || { log_error "$(t system.fw.firewalld_config_fail "firewall-cmd --permanent --add-port=443/udp")"; return 1; }
+        firewall-cmd --reload || { log_error "$(t system.fw.firewalld_reload_fail)"; return 1; }
     fi
-    log_ok "防火墙已配置。"
+    log_ok "$(t system.fw.configured)"
 }
 
 # ── Dependency check ─────────────────────────────────────────────────────────
@@ -351,16 +354,16 @@ _system_check_deps() {
 system_menu() {
     _system_check_deps
     while true; do
-        show_menu "系统管理" \
-            "显示系统信息" \
-            "启用 BBR" \
-            "创建交换空间" \
-            "删除交换空间" \
-            "设置 DNS" \
-            "设置时区" \
-            "同步时间（NTP）" \
-            "应用内核参数优化" \
-            "配置防火墙（仅 443+22）"
+        show_menu "$(t system.menu.title)" \
+            "$(t system.menu.info)" \
+            "$(t system.menu.bbr)" \
+            "$(t system.menu.create_swap)" \
+            "$(t system.menu.delete_swap)" \
+            "$(t system.menu.dns)" \
+            "$(t system.menu.timezone)" \
+            "$(t system.menu.sync_time)" \
+            "$(t system.menu.tuning)" \
+            "$(t system.menu.firewall)"
 
         case "$MENU_CHOICE" in
             1) show_system_info ;;

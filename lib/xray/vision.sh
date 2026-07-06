@@ -66,16 +66,16 @@ _vision_sync_from_live() {
     done
     if (( changed )); then
         _vision_save "$nodes"
-        log_info "检测到 config.json 中的手动修改，已同步端口/UUID 到节点存储。"
+        log_info "$(t xray.manual_sync_port_uuid)"
     fi
     return 0
 }
 
 _show_node_list() {
     local lst; lst=$(_vision_list)
-    if [[ -z "$lst" ]]; then log_warn "暂无 Vision 节点。"; return; fi
-    echo -e "\n${BOLD}Vision 节点：${NC}"
-    printf "  %-20s %-6s %-15s %s\n" "标识" "端口" "监听" "域名"
+    if [[ -z "$lst" ]]; then log_warn "$(t xray.vision.no_nodes)"; return; fi
+    echo -e "\n${BOLD}$(t xray.vision.nodes_title)${NC}"
+    printf "  %-20s %-6s %-15s %s\n" "$(t xray.header.tag)" "$(t xray.header.port)" "$(t xray.header.listen)" "$(t xray.header.domain)"
     echo "$lst" | while IFS=$'\t' read -r t p l d; do
         printf "  %-20s %-6s %-15s %s\n" "$t" "$p" "$l" "$d"
     done
@@ -148,40 +148,40 @@ _vision_apply_all() {
 # ── Add node ──────────────────────────────────────────────────────────────────
 vision_add_node() {
     _vision_sync_from_live
-    log_step "正在配置 VLESS + Vision（TLS）节点..."
-    echo -e "  ${YELLOW}Vision 需要自己的域名和 TLS 证书。${NC}\n"
+    log_step "$(t xray.vision.adding)"
+    echo -e "  ${YELLOW}$(t xray.vision.need_domain_cert)${NC}\n"
 
     local count; count=$(_vision_load | jq 'length')
     local tag port uuid domain flow
 
-    ask tag  "节点标识"   "vision-$((count+1))"
-    ask port "本机端口"   "$((VISION_DEFAULT_PORT + count))"
-    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    ask tag  "$(t xray.ask.node_tag)"   "vision-$((count+1))"
+    ask port "$(t xray.ask.local_port)" "$((VISION_DEFAULT_PORT + count))"
+    _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
 
     # ── Domain + cert (always required for Vision) ────────────────────────────
-    ask domain "你的域名（必须解析到本机）"
-    [[ -z "$domain" ]] && { log_error "Vision 需要填写域名。"; return 1; }
+    ask domain "$(t xray.ask.domain_required)"
+    [[ -z "$domain" ]] && { log_error "$(t xray.vision.domain_required)"; return 1; }
 
     source "$LIB_DIR/cert.sh"
     cert_ensure_domain "$domain" || {
-        log_warn "取消——缺少有效的 TLS 证书。"
+        log_warn "$(t xray.vision.cancel_no_tls)"
         return 1
     }
 
-    ask uuid "UUID（留空自动生成）" ""
+    ask uuid "$(t xray.ask.uuid_auto)" ""
     [[ -z "$uuid" ]] && uuid=$(uuid_gen)
-    ask flow "Flow 参数" "xtls-rprx-vision"
+    ask flow "$(t xray.ask.flow)" "xtls-rprx-vision"
 
     # ── Nginx reverse proxy choice ────────────────────────────────────────────
     local listen_addr="" use_nginx=0 public_port fallback_enabled=true
     echo ""
-    if ask_yn "是否使用 Nginx 反向代理？（可让多个协议复用 443 端口）" N; then
+    if ask_yn "$(t xray.ask.nginx_proxy)" N; then
         use_nginx=1; listen_addr="127.0.0.1"
         if ! is_installed nginx; then
-            log_warn "Nginx 未安装。"
-            ask_yn "是否现在安装 Nginx？" Y \
+            log_warn "$(t xray.nginx_not_installed)"
+            ask_yn "$(t xray.ask_install_nginx)" Y \
                 && nginx_install \
-                || { log_error "反向代理模式需要 Nginx。"; return 1; }
+                || { log_error "$(t xray.proxy_need_nginx)"; return 1; }
         fi
         _sni_add_entry "$domain" "127.0.0.1:${port}"
         public_port=443
@@ -189,7 +189,7 @@ vision_add_node() {
         listen_addr="0.0.0.0"
         public_port="$port"
         if ! is_installed nginx; then
-            ask_yn "是否安装 Nginx 作为本地伪装 fallback？" Y \
+            ask_yn "$(t xray.ask_nginx_fallback)" Y \
                 && nginx_install \
                 || fallback_enabled=false
         fi
@@ -211,10 +211,10 @@ vision_add_node() {
     _vision_apply_all
 
     echo ""
-    log_ok "Vision 节点 '$tag' → ${listen_addr}:${port}"
+    log_ok "$(t xray.vision.added "$tag" "$listen_addr" "$port")"
 
     if (( use_nginx == 0 )); then
-        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$port" "tcp"
         }
@@ -227,30 +227,30 @@ vision_add_node() {
 # ── Delete node ───────────────────────────────────────────────────────────────
 vision_delete_node() {
     _show_node_list
-    local tag; ask tag "要删除的节点标识"
+    local tag; ask tag "$(t xray.ask.delete_node_tag)"
     local node; node=$(_vision_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     local domain; domain=$(echo "$node" | jq -r '.domain')
-    ask_yn "确认删除节点 '$tag'？" N || return 0
+    ask_yn "$(t xray.ask.delete_node "$tag")" N || return 0
     _vision_delete "$tag"
     _sni_remove_entry "$domain" 2>/dev/null || true
     _vision_apply_all
     if [[ -f "${CFG_DIR}/traffic/state.json" ]]; then
         source "$LIB_DIR/traffic.sh"; _trf_init; _trf_cleanup_node "$tag"
     fi
-    log_ok "已删除。"
+    log_ok "$(t xray.deleted)"
 }
 
 # ── Modify helpers ────────────────────────────────────────────────────────────
 vision_modify_domain() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_vision_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     local old_domain; old_domain=$(echo "$node" | jq -r '.domain')
-    local new_domain; ask new_domain "新域名"
+    local new_domain; ask new_domain "$(t xray.ask.new_domain)"
     source "$LIB_DIR/cert.sh"
-    cert_ensure_domain "$new_domain" || { log_warn "取消——无有效证书。"; return 1; }
+    cert_ensure_domain "$new_domain" || { log_warn "$(t xray.cancel_no_cert)"; return 1; }
     _sni_remove_entry "$old_domain" 2>/dev/null || true
     node=$(echo "$node" | jq --arg v "$new_domain" '.domain=$v')
     _vision_upsert "$node"
@@ -258,28 +258,28 @@ vision_modify_domain() {
     local listen_addr; listen_addr=$(echo "$node" | jq -r '.listen_addr // "127.0.0.1"')
     [[ "$listen_addr" == "127.0.0.1" ]] && _sni_add_entry "$new_domain" "127.0.0.1:${port}" 2>/dev/null || true
     _vision_apply_all
-    log_ok "域名已更新为 $new_domain"
+    log_ok "$(t xray.domain_updated "$new_domain")"
 }
 
 vision_modify_uuid() {
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_vision_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
-    local new_uuid; ask new_uuid "新 UUID（留空自动生成）" ""
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+    local new_uuid; ask new_uuid "$(t xray.ask.uuid_auto)" ""
     [[ -z "$new_uuid" ]] && new_uuid=$(uuid_gen)
     node=$(echo "$node" | jq --arg v "$new_uuid" '.uuid=$v')
     _vision_upsert "$node"
     _vision_apply_all
-    log_ok "UUID 已更新。"
+    log_ok "$(t xray.uuid_updated)"
 }
 
 vision_modify_port() {
     _vision_sync_from_live
     _show_node_list
-    local tag; ask tag "节点标识"
+    local tag; ask tag "$(t xray.ask.node_tag)"
     local node; node=$(_vision_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
     local old_port listen domain
     old_port=$(echo "$node" | jq -r '.port')
     listen=$(echo "$node"   | jq -r '.listen_addr // "127.0.0.1"')
@@ -287,27 +287,27 @@ vision_modify_port() {
 
     local port
     [[ "$listen" == "127.0.0.1" ]] \
-        && log_info "该节点经 Nginx 反代（公网端口保持 443），修改的是本机 Xray 监听端口。"
-    ask port "新端口" "$old_port"
-    [[ "$port" == "$old_port" ]] && { log_info "端口未变。"; return 0; }
+        && log_info "$(t xray.nginx_proxy_port_note)"
+    ask port "$(t xray.ask.new_port)" "$old_port"
+    [[ "$port" == "$old_port" ]] && { log_info "$(t xray.port_unchanged)"; return 0; }
     if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-        log_error "无效端口"; return 1
+        log_error "$(t xray.invalid_port_short)"; return 1
     fi
-    _xray_check_port_conflict "$port" || { log_info "已取消"; return 1; }
+    _xray_check_port_conflict "$port" || { log_info "$(t common.cancelled)"; return 1; }
 
     node=$(echo "$node" | jq --argjson p "$port" \
         '.port = $p | (if (.listen_addr // "127.0.0.1") != "127.0.0.1" then .public_port = $p else . end)')
     _vision_upsert "$node"
     [[ "$listen" == "127.0.0.1" ]] && _sni_add_entry "$domain" "127.0.0.1:${port}" || true
     _vision_apply_all
-    log_ok "节点 '$tag' 端口已更新：${old_port} → ${port}"
+    log_ok "$(t xray.port_updated "$tag" "$old_port" "$port")"
 
     if [[ "$listen" != "127.0.0.1" ]]; then
-        ask_yn "是否现在放行防火墙端口 ${port}/tcp？" Y && {
+        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
             source "$LIB_DIR/system.sh"
             firewall_open_port "$port" "tcp"
         }
-        log_info "原端口 ${old_port}/tcp 若已在防火墙放行，不再使用时请手动关闭。"
+        log_info "$(t xray.old_port_note "$old_port")"
     fi
 }
 
@@ -315,9 +315,9 @@ vision_modify_port() {
 vision_show_share() {
     local tag="$1"
     _vision_sync_from_live
-    [[ -z "$tag" ]] && { _show_node_list; ask tag "节点标识"; }
+    [[ -z "$tag" ]] && { _show_node_list; ask tag "$(t xray.ask.node_tag)"; }
     local node; node=$(_vision_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到该节点"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
 
     local uuid;   uuid=$(echo "$node"   | jq -r '.uuid')
     local domain; domain=$(echo "$node" | jq -r '.domain')
@@ -335,7 +335,7 @@ vision_show_share() {
     fi
 
     local uri="vless://${uuid}@${host}:${ref_port}?encryption=none&flow=${flow}&security=tls&sni=${domain}&type=tcp#PSM-${tag}"
-    echo -e "\n${BOLD}${GREEN}── Vision 分享链接 ──${NC}"
+    echo -e "\n${BOLD}${GREEN}$(t xray.vision.share_title)${NC}"
     echo "  $uri"
     echo ""
     echo "$uri" | qrencode -t ANSIUTF8 2>/dev/null || true
@@ -345,10 +345,10 @@ vision_show_share() {
 _vision_check_deps() {
     ensure_pkg_deps jq qrencode
     if ! [[ -f "$XRAY_BIN" ]]; then
-        log_warn "Xray 未安装。"
-        ask_yn "是否现在安装 Xray？" Y \
+        log_warn "$(t xray.need_install)"
+        ask_yn "$(t xray.ask_install_xray)" Y \
             && xray_install \
-            || { log_error "Vision 需要 Xray。"; return 1; }
+            || { log_error "$(t xray.vision.need_xray)"; return 1; }
     fi
 }
 
@@ -359,14 +359,14 @@ vision_menu() {
         # 每轮菜单前同步一次，避免任何走 _vision_apply_all 的操作
         # 用过期的节点存储覆盖 config.json 中的手动修改。
         _vision_sync_from_live
-        show_menu "Vision 管理" \
-            "添加节点" \
-            "删除节点" \
-            "修改域名" \
-            "修改 UUID" \
-            "修改端口" \
-            "显示分享链接 / URI" \
-            "列出节点"
+        show_menu "$(t xray.vision.menu.title)" \
+            "$(t xray.vision.menu.add)" \
+            "$(t xray.vision.menu.delete)" \
+            "$(t xray.vision.menu.domain)" \
+            "$(t xray.vision.menu.uuid)" \
+            "$(t xray.vision.menu.port)" \
+            "$(t xray.vision.menu.share)" \
+            "$(t xray.vision.menu.list)"
 
         case "$MENU_CHOICE" in
             1) vision_add_node ;;

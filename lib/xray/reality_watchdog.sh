@@ -340,7 +340,7 @@ _rwd_recent_reality_errors() {
 rwd_add_candidate() {
     local tag="$1" server_name="$2" dest="$3"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到 Reality 节点：$tag"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.rwd.node_not_found "$tag")"; return 1; }
 
     _rwd_init
     local all; all=$(_rwd_load)
@@ -363,13 +363,13 @@ rwd_add_candidate() {
 
     all=$(echo "$all" | jq --arg t "$tag" --argjson e "$entry" '.[$t] = $e')
     _rwd_save "$all"
-    log_ok "候选目标已添加：${server_name} → ${dest}（节点 ${tag}）"
+    log_ok "$(t xray.rwd.candidate_added "$server_name" "$dest" "$tag")"
 }
 
 _rwd_ensure_node_enabled() {
     local tag="$1"
     local node; node=$(_reality_get_by_tag "$tag")
-    [[ -z "$node" ]] && { log_error "未找到 Reality 节点：$tag"; return 1; }
+    [[ -z "$node" ]] && { log_error "$(t xray.rwd.node_not_found "$tag")"; return 1; }
 
     _rwd_init
     local all; all=$(_rwd_load)
@@ -390,17 +390,17 @@ rwd_remove_candidate() {
     local tag="$1" server_name="$2"
     local all; all=$(_rwd_load)
     local entry; entry=$(echo "$all" | jq --arg t "$tag" '.[$t] // empty')
-    [[ -z "$entry" ]] && { log_warn "节点 ${tag} 尚未启用测活切换"; return 1; }
+    [[ -z "$entry" ]] && { log_warn "$(t xray.rwd.not_enabled "$tag")"; return 1; }
 
     local active; active=$(echo "$entry" | jq -r '.active')
     if [[ "$active" == "$server_name" ]]; then
-        log_error "不能删除当前生效的候选目标（${server_name}），请先切换到其他候选"
+        log_error "$(t xray.rwd.cannot_remove_active "$server_name")"
         return 1
     fi
     entry=$(echo "$entry" | jq --arg sn "$server_name" '.candidates = [.candidates[] | select(.server_name != $sn)]')
     all=$(echo "$all" | jq --arg t "$tag" --argjson e "$entry" '.[$t] = $e')
     _rwd_save "$all"
-    log_ok "候选目标已删除：${server_name}"
+    log_ok "$(t xray.rwd.candidate_removed "$server_name")"
 }
 
 # ── Atomic switch: update reality.json + Nginx SNI map + apply to Xray ────────
@@ -439,7 +439,7 @@ _rwd_switch_node() {
         declare -f _sni_add_entry &>/dev/null && _sni_add_entry "$new_sn" "127.0.0.1:${port}" 2>/dev/null || true
     fi
 
-    log_warn "[Reality 测活] 节点 ${tag}：伪装目标已切换 → ${new_sn}（${new_dest}），旧 SNI（${old_sn} 等）仍对已有客户端保持有效"
+    log_warn "$(t xray.rwd.switched "$tag" "$new_sn" "$new_dest" "$old_sn")"
 }
 
 # ── Periodic check for one node ────────────────────────────────────────────────
@@ -503,7 +503,7 @@ rwd_check_node() {
     else
         entry=$(echo "$entry" | jq --arg r "${RWD_LISTENER_REASON:-unknown}" \
             '.listener_ok = false | .listener_reason = $r')
-        echo "${now} tag=${tag} WARN Xray REALITY 监听异常（${RWD_LISTENER_REASON:-unknown}，127.0.0.1:${nport}）——切换伪装目标无法修复，请检查 Xray 是否运行" >> "$RWD_LOG"
+        echo "$(t xray.rwd.log_listener_bad "$now" "$tag" "${RWD_LISTENER_REASON:-unknown}" "$nport")" >> "$RWD_LOG"
     fi
 
     # ── Layer 3: optional external client-vantage probe for the active SNI ────
@@ -515,13 +515,13 @@ rwd_check_node() {
             entry=$(echo "$entry" | jq --arg sn "$active" \
                 '(.candidates[] | select(.server_name == $sn) | .consec_fail) += 1')
         fi
-        echo "${now} tag=${tag} sni=${active} WARN 外部测活失败（${RWD_PROBE_REASON:-unknown}）——客户端侧可能被封锁，计入失败以考虑切换" >> "$RWD_LOG"
+        echo "$(t xray.rwd.log_external_fail "$now" "$tag" "$active" "${RWD_PROBE_REASON:-unknown}")" >> "$RWD_LOG"
     fi
 
     # ── Passive advisory: recent REALITY rejections in Xray's error log ──────
     local rerr; rerr=$(_rwd_recent_reality_errors)
     if [[ "$rerr" =~ ^[0-9]+$ ]] && (( rerr > 0 )); then
-        echo "${now} tag=${tag} INFO Xray error.log 近期出现 ${rerr} 条 REALITY 拒绝/异常记录（全局信号，非本节点专属）" >> "$RWD_LOG"
+        echo "$(t xray.rwd.log_recent_errors "$now" "$tag" "$rerr")" >> "$RWD_LOG"
     fi
 
     # Decide whether the active candidate needs replacing
@@ -538,7 +538,7 @@ rwd_check_node() {
             _rwd_switch_node "$tag" "$next_sn" "$next_dest"
             entry=$(echo "$entry" | jq --arg sn "$next_sn" --arg now "$now" '.active = $sn | .last_switch = $now')
         else
-            echo "${now} tag=${tag} WARN 当前目标连续失败 ${fail} 次，但没有健康的备选目标" >> "$RWD_LOG"
+            echo "$(t xray.rwd.log_no_backup "$now" "$tag" "$fail")" >> "$RWD_LOG"
         fi
     fi
 
@@ -556,10 +556,10 @@ rwd_check_all() {
 
 # ── Status display ─────────────────────────────────────────────────────────────
 rwd_status() {
-    echo -e "\n${BOLD}${BLUE}══ Reality 多目标测活切换状态 ══════════════════${NC}"
+    echo -e "\n${BOLD}${BLUE}$(t xray.rwd.status_title)${NC}"
     local tags; tags=$(_rwd_enabled_tags)
     if [[ -z "$tags" ]]; then
-        echo -e "  ${YELLOW}尚未为任何节点启用测活切换${NC}"
+        echo -e "  ${YELLOW}$(t xray.rwd.none_enabled)${NC}"
         echo -e "${BOLD}${BLUE}════════════════════════════════════════════════${NC}"
         return
     fi
@@ -567,24 +567,24 @@ rwd_status() {
     while IFS= read -r tag; do
         local entry; entry=$(_rwd_get_entry "$tag")
         local active last_check; active=$(echo "$entry" | jq -r '.active'); last_check=$(echo "$entry" | jq -r '.last_check')
-        echo -e "\n  ${CYAN}节点 ${tag}${NC}  最近检查：${last_check:-（未检查）}"
+        echo -e "\n  ${CYAN}$(t xray.rwd.node_last_check "$tag" "${last_check:-$(t xray.rwd.not_checked)}")${NC}"
 
         # Layer 1 listener health line (node-wide).
         local listener_ok listener_reason
         listener_ok=$(echo "$entry" | jq -r '.listener_ok // empty')
         listener_reason=$(echo "$entry" | jq -r '.listener_reason // ""')
         if [[ "$listener_ok" == "false" ]]; then
-            echo -e "    Xray 监听：${RED}异常（${listener_reason:-unknown}）——切换目标无法修复，请检查 Xray${NC}"
+            echo -e "    ${RED}$(t xray.rwd.listener_bad "${listener_reason:-unknown}")${NC}"
         elif [[ "$listener_ok" == "true" ]]; then
-            echo -e "    Xray 监听：${GREEN}正常${NC}"
+            echo -e "    ${GREEN}$(t xray.rwd.listener_ok)${NC}"
         fi
 
         echo "$entry" | jq -r '.candidates[] | "\(.server_name)\t\(.dest)\t\(.consec_fail)\t\(.last_rtt_ms // "")\t\(.last_warn // "")"' \
             | while IFS=$'\t' read -r sn dest fail rtt warn; do
                 local mark="  "
                 [[ "$sn" == "$active" ]] && mark="${GREEN}●${NC} "
-                local health="${GREEN}健康${NC}"
-                (( fail > 0 )) && health="${RED}失败 ${fail} 次${NC}"
+                local health="${GREEN}$(t xray.rwd.healthy)${NC}"
+                (( fail > 0 )) && health="${RED}$(t xray.rwd.failed_times "$fail")${NC}"
                 local extra=""
                 [[ -n "$rtt"  ]] && extra="${extra} ${rtt}ms"
                 [[ -n "$warn" ]] && extra="${extra} ${YELLOW}[${warn}]${NC}"
@@ -626,21 +626,21 @@ EOF
 
     systemctl daemon-reload
     systemctl enable --now psm-reality-watchdog.timer
-    log_ok "Reality 测活切换定时器已安装：每 10 分钟检测一次"
+    log_ok "$(t xray.rwd.timer_installed)"
 }
 
 _rwd_uninstall_timer() {
     systemctl disable --now psm-reality-watchdog.timer 2>/dev/null || true
     rm -f "$PSM_RWD_SVC" "$PSM_RWD_TIMER"
     systemctl daemon-reload
-    log_ok "Reality 测活切换定时器已删除"
+    log_ok "$(t xray.rwd.timer_removed)"
 }
 
 # ── Interactive wizard ───────────────────────────────────────────────────────
 _rwd_pick_reality_tag() {
     _show_node_list >&2
-    local tag; ask tag "节点标识"
-    [[ -z "$(_reality_get_by_tag "$tag")" ]] && { log_error "未找到节点：$tag"; return 1; }
+    local tag; ask tag "$(t xray.ask.node_tag)"
+    [[ -z "$(_reality_get_by_tag "$tag")" ]] && { log_error "$(t xray.node_not_found): $tag"; return 1; }
     printf '%s' "$tag"
 }
 
@@ -648,75 +648,75 @@ rwd_setup_wizard() {
     local tag; tag=$(_rwd_pick_reality_tag) || return 1
     _rwd_ensure_node_enabled "$tag" || return 1
 
-    log_info "已为节点 ${tag} 启用测活切换（当前 SNI/伪装目标已作为候选 #1）"
-    echo -e "  ${YELLOW}切换时只会更新伪装目标，已发给客户端的旧 SNI 链接会一直保留有效，${NC}"
-    echo -e "  ${YELLOW}无需通知客户端更新——新客户端拿到的链接会使用当前生效的 SNI。${NC}"
+    log_info "$(t xray.rwd.enabled "$tag")"
+    echo -e "  ${YELLOW}$(t xray.rwd.keep_old1)${NC}"
+    echo -e "  ${YELLOW}$(t xray.rwd.keep_old2)${NC}"
     echo ""
-    echo -e "  ${YELLOW}候选目标选择建议（重要）：${NC}"
-    echo -e "    • 服务器端测活无法察觉客户端所在地区对某 SNI 的封锁/限速。"
-    echo -e "      被教程用烂的大厂域名（www.microsoft.com / www.apple.com /"
-    echo -e "      www.amazon.com 等）恰恰最容易在客户端侧被指纹识别或限速——"
-    echo -e "      ${RED}优先避免使用${NC}，即使本机测活显示健康。"
-    echo -e "    • 首选：目标地区能正常访问、较冷门、支持 TLS1.3 + X25519 + h2、"
-    echo -e "      且证书 SNI 与域名匹配的独立站点（测活会自动校验这些条件）。"
-    echo -e "    • 想真正检测客户端侧封锁，可配置外部测活钩子 ${CYAN}RWD_CLIENT_PROBE${NC}"
-    echo -e "      （见文件头注释），从境外/客户端网络对节点做真实拨测。"
+    echo -e "  ${YELLOW}$(t xray.rwd.advice_title)${NC}"
+    echo -e "    $(t xray.rwd.advice1)"
+    echo -e "      $(t xray.rwd.advice2)"
+    echo -e "      $(t xray.rwd.advice3)"
+    echo -e "      ${RED}$(t xray.rwd.advice4)${NC}"
+    echo -e "    $(t xray.rwd.advice5)"
+    echo -e "      $(t xray.rwd.advice6)"
+    echo -e "    $(t xray.rwd.advice7 "${CYAN}RWD_CLIENT_PROBE${NC}")"
+    echo -e "      $(t xray.rwd.advice8)"
     echo ""
 
-    if ask_yn "是否用测绘引擎发现同网络的候选伪装目标并批量加入？" Y; then
+    if ask_yn "$(t xray.rwd.ask_discover_many)" Y; then
         source "$LIB_DIR/xray/sni_finder.sh"
         sni_finder_pick_many "$tag" || true   # 内部逐个 rwd_add_candidate "$tag" "$sni" "$dest"
     fi
 
-    while ask_yn "是否再添加一个候选伪装目标？" Y; do
+    while ask_yn "$(t xray.rwd.ask_add_more)" Y; do
         local sn dest
-        ask sn   "伪装 SNI（如 www.apple.com）"
-        ask dest "伪装目标 host:port（如 www.apple.com:443）" "${sn}:443"
-        [[ -z "$sn" || -z "$dest" ]] && { log_error "SNI 和目标不能为空"; continue; }
+        ask sn   "$(t xray.rwd.ask_sni)"
+        ask dest "$(t xray.rwd.ask_dest)" "${sn}:443"
+        [[ -z "$sn" || -z "$dest" ]] && { log_error "$(t xray.rwd.sni_dest_empty)"; continue; }
         rwd_add_candidate "$tag" "$sn" "$dest"
     done
 
-    ask_yn "是否现在启用定时自动测活切换？" Y && _rwd_install_timer
-    log_ok "配置完成。可随时在此菜单查看状态或手动触发检测。"
+    ask_yn "$(t xray.rwd.ask_enable_timer)" Y && _rwd_install_timer
+    log_ok "$(t xray.rwd.setup_done)"
 }
 
 rwd_disable_node() {
     local tag; tag=$(_rwd_pick_reality_tag) || return 1
-    ask_yn "确认停用节点 ${tag} 的测活切换？（已切换过的 SNI/目标保持不变，仅停止监控）" N || return
+    ask_yn "$(t xray.rwd.ask_disable "$tag")" N || return
     local all; all=$(_rwd_load)
     all=$(echo "$all" | jq --arg t "$tag" 'del(.[$t])')
     _rwd_save "$all"
-    log_ok "已停用节点 ${tag} 的测活切换"
+    log_ok "$(t xray.rwd.disabled "$tag")"
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────
 rwd_menu() {
     while true; do
         rwd_status
-        show_menu "Reality 多目标测活切换" \
-            "为节点启用测活切换 / 添加候选目标" \
-            "删除某节点的候选目标" \
-            "立即执行一次检测" \
-            "启用定时检测" \
-            "停止定时检测" \
-            "停用某节点的测活切换" \
-            "查看检测日志" \
-            "发现伪装域名（测绘引擎）并批量加入候选" \
-            "配置 / 更换测绘引擎与 API Key"
+        show_menu "$(t xray.rwd.menu.title)" \
+            "$(t xray.rwd.menu.setup)" \
+            "$(t xray.rwd.menu.remove)" \
+            "$(t xray.rwd.menu.check)" \
+            "$(t xray.rwd.menu.timer_on)" \
+            "$(t xray.rwd.menu.timer_off)" \
+            "$(t xray.rwd.menu.disable)" \
+            "$(t xray.rwd.menu.logs)" \
+            "$(t xray.rwd.menu.discover)" \
+            "$(t xray.rwd.menu.engine)"
 
         case "$MENU_CHOICE" in
             1) rwd_setup_wizard; press_enter ;;
             2)
                 local tag; tag=$(_rwd_pick_reality_tag) && {
-                    local sn; ask sn "要删除的候选 SNI"
+                    local sn; ask sn "$(t xray.rwd.ask_remove_sni)"
                     rwd_remove_candidate "$tag" "$sn"
                 }
                 press_enter ;;
-            3) log_step "正在检测（视候选数量需要数秒到数十秒）..."; rwd_check_all; log_ok "检测完成"; press_enter ;;
+            3) log_step "$(t xray.rwd.checking)"; rwd_check_all; log_ok "$(t xray.rwd.check_done)"; press_enter ;;
             4) _rwd_install_timer;   press_enter ;;
             5) _rwd_uninstall_timer; press_enter ;;
             6) rwd_disable_node;     press_enter ;;
-            7) [[ -f "$RWD_LOG" ]] && tail -n 50 "$RWD_LOG" || log_warn "暂无日志"; press_enter ;;
+            7) [[ -f "$RWD_LOG" ]] && tail -n 50 "$RWD_LOG" || log_warn "$(t xray.rwd.no_logs)"; press_enter ;;
             8)
                 local tag; tag=$(_rwd_pick_reality_tag) && {
                     source "$(dirname "${BASH_SOURCE[0]}")/sni_finder.sh"
