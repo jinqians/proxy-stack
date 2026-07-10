@@ -94,6 +94,14 @@ ask_yn "$(t uninstall.ask_singbox)" N && {
     log_ok "$(t uninstall.singbox_removed)"
 }
 
+ask_yn "$(t uninstall.ask_mihomo)" N && {
+    _systemctl_stop_disable mihomo
+    rm -f "$MIHOMO_BIN" /etc/systemd/system/mihomo.service
+    rm -rf "$MIHOMO_CFG_DIR" "$CFG_DIR/mihomo"
+    systemctl daemon-reload
+    log_ok "$(t uninstall.mihomo_removed)"
+}
+
 ask_yn "$(t uninstall.ask_hy2)" N && {
     _systemctl_stop_disable hysteria-server
     rm -f /usr/local/bin/hysteria /etc/systemd/system/hysteria-server.service

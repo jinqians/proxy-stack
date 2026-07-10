@@ -1,6 +1,7 @@
 # Runtime state (may contain credentials/passwords)
 config/psm.state
 config/xray/
+config/mihomo/
 config/stream/
 config/http/
 config/ssl/
@@ -14,3 +15,6 @@ logs/
 
 # macOS
 .DS_Store
+
+# Local dev notes (internal handoff spec, keep out of the public repo)
+docs/mihomo-dev-spec.md

@@ -96,6 +96,11 @@ _banner() {
     [[ -x "${SINGBOX_BIN:-}" ]] \
         && sb_ver=$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR==1{print $3}')
 
+    local mh_ver="$(t mgr.status.not_installed)"
+    [[ -x "${MIHOMO_BIN:-}" ]] \
+        && mh_ver=$("$MIHOMO_BIN" -v 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    [[ -z "$mh_ver" ]] && mh_ver="$(t mgr.status.installed)"
+
     local hy2_ver="$(t mgr.status.not_installed)"
     if [[ -x "/usr/local/bin/hysteria" ]]; then
         hy2_ver=$(/usr/local/bin/hysteria version 2>/dev/null | awk 'NR==1{print $NF}')
@@ -139,7 +144,7 @@ _banner() {
     printf "  ${BLUE}──────────────────────────────────────────${NC}\n"
     printf "  ${CYAN}IP   ${NC}▶  %-20s  ${CYAN}Nginx${NC}     ▶  %s\n"  "$ipv4"     "$nginx_ver"
     printf "  ${CYAN}Xray ${NC}▶  %-20s  ${CYAN}Hysteria2${NC} ▶  %s\n"  "$xray_ver" "$hy2_ver"
-    printf "  ${CYAN}Sing-box${NC} ▶  %s\n"  "$sb_ver"
+    printf "  ${CYAN}Sing-box${NC} ▶  %-20s  ${CYAN}Mihomo${NC}     ▶  %s\n"  "$sb_ver" "$mh_ver"
     [[ -n "$snell_ver" || -n "$ss_ver" ]] && \
         printf "  ${CYAN}Snell${NC} ▶  %-20s  ${CYAN}ss-rust${NC}   ▶  %s\n" \
                "${snell_ver:----}" "${ss_ver:----}"
@@ -164,16 +169,17 @@ _main_menu() {
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
     echo -e "${BOLD}                  $(t menu.main.title)${NC}"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
-    printf "  ${C} 1.${N} %s  ${C}11.${N} %s\n"  "$(_mpad "$(t menu.main.system)")"     "$(t menu.main.realm)"
-    printf "  ${C} 2.${N} %s  ${C}12.${N} %s\n"  "$(_mpad "$(t menu.main.singbox)")"    "$(t menu.main.ddns)"
-    printf "  ${C} 3.${N} %s  ${C}13.${N} %s\n"  "$(_mpad "$(t menu.main.xray)")"       "$(t menu.main.docker)"
-    printf "  ${C} 4.${N} %s  ${C}14.${N} %s\n"  "$(_mpad "$(t menu.main.snell)")"      "$(t menu.main.traffic)"
-    printf "  ${C} 5.${N} %s  ${C}15.${N} %s\n"  "$(_mpad "$(t menu.main.ssrust)")"     "$(t menu.main.tgbot)"
-    printf "  ${C} 6.${N} %s  ${C}16.${N} %s\n"  "$(_mpad "$(t menu.main.hysteria2)")"  "$(t menu.main.backup)"
-    printf "  ${C} 7.${N} %s  ${C}17.${N} %s\n"  "$(_mpad "$(t menu.main.nginx)")"      "$(t menu.main.restore)"
-    printf "  ${C} 8.${N} %s  ${C}18.${N} %s\n"  "$(_mpad "$(t menu.main.website)")"    "$(t menu.main.update)"
-    printf "  ${C} 9.${N} %s  ${C}19.${N} %s\n"  "$(_mpad "$(t menu.main.cert)")"       "$(t menu.main.security)"
-    printf "  ${C}10.${N} %s  ${C}20.${N} %s\n"  "$(_mpad "$(t menu.main.view_nodes)")" "$(t menu.main.language)"
+    printf "  ${C} 1.${N} %s  ${C}12.${N} %s\n"  "$(_mpad "$(t menu.main.system)")"     "$(t menu.main.realm)"
+    printf "  ${C} 2.${N} %s  ${C}13.${N} %s\n"  "$(_mpad "$(t menu.main.singbox)")"    "$(t menu.main.ddns)"
+    printf "  ${C} 3.${N} %s  ${C}14.${N} %s\n"  "$(_mpad "$(t menu.main.mihomo)")"     "$(t menu.main.docker)"
+    printf "  ${C} 4.${N} %s  ${C}15.${N} %s\n"  "$(_mpad "$(t menu.main.xray)")"       "$(t menu.main.traffic)"
+    printf "  ${C} 5.${N} %s  ${C}16.${N} %s\n"  "$(_mpad "$(t menu.main.snell)")"      "$(t menu.main.tgbot)"
+    printf "  ${C} 6.${N} %s  ${C}17.${N} %s\n"  "$(_mpad "$(t menu.main.ssrust)")"     "$(t menu.main.backup)"
+    printf "  ${C} 7.${N} %s  ${C}18.${N} %s\n"  "$(_mpad "$(t menu.main.hysteria2)")"  "$(t menu.main.restore)"
+    printf "  ${C} 8.${N} %s  ${C}19.${N} %s\n"  "$(_mpad "$(t menu.main.nginx)")"      "$(t menu.main.update)"
+    printf "  ${C} 9.${N} %s  ${C}20.${N} %s\n"  "$(_mpad "$(t menu.main.website)")"    "$(t menu.main.security)"
+    printf "  ${C}10.${N} %s  ${C}21.${N} %s\n"  "$(_mpad "$(t menu.main.cert)")"       "$(t menu.main.language)"
+    printf "  ${C}11.${N} %s\n"  "$(t menu.main.view_nodes)"
     echo -e "${B}──────────────────────────────────────────────────────────────${NC}"
     printf "  ${C} 0.${N} %s\n" "$(t menu.main.exit)"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
@@ -193,6 +199,12 @@ _view_all_nodes() {
     source "$LIB_DIR/singbox/hysteria2.sh" 2>/dev/null; _sb_hy2_show_node_list     2>/dev/null || true
     source "$LIB_DIR/singbox/anytls.sh"    2>/dev/null; _sb_anytls_show_node_list  2>/dev/null || true
     source "$LIB_DIR/singbox/snell.sh"     2>/dev/null; _sb_snell_show_node_list   2>/dev/null || true
+
+    source "$LIB_DIR/mihomo/reality.sh"   2>/dev/null; _mh_reality_show_node_list 2>/dev/null || true
+    source "$LIB_DIR/mihomo/ss2022.sh"    2>/dev/null; _mh_ss_show_node_list      2>/dev/null || true
+    source "$LIB_DIR/mihomo/hysteria2.sh" 2>/dev/null; _mh_hy2_show_node_list     2>/dev/null || true
+    source "$LIB_DIR/mihomo/anytls.sh"    2>/dev/null; _mh_anytls_show_node_list  2>/dev/null || true
+    source "$LIB_DIR/mihomo/snell.sh"     2>/dev/null; _mh_snell_show_node_list   2>/dev/null || true
 
     echo -e "\n${BOLD}Hysteria2:${NC}"
     if [[ -f /etc/hysteria/config.yaml ]]; then
@@ -223,74 +235,78 @@ main() {
                 sb_menu
                 ;;
             3)
+                source "$LIB_DIR/mihomo/core.sh"
+                mh_menu
+                ;;
+            4)
                 source "$LIB_DIR/xray/core.sh"
                 xray_menu
                 ;;
-            4)
+            5)
                 source "$LIB_DIR/snell.sh"
                 snell_menu
                 ;;
-            5)
+            6)
                 source "$LIB_DIR/ssrust.sh"
                 ssrust_menu
                 ;;
-            6)
+            7)
                 source "$LIB_DIR/hysteria2.sh"
                 hysteria2_menu
-                ;;
-            7)
-                source "$LIB_DIR/nginx.sh"
-                nginx_menu
                 ;;
             8)
                 source "$LIB_DIR/nginx.sh"
                 nginx_menu
                 ;;
             9)
+                source "$LIB_DIR/nginx.sh"
+                nginx_menu
+                ;;
+            10)
                 source "$LIB_DIR/cert.sh"
                 cert_menu
                 ;;
-            10)
+            11)
                 _view_all_nodes
                 press_enter
                 ;;
-            11)
+            12)
                 source "$LIB_DIR/realm.sh"
                 realm_menu
                 ;;
-            12)
+            13)
                 source "$LIB_DIR/cloudflare.sh"
                 cloudflare_menu
                 ;;
-            13)
+            14)
                 source "$LIB_DIR/docker.sh"
                 docker_menu
                 ;;
-            14)
+            15)
                 source "$LIB_DIR/traffic.sh"
                 traffic_menu
                 ;;
-            15)
+            16)
                 source "$LIB_DIR/tg_bot.sh"
                 tgbot_menu
                 ;;
-            16)
+            17)
                 source "$LIB_DIR/backup.sh"
                 backup_menu
                 ;;
-            17)
+            18)
                 source "$LIB_DIR/backup.sh"
                 do_restore
                 ;;
-            18)
+            19)
                 source "$PSM_ROOT/update.sh"
                 psm_update
                 ;;
-            19)
+            20)
                 source "$LIB_DIR/security/core.sh"
                 security_menu
                 ;;
-            20)
+            21)
                 i18n_pick_lang
                 ;;
             0)

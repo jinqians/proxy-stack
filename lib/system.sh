@@ -363,7 +363,8 @@ system_menu() {
             "$(t system.menu.timezone)" \
             "$(t system.menu.sync_time)" \
             "$(t system.menu.tuning)" \
-            "$(t system.menu.firewall)"
+            "$(t system.menu.firewall)" \
+            "$(t system.menu.vps_test)"
 
         case "$MENU_CHOICE" in
             1) show_system_info ;;
@@ -375,6 +376,7 @@ system_menu() {
             7) sync_time ;;
             8) apply_sysctl_tuning ;;
             9) configure_firewall ;;
+            10) source "$LIB_DIR/vps_test.sh"; vps_test_menu; continue ;;
             0) return ;;
         esac
         press_enter

@@ -59,6 +59,16 @@ psm_update_singbox() {
     sb_upgrade
 }
 
+psm_update_mihomo() {
+    if [[ ! -f "$MIHOMO_BIN" ]]; then
+        log_info "$(t update.mihomo_not_installed)"
+        return 0
+    fi
+    log_step "$(t update.mihomo)"
+    source "$LIB_DIR/mihomo/core.sh"
+    mh_upgrade
+}
+
 psm_update_hysteria2() {
     log_step "$(t update.hy2)"
     source "$LIB_DIR/hysteria2.sh"
@@ -90,6 +100,7 @@ psm_update() {
         "$(t update.menu.scripts)" \
         "$(t update.menu.xray)" \
         "$(t update.menu.singbox)" \
+        "$(t update.menu.mihomo)" \
         "$(t update.menu.hy2)" \
         "$(t update.menu.nginx)" \
         "$(t update.menu.geo)" \
@@ -99,13 +110,15 @@ psm_update() {
         1) psm_update_scripts ;;
         2) psm_update_xray ;;
         3) psm_update_singbox ;;
-        4) psm_update_hysteria2 ;;
-        5) psm_update_nginx ;;
-        6) psm_update_geofiles ;;
-        7)
+        4) psm_update_mihomo ;;
+        5) psm_update_hysteria2 ;;
+        6) psm_update_nginx ;;
+        7) psm_update_geofiles ;;
+        8)
             psm_update_scripts
             psm_update_xray
             psm_update_singbox
+            psm_update_mihomo
             psm_update_hysteria2
             psm_update_nginx
             psm_update_geofiles

@@ -2,7 +2,7 @@
 
 # JQ's Proxy Stack Manager
 
-**올인원 Linux 프록시 서버 관리 도구 · Xray / sing-box 듀얼 코어**
+**올인원 Linux 프록시 서버 관리 도구 · Xray / sing-box / mihomo 트리플 코어**
 
 <p>
   <img src="https://img.shields.io/badge/Platform-Linux-1793D1?logo=linux&logoColor=white" alt="Platform">
@@ -32,6 +32,7 @@
   ──────────────────────────────────────────
   IP    ▶  x.x.x.x              Nginx     ▶  1.x.x
   Xray  ▶  x.x.x                Hysteria2 ▶  2.x.x
+  Sing-box ▶  x.x.x             Mihomo    ▶  v1.x.x
   ──────────────────────────────────────────
 ```
 
@@ -39,7 +40,7 @@
 
 ## 소개
 
-**Proxy Stack Manager(PSM)** 는 Bash 기반의 Linux 프록시 서버 올인원 관리 도구입니다. `psm` 명령 하나로 VLESS Reality / Vision / XHTTP, Shadowsocks, Hysteria2, Snell, AnyTLS 등 다양한 프록시 프로토콜을 설치할 수 있으며, **Xray와 sing-box 듀얼 코어**를 내장하고 Nginx, SSL 인증서, realm 중계 전달, 노드별 트래픽 모니터링과 Telegram 봇 알림, VPS 보안 강화, Docker 앱, Cloudflare 서비스까지 통합 관리합니다.
+**Proxy Stack Manager(PSM)** 는 Bash 기반의 Linux 프록시 서버 올인원 관리 도구입니다. `psm` 명령 하나로 VLESS Reality / Vision / XHTTP, Shadowsocks, Hysteria2, Snell, AnyTLS 등 다양한 프록시 프로토콜을 설치할 수 있으며, **Xray, sing-box, mihomo(Clash.Meta) 트리플 코어**를 내장하고 Nginx, SSL 인증서, realm 중계 전달, 노드별 트래픽 모니터링과 Telegram 봇 알림, VPS 보안 강화, Docker 앱, Cloudflare 서비스까지 통합 관리합니다.
 
 모든 노드는 키 쌍을 자동 생성하고 공유 링크와 QR 코드를 내보낼 수 있으며, Clash Meta / Shadowrocket / Surge 설정 내보내기를 지원합니다. 인증서는 acme.sh로 자동 발급·갱신되므로 수동 작업이 필요 없습니다. 여러 프로토콜 노드가 동일한 443 포트를 공유해 외부에 노출될 수도 있습니다(아래 참조).
 
@@ -48,7 +49,7 @@
 ### PSM을 선택하는 이유
 
 - **명령 하나로 전체 관리 메뉴 진입**: 설치 후 `psm`만 실행하면 모든 기능이 하나의 CLI 메뉴 안에 있습니다
-- **듀얼 코어 선택 가능**: Xray와 sing-box 두 코어를 나란히 관리하며, 프로토콜 인바운드·라우팅·아웃바운드를 코어별로 독립 구성해 서로 간섭하지 않습니다
+- **트리플 코어 선택 가능**: Xray, sing-box, mihomo 세 코어를 나란히 관리하며, 프로토콜 인바운드·라우팅·아웃바운드를 코어별로 독립 구성해 서로 간섭하지 않습니다
 - **멀티 프로토콜 통합 관리**: Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 / AnyTLS가 공존할 수 있어 프로토콜마다 별도 스크립트를 유지할 필요가 없습니다
 - **장기 운영 VPS에 적합**: 일회성 설치 스크립트가 아니라 업데이트, 백업, 복원, 서비스 상태, 보안 강화를 하나의 도구에 담았습니다
 - **4개 언어 인터페이스**: 중국어 / 영어 / 한국어 / 러시아어를 언제든 전환, `PSM_LANG=ko psm`으로 세션별 임시 지정도 가능
@@ -141,16 +142,17 @@ bash /opt/psm/install.sh
 ══════════════════════════════════════════════════════════════
                   JQ's Proxy Stack Manager
 ══════════════════════════════════════════════════════════════
-   1. 시스템 관리             11. 중계 (realm)
-   2. sing-box 관리           12. Cloudflare DDNS
-   3. Xray 관리               13. Docker 관리
-   4. Snell 관리              14. 트래픽 관리
-   5. ss-rust 관리            15. Telegram 봇
-   6. Hysteria2 관리          16. 백업 관리
-   7. Nginx 관리              17. 백업 복원
-   8. 웹사이트 관리           18. PSM 업데이트
-   9. SSL 인증서 관리         19. 보안 강화
-  10. 모든 노드 보기          20. 언어 / Language
+   1. 시스템 관리             12. 중계 (realm)
+   2. sing-box 관리           13. Cloudflare DDNS
+   3. mihomo 코어             14. Docker 관리
+   4. Xray 관리               15. 트래픽 관리
+   5. Snell 관리              16. Telegram 봇
+   6. ss-rust 관리            17. 백업 관리
+   7. Hysteria2 관리          18. 백업 복원
+   8. Nginx 관리              19. PSM 업데이트
+   9. 웹사이트 관리           20. 보안 강화
+  10. SSL 인증서 관리         21. 언어 / Language
+  11. 모든 노드 보기
 ──────────────────────────────────────────────────────────────
    0. 종료
 ══════════════════════════════════════════════════════════════
@@ -178,7 +180,7 @@ manager.sh --health-report         # 일일 점검 리포트 1회 발송
 bash /opt/psm/uninstall.sh
 ```
 
-제거 프로그램은 PSM이 만든 단축 명령, cron, systemd 타이머/서비스, PSM 방화벽/Fail2ban 규칙을 정리하고, `/opt/psm` 프로그램 디렉터리와 설정 상태 삭제 여부를 기본으로 물어봅니다. Nginx, Xray, sing-box, Hysteria2, Snell, ss-rust, acme.sh, 인증서, Docker Compose 앱 등은 하나씩 확인하므로 수동으로 유지하는 시스템 서비스를 실수로 지우지 않습니다.
+제거 프로그램은 PSM이 만든 단축 명령, cron, systemd 타이머/서비스, PSM 방화벽/Fail2ban 규칙을 정리하고, `/opt/psm` 프로그램 디렉터리와 설정 상태 삭제 여부를 기본으로 물어봅니다. Nginx, Xray, sing-box, mihomo, Hysteria2, Snell, ss-rust, acme.sh, 인증서, Docker Compose 앱 등은 하나씩 확인하므로 수동으로 유지하는 시스템 서비스를 실수로 지우지 않습니다.
 
 ---
 
@@ -199,6 +201,14 @@ bash /opt/psm/uninstall.sh
 - **아웃바운드 노드 관리** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2(Salamander 난독화) / tuic 등 10종 아웃바운드
 - **WARP 아웃바운드** — Xray 측에 등록된 WARP 계정을 재사용해 WireGuard 엔드포인트로 원클릭 연결
 - **트랜잭션형 설정 변경** — 변경 전 자동 백업, `sing-box check` 검증 실패 시 설정과 노드 저장소를 자동 롤백해 잘못된 설정이 서비스 기동을 막는 일이 없습니다
+
+### mihomo 코어 (세 번째 코어)
+
+- **Clash.Meta 생태계 접속** — VLESS Reality, SS2022, Hysteria2, AnyTLS, Snell v4/v5 인바운드가 `/etc/mihomo/config.yaml`을 공유합니다
+- **Clash 방식 라우팅** — `proxies` / `proxy-groups` / `rules`를 직접 관리하며 DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME을 지원하고 `MATCH,DIRECT`를 고정 fallback으로 둡니다
+- **아웃바운드 노드 관리** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard 등 아웃바운드 유형 지원
+- **WARP 아웃바운드 재사용** — Xray 측에 등록된 WARP 계정을 재사용해 mihomo wireguard proxy를 생성합니다
+- **트랜잭션형 설정 변경** — 변경마다 설정을 재생성하고 `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`을 실행합니다. 검사 실패 시 자동 롤백되어 실행 중인 기존 설정에는 영향을 주지 않습니다
 
 ### 독립 프로토콜 및 중계
 
@@ -229,7 +239,7 @@ bash /opt/psm/uninstall.sh
 - **일일 점검 리포트** — 정기적으로 Telegram에 종합 리포트 발송: 트래픽 경고, 만료 알림, Reality 생존 전환 기록, SSH/BBR/Fail2ban/허니팟/WARP 상태를 메시지 하나로 파악
 - **Telegram 봇** — 노드 트래픽 조회, 사용자 바인딩 관리, 만료 갱신, 점검 리포트를 모두 Telegram 안에서 처리, 서버 로그인 불필요
 - **백업 및 복원** — 전체/선택적 백업(Docker 볼륨 포함), 예약 백업, 원클릭 복원
-- **시스템 관리** — BBR 혼잡 제어, sysctl 네트워크 튜닝, 방화벽, DNS, 시간대
+- **시스템 관리** — BBR 혼잡 제어, sysctl 네트워크 튜닝, 방화벽, DNS, 시간대, VPS 일반 테스트 도구(로컬 점검, 지연/경로, NodeQuality, YABS, IP.Check.Place, RegionRestrictionCheck, bench.sh, LemonBench)
 - **다국어 인터페이스** — 简体中文 / English / 한국어 / Русский, 설치 시 선택·메뉴에서 언제든 전환, 2000개 이상의 인터페이스 문구 완전 번역
 
 ---
@@ -250,6 +260,7 @@ bash /opt/psm/uninstall.sh
 │   ├── i18n.sh           # 다국어 프레임워크
 │   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / 아웃바운드 분배 / 생존 점검 / 위장 도메인 발견
 │   ├── singbox/          # sing-box 두 번째 코어 (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 라우팅 분배)
+│   ├── mihomo/           # mihomo 세 번째 코어 (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 라우팅 분배)
 │   ├── security/         # SSH 강화 / Fail2ban / 허니팟
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # 데이터 볼륨 백업 등 Docker 확장
@@ -257,7 +268,7 @@ bash /opt/psm/uninstall.sh
 │   ├── expiry/           # 만료 관리
 │   ├── hysteria2.sh / snell.sh / ssrust.sh / realm.sh
 │   ├── nginx.sh / cert.sh / cloudflare.sh
-│   ├── docker.sh / system.sh / backup.sh / traffic.sh
+│   ├── docker.sh / system.sh / vps_test.sh / backup.sh / traffic.sh
 │   └── tg_bot.sh
 ├── scripts/              # 개발 보조 스크립트 (i18n 검증 등)
 ├── templates/            # 설정 템플릿 (Docker 앱 스토어 템플릿 포함)
@@ -292,15 +303,15 @@ PSM은 자체 상태를 가능한 한 `/opt/psm`에 모아 두지만, 일부 기
 
 ### 인터페이스 언어는 어떻게 바꾸나요?
 
-메인 메뉴에서 "20. 언어 / Language"를 선택하면 简体中文 / English / 한국어 / Русский 사이를 전환하고 설정이 유지됩니다. `PSM_LANG=ko psm`으로 해당 세션에만 임시 적용할 수도 있습니다.
+메인 메뉴에서 "21. 언어 / Language"를 선택하면 简体中文 / English / 한국어 / Русский 사이를 전환하고 설정이 유지됩니다. `PSM_LANG=ko psm`으로 해당 세션에만 임시 적용할 수도 있습니다.
 
 ### 원라인 설치를 다시 실행하면 어떻게 되나요?
 
 `/opt/psm`이 완전한 설치 상태라면 스크립트는 `git pull` 업데이트를 수행합니다. 이전 버전 제거 후 남은 반설치 상태(예: `.git`은 있지만 `psm` 명령이나 설정 디렉터리가 없음)가 감지되면 설치 흐름을 자동으로 다시 실행해 복구합니다.
 
-### Xray와 sing-box의 차이는? 어느 쪽을 써야 하나요?
+### Xray, sing-box, mihomo의 차이는? 어느 쪽을 써야 하나요?
 
-둘은 병행하는 독립 코어입니다. Xray 측은 도구가 가장 풍부하고(생존 점검, 위장 도메인 발견, 트래픽 집계 등), sing-box 측은 프로토콜 범위가 더 넓고(AnyTLS, 네이티브 Snell 인바운드 등) 라우팅 설정이 더 현대적입니다. 하나만 써도 되고 동시에 운영해도 됩니다. 각자 자기 포트와 노드를 관리합니다.
+셋은 병행하는 독립 코어입니다. Xray 측은 도구가 가장 풍부하고(생존 점검, 위장 도메인 발견, 트래픽 집계 등), sing-box 측은 프로토콜 범위가 더 넓고(AnyTLS, 네이티브 Snell 인바운드 등) 라우팅 설정이 더 현대적이며, mihomo 측은 Clash.Meta 생태계와 규칙 기반 분기(`proxies` / `proxy-groups` / `rules`), Clash 설정을 직접 생성해야 하는 경우에 적합합니다. 하나만 써도 되고 여러 개를 동시에 운영해도 됩니다. 각자 자기 포트와 노드를 관리합니다.
 
 ### 제거 시 일부 컴포넌트를 남길 수 있는 이유는?
 

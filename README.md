@@ -2,7 +2,7 @@
 
 # JQ's Proxy Stack Manager
 
-**一站式 Linux 代理服务器管理工具 · Xray / sing-box 双内核**
+**一站式 Linux 代理服务器管理工具 · Xray / sing-box / mihomo 三内核**
 
 <p>
   <img src="https://img.shields.io/badge/Platform-Linux-1793D1?logo=linux&logoColor=white" alt="Platform">
@@ -32,6 +32,7 @@
   ──────────────────────────────────────────
   IP    ▶  x.x.x.x              Nginx     ▶  1.x.x
   Xray  ▶  x.x.x                Hysteria2 ▶  2.x.x
+  Sing-box ▶  x.x.x             Mihomo    ▶  v1.x.x
   ──────────────────────────────────────────
 ```
 
@@ -39,7 +40,7 @@
 
 ## 简介
 
-**Proxy Stack Manager（PSM）** 是一套基于 Bash 的 Linux 代理服务器一站式管理工具，通过 `psm` 命令一键安装 VLESS Reality / Vision / XHTTP、Shadowsocks、Hysteria2、Snell、AnyTLS 等多种代理协议，内置 **Xray 与 sing-box 双内核**，并统一管理 Nginx、SSL 证书、realm 中转转发、节点流量监控与 Telegram Bot 通知、VPS 安全防护、Docker 应用、Cloudflare 服务等。
+**Proxy Stack Manager（PSM）** 是一套基于 Bash 的 Linux 代理服务器一站式管理工具，通过 `psm` 命令一键安装 VLESS Reality / Vision / XHTTP、Shadowsocks、Hysteria2、Snell、AnyTLS 等多种代理协议，内置 **Xray、sing-box 与 mihomo（Clash.Meta）三内核**，并统一管理 Nginx、SSL 证书、realm 中转转发、节点流量监控与 Telegram Bot 通知、VPS 安全防护、Docker 应用、Cloudflare 服务等。
 
 每个节点都能自动生成密钥对，导出分享链接与二维码，支持 Clash Meta / Shadowrocket / Surge 配置导出；证书通过 acme.sh 自动签发续期，无需手动操作。多个协议节点还可以共用同一个 443 端口对外呈现（详见下文）。
 
@@ -48,7 +49,7 @@
 ### 为什么选择 PSM
 
 - **一条命令进入完整管理菜单**：安装后只需要运行 `psm`，所有功能都在同一个 CLI 菜单内
-- **双内核可选**：Xray 与 sing-box 两套内核并行管理，协议入站、路由分流、出站节点各自独立配置，互不干扰
+- **三内核可选**：Xray、sing-box、mihomo 三套内核并行管理，协议入站、路由分流、出站节点各自独立配置，互不干扰
 - **多协议统一管理**：Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 / AnyTLS 可以共存，不需要每个协议维护一套脚本
 - **适合长期维护的 VPS**：不是一次性安装脚本，而是把更新、备份、恢复、服务状态和安全加固放到同一套工具里
 - **四语言界面**：中 / 英 / 韩 / 俄随时切换，`PSM_LANG=en psm` 可临时覆盖
@@ -141,16 +142,17 @@ bash /opt/psm/install.sh
 ══════════════════════════════════════════════════════════════
                   JQ's Proxy Stack Manager
 ══════════════════════════════════════════════════════════════
-   1. 系统管理              11. 中转管理 (realm)
-   2. sing-box 管理         12. Cloudflare DDNS
-   3. Xray 管理             13. Docker 管理
-   4. Snell 管理            14. 流量管理
-   5. ss-rust 管理          15. Telegram Bot
-   6. Hysteria2 管理        16. 备份管理
-   7. Nginx 管理            17. 恢复备份
-   8. 网站管理              18. 更新 PSM
-   9. SSL 证书管理          19. 安全加固
-  10. 查看所有节点          20. 语言 / Language
+   1. 系统管理              12. 中转管理 (realm)
+   2. sing-box 管理         13. Cloudflare DDNS
+   3. mihomo 内核           14. Docker 管理
+   4. Xray 管理             15. 流量管理
+   5. Snell 管理            16. Telegram Bot
+   6. ss-rust 管理          17. 备份管理
+   7. Hysteria2 管理        18. 恢复备份
+   8. Nginx 管理            19. 更新 PSM
+   9. 网站管理              20. 安全加固
+  10. SSL 证书管理          21. 语言 / Language
+  11. 查看所有节点
 ──────────────────────────────────────────────────────────────
    0. 退出
 ══════════════════════════════════════════════════════════════
@@ -178,7 +180,7 @@ manager.sh --health-report         # 发送一次每日体检报告
 bash /opt/psm/uninstall.sh
 ```
 
-卸载器会清理 PSM 自身创建的快捷命令、cron、systemd timer/service、PSM 防火墙/Fail2ban 规则，并默认询问是否删除 `/opt/psm` 程序目录及其中配置状态。Nginx、Xray、sing-box、Hysteria2、Snell、ss-rust、acme.sh、证书和 Docker Compose 应用等组件会逐一确认，避免误删你手动维护的系统服务。
+卸载器会清理 PSM 自身创建的快捷命令、cron、systemd timer/service、PSM 防火墙/Fail2ban 规则，并默认询问是否删除 `/opt/psm` 程序目录及其中配置状态。Nginx、Xray、sing-box、mihomo、Hysteria2、Snell、ss-rust、acme.sh、证书和 Docker Compose 应用等组件会逐一确认，避免误删你手动维护的系统服务。
 
 ---
 
@@ -199,6 +201,14 @@ bash /opt/psm/uninstall.sh
 - **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2（Salamander 混淆）/ tuic 共 10 种出站类型
 - **WARP 出站** — 复用 Xray 侧注册的 WARP 账户，一键接入 WireGuard endpoint
 - **事务化配置变更** — 每次变更前自动备份，`sing-box check` 校验失败自动回滚配置与节点存储，不会留下坏配置导致服务起不来
+
+### mihomo 内核（第三内核）
+
+- **Clash.Meta 生态接入** — VLESS Reality、SS2022、Hysteria2、AnyTLS、Snell v4/v5 多协议入站共用 `/etc/mihomo/config.yaml`
+- **Clash 规则分流** — 直接管理 `proxies` / `proxy-groups` / `rules`，支持 DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME，并固定兜底 `MATCH,DIRECT`
+- **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard 等出站类型
+- **WARP 出站复用** — 复用 Xray 侧注册的 WARP 账户，生成 mihomo wireguard proxy
+- **事务化配置变更** — 每次变更都会重建配置并执行 `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`，校验失败自动回滚，不影响正在运行的旧配置
 
 ### 独立协议与中转
 
@@ -229,7 +239,7 @@ bash /opt/psm/uninstall.sh
 - **每日体检报告** — 定时通过 Telegram 推送一份汇总报告：流量预警、到期提醒、Reality 测活切换记录、SSH/BBR/Fail2ban/蜜罐/WARP 状态，一条消息看全貌
 - **Telegram Bot** — 查询节点流量、管理用户绑定、到期续费、体检报告，全部可在 Telegram 内完成，无需登录服务器
 - **备份与恢复** — 全量 / 选择性备份（含 Docker 数据卷），定时备份，一键恢复
-- **系统管理** — BBR 拥塞控制、sysctl 网络调优、防火墙、DNS、时区
+- **系统管理** — BBR 拥塞控制、sysctl 网络调优、防火墙、DNS、时区、VPS 常用测试工具（本机体检、延迟/路由、NodeQuality、YABS、IP.Check.Place、RegionRestrictionCheck、bench.sh、LemonBench）
 - **多语言界面** — 简体中文 / English / 한국어 / Русский，安装时选择、菜单随时切换，全部 2000+ 条界面文案完整翻译
 
 ---
@@ -250,6 +260,7 @@ bash /opt/psm/uninstall.sh
 │   ├── i18n.sh           # 多语言框架
 │   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / 出站分流 / 测活 / 伪装域名发现
 │   ├── singbox/          # sing-box 第二内核（Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 路由分流）
+│   ├── mihomo/           # mihomo 第三内核（Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 路由分流）
 │   ├── security/         # SSH 加固 / Fail2ban / 蜜罐
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # 数据卷备份等 Docker 扩展
@@ -257,7 +268,7 @@ bash /opt/psm/uninstall.sh
 │   ├── expiry/           # 到期管理
 │   ├── hysteria2.sh / snell.sh / ssrust.sh / realm.sh
 │   ├── nginx.sh / cert.sh / cloudflare.sh
-│   ├── docker.sh / system.sh / backup.sh / traffic.sh
+│   ├── docker.sh / system.sh / vps_test.sh / backup.sh / traffic.sh
 │   └── tg_bot.sh
 ├── scripts/              # 开发辅助脚本（i18n 校验等）
 ├── templates/            # 配置模板（含 Docker 应用商店模板）
@@ -292,15 +303,15 @@ PSM 会尽量把项目自身状态集中在 `/opt/psm`，但部分功能需要�
 
 ### 如何切换界面语言？
 
-主菜单选择「20. 语言 / Language」，即可在 简体中文 / English / 한국어 / Русский 之间切换并持久保存；也可以用 `PSM_LANG=en psm` 只对当次会话临时覆盖。
+主菜单选择「21. 语言 / Language」，即可在 简体中文 / English / 한국어 / Русский 之间切换并持久保存；也可以用 `PSM_LANG=en psm` 只对当次会话临时覆盖。
 
 ### 重复执行一键安装会怎样？
 
 如果 `/opt/psm` 已是完整安装，脚本会执行 `git pull` 更新。若检测到旧版卸载后残留的半安装状态（例如 `.git` 还在但 `psm` 命令或配置目录缺失），会自动重新运行安装流程修复。
 
-### Xray 和 sing-box 有什么区别？该用哪个？
+### Xray、sing-box 和 mihomo 有什么区别？该用哪个？
 
-两者是并行的独立内核：Xray 侧功能最全（测活、伪装域名发现、流量统计等），sing-box 侧协议覆盖更广（AnyTLS、原生 Snell 入站等）且路由配置更现代。可以只用其一，也可以同时运行，各自管理各自的端口和节点。
+三者是并行的独立内核：Xray 侧功能最全（测活、伪装域名发现、流量统计等），sing-box 侧协议覆盖更广（AnyTLS、原生 Snell 入站等）且路由配置更现代，mihomo 侧适合 Clash.Meta 生态、规则分流（`proxies` / `proxy-groups` / `rules`）以及需要直接生成 Clash 配置的场景。可以只用其一，也可以同时运行，各自管理各自的端口和节点。
 
 ### 卸载后为什么还能选择保留某些组件？
 

@@ -2,7 +2,7 @@
 
 # JQ's Proxy Stack Manager
 
-**All-in-one Linux proxy server manager · dual Xray / sing-box cores**
+**All-in-one Linux proxy server manager · Xray / sing-box / mihomo triple cores**
 
 <p>
   <img src="https://img.shields.io/badge/Platform-Linux-1793D1?logo=linux&logoColor=white" alt="Platform">
@@ -32,6 +32,7 @@
   ──────────────────────────────────────────
   IP    ▶  x.x.x.x              Nginx     ▶  1.x.x
   Xray  ▶  x.x.x                Hysteria2 ▶  2.x.x
+  Sing-box ▶  x.x.x             Mihomo    ▶  v1.x.x
   ──────────────────────────────────────────
 ```
 
@@ -39,7 +40,7 @@
 
 ## Introduction
 
-**Proxy Stack Manager (PSM)** is an all-in-one Bash-based management tool for Linux proxy servers. The `psm` command lets you install VLESS Reality / Vision / XHTTP, Shadowsocks, Hysteria2, Snell, and AnyTLS with a single command, powered by **dual Xray and sing-box cores**, and centrally manage Nginx, SSL certificates, realm relay forwarding, per-node traffic monitoring with Telegram Bot notifications, VPS security hardening, Docker apps, and Cloudflare services.
+**Proxy Stack Manager (PSM)** is an all-in-one Bash-based management tool for Linux proxy servers. The `psm` command lets you install VLESS Reality / Vision / XHTTP, Shadowsocks, Hysteria2, Snell, and AnyTLS with a single command, powered by **Xray, sing-box, and mihomo (Clash.Meta) triple cores**, and centrally manage Nginx, SSL certificates, realm relay forwarding, per-node traffic monitoring with Telegram Bot notifications, VPS security hardening, Docker apps, and Cloudflare services.
 
 Every node automatically generates its own key pair and can export share links and QR codes, with Clash Meta / Shadowrocket / Surge config export supported. Certificates are issued and renewed automatically via acme.sh — no manual steps required. Multiple protocol nodes can also share the same public port 443 (see below).
 
@@ -48,7 +49,7 @@ The interface is available in **four languages — 简体中文 / English / 한�
 ### Why PSM
 
 - **One command to enter the full management menu** — after installation, just run `psm`
-- **Dual cores** — Xray and sing-box are managed side by side: protocol inbounds, routing rules, and outbounds are configured independently per core without interfering
+- **Triple cores** — Xray, sing-box, and mihomo are managed side by side: protocol inbounds, routing rules, and outbounds are configured independently per core without interfering
 - **Multi-protocol management** — Reality / Vision / XHTTP / Hysteria2 / Snell / SS2022 / AnyTLS can coexist under one workflow, no per-protocol scripts to maintain
 - **Designed for long-lived VPS instances** — not a one-off installer, but a tool that keeps update, backup, restore, service status, and hardening in one place
 - **Four-language interface** — switch between Chinese / English / Korean / Russian any time; `PSM_LANG=en psm` overrides per session
@@ -141,16 +142,17 @@ Other dependencies (`jq`, `openssl`, `qrencode`, `unzip`, `iptables`, `fail2ban`
 ══════════════════════════════════════════════════════════════
                   JQ's Proxy Stack Manager
 ══════════════════════════════════════════════════════════════
-   1. System Management        11. Relay (realm)
-   2. sing-box Management      12. Cloudflare DDNS
-   3. Xray Management          13. Docker Management
-   4. Snell Management         14. Traffic Management
-   5. ss-rust Management       15. Telegram Bot
-   6. Hysteria2 Management     16. Backup Management
-   7. Nginx Management         17. Restore Backup
-   8. Website Management       18. Update PSM
-   9. SSL Cert Management      19. Security Hardening
-  10. View All Nodes           20. 语言 / Language
+   1. System Management        12. Relay (realm)
+   2. sing-box Management      13. Cloudflare DDNS
+   3. mihomo Core              14. Docker Management
+   4. Xray Management          15. Traffic Management
+   5. Snell Management         16. Telegram Bot
+   6. ss-rust Management       17. Backup Management
+   7. Hysteria2 Management     18. Restore Backup
+   8. Nginx Management         19. Update PSM
+   9. Website Management       20. Security Hardening
+  10. SSL Cert Management      21. 语言 / Language
+  11. View All Nodes
 ──────────────────────────────────────────────────────────────
    0. Exit
 ══════════════════════════════════════════════════════════════
@@ -178,7 +180,7 @@ These are the real entry points invoked by each module's scheduled tasks. The "e
 bash /opt/psm/uninstall.sh
 ```
 
-The uninstaller removes the shortcut command, cron entries, systemd timers/services, and PSM firewall/Fail2ban rules created by PSM itself, and asks (default yes) whether to delete the `/opt/psm` program directory with its config state. Components such as Nginx, Xray, sing-box, Hysteria2, Snell, ss-rust, acme.sh, certificates, and Docker Compose apps are confirmed one by one, so services you maintain manually are never removed by accident.
+The uninstaller removes the shortcut command, cron entries, systemd timers/services, and PSM firewall/Fail2ban rules created by PSM itself, and asks (default yes) whether to delete the `/opt/psm` program directory with its config state. Components such as Nginx, Xray, sing-box, mihomo, Hysteria2, Snell, ss-rust, acme.sh, certificates, and Docker Compose apps are confirmed one by one, so services you maintain manually are never removed by accident.
 
 ---
 
@@ -199,6 +201,14 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Outbound manager** — 10 outbound types: ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2 (Salamander obfuscation) / tuic
 - **WARP outbound** — reuses the WARP account registered on the Xray side as a WireGuard endpoint
 - **Transactional config changes** — every change is preceded by an automatic backup; if `sing-box check` fails, both the config and the node store are rolled back, so a bad config can never take the service down
+
+### mihomo core (third core)
+
+- **Clash.Meta ecosystem support** — VLESS Reality, SS2022, Hysteria2, AnyTLS, and Snell v4/v5 inbounds share `/etc/mihomo/config.yaml`
+- **Clash-style routing** — manages `proxies` / `proxy-groups` / `rules` directly, supporting DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME with a fixed `MATCH,DIRECT` fallback
+- **Outbound manager** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard outbound types
+- **WARP outbound reuse** — reuses the WARP account registered on the Xray side and generates a mihomo wireguard proxy
+- **Transactional config changes** — every change rebuilds the config and runs `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`; failed checks roll back automatically without affecting the running old config
 
 ### Standalone protocols & relay
 
@@ -229,7 +239,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Daily health report** — a scheduled Telegram digest: traffic warnings, expiry reminders, Reality liveness switches, SSH/BBR/Fail2ban/honeypot/WARP status — the whole picture in one message
 - **Telegram Bot** — query node traffic, manage user bindings, renew expiries, health reports — all from inside Telegram, no server login needed
 - **Backup & restore** — full / selective backups (including Docker volumes), scheduled backups, one-click restore
-- **System management** — BBR congestion control, sysctl network tuning, firewall, DNS, timezone
+- **System management** — BBR congestion control, sysctl network tuning, firewall, DNS, timezone, and common VPS test tools (local health, latency/route, NodeQuality, YABS, IP.Check.Place, RegionRestrictionCheck, bench.sh, LemonBench)
 - **Multilingual interface** — 简体中文 / English / 한국어 / Русский; chosen at install, switchable from the menu, with all 2000+ interface strings fully translated
 
 ---
@@ -250,6 +260,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 │   ├── i18n.sh           # Multilingual framework
 │   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / outbound routing / liveness / decoy discovery
 │   ├── singbox/          # sing-box second core (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / routing)
+│   ├── mihomo/           # mihomo third core (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / routing)
 │   ├── security/         # SSH hardening / Fail2ban / honeypot
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # Docker extensions (volume backup, …)
@@ -257,7 +268,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 │   ├── expiry/           # Expiry management
 │   ├── hysteria2.sh / snell.sh / ssrust.sh / realm.sh
 │   ├── nginx.sh / cert.sh / cloudflare.sh
-│   ├── docker.sh / system.sh / backup.sh / traffic.sh
+│   ├── docker.sh / system.sh / vps_test.sh / backup.sh / traffic.sh
 │   └── tg_bot.sh
 ├── scripts/              # Dev helper scripts (i18n checks, …)
 ├── templates/            # Config templates (incl. Docker app store templates)
@@ -292,15 +303,15 @@ If you plan to use PSM on a production VPS, read the install output and uninstal
 
 ### How do I switch the interface language?
 
-Pick "20. 语言 / Language" in the main menu to switch between 简体中文 / English / 한국어 / Русский; the choice is persisted. `PSM_LANG=en psm` overrides the language for a single session.
+Pick "21. 语言 / Language" in the main menu to switch between 简体中文 / English / 한국어 / Русский; the choice is persisted. `PSM_LANG=en psm` overrides the language for a single session.
 
 ### What happens if I run the one-line install again?
 
 If `/opt/psm` is a complete installation, the script performs a `git pull` update. If it detects a half-installed state left over from an old uninstall (e.g. `.git` present but the `psm` command or config directory missing), it automatically re-runs the install flow to repair it.
 
-### Xray vs sing-box — which should I use?
+### Xray, sing-box, or mihomo — which should I use?
 
-They are independent, parallel cores. The Xray side has the richest tooling (liveness watchdog, decoy discovery, traffic accounting); the sing-box side covers more protocols (AnyTLS, native Snell inbound) with a more modern routing config. Use either one, or run both at once — each manages its own ports and nodes.
+They are independent, parallel cores. Xray has the richest tooling (liveness watchdog, decoy discovery, traffic accounting); sing-box covers more protocols (AnyTLS, native Snell inbound) with a more modern routing config; mihomo fits Clash.Meta routing and client config workflows (`proxies` / `proxy-groups` / `rules`). Use any one of them, or run several at once — each manages its own ports and nodes.
 
 ### Why does the uninstaller let me keep certain components?
 
