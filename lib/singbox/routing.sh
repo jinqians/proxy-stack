@@ -9,6 +9,7 @@
 # 终端输出走 i18n（t sb.route.* / sb.outb.*）。
 
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../warp_probe.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
 
 SB_OUTB_CFG="$SB_STORE_DIR/outbounds.json"
@@ -637,6 +638,13 @@ sb_warp_setup() {
     _sb_route_apply
     log_ok "$(t sb.warp.added)"
 
+    # 先验证隧道真的能出网（与 xray 流程一致）：验证不过就不必加解锁规则
+    echo ""
+    if ! sb_warp_check_exit_ip; then
+        log_warn "$(t warp.probe.setup_warn)"
+        return 1
+    fi
+
     # 便捷：一键为常见流媒体/AI 添加走 WARP 的规则
     if ask_yn "$(t sb.warp.ask_quick_rules)" Y; then
         local id; id=$(_sb_route_next_id)
@@ -647,6 +655,68 @@ sb_warp_setup() {
         _sb_route_apply
         log_ok "$(t sb.warp.quick_added)"
     fi
+}
+
+# ── WARP 出口探测 ─────────────────────────────────────────────────────────────
+# 与 xray 的 warp_check_exit_ip 同思路：拉起一个临时 sing-box（socks 入站 →
+# WARP endpoint，route.final 指向它），经本地 socks 按地址族逐个探测真实出口
+# IP 与 warp 状态，探完即销毁，不碰生产配置。
+sb_warp_check_exit_ip() {
+    command -v curl &>/dev/null || { log_error "$(t warp.probe.no_curl)"; return 1; }
+    local e; e=$(_sb_outb_load | jq -c '[.[] | select(.protocol == "warp")][0] // empty')
+    [[ -n "$e" ]] || { log_warn "$(t sb.warp.not_configured)"; return 1; }
+    local ep; ep=$(_sb_outb_build_warp "$e")
+    [[ -n "$ep" ]] || { log_error "$(t sb.warp.register_fail)"; return 1; }
+
+    local families
+    families=$(warp_probe_families "$(echo "$e" | jq -r '.family // "4"')" \
+                                   "$(jq -r '.local_v6 // ""' "$SB_WARP_ACCOUNT" 2>/dev/null)")
+
+    local port=47200
+    while ss -ltnH 2>/dev/null | grep -q ":${port} "; do port=$((port+1)); done
+
+    local pid="" up=0 rc=1 logtail=""
+    local tmpdir tmpcfg tmplog
+    tmpdir=$(mktemp -d)
+    tmpcfg="$tmpdir/probe.json"; tmplog="$tmpdir/singbox.log"
+    jq -n --argjson ep "$ep" --argjson port "$port" '{
+        log: {level:"warn"},
+        inbounds:  [{type:"socks", tag:"probe", listen:"127.0.0.1", listen_port:$port}],
+        endpoints: [$ep],
+        route: {final: $ep.tag}
+    }' > "$tmpcfg"
+
+    log_step "$(t warp.probe.probing)"
+    "$SB_BIN" run -c "$tmpcfg" >"$tmplog" 2>&1 &
+    pid=$!
+    for _ in $(seq 1 12); do
+        kill -0 "$pid" 2>/dev/null || break
+        if ss -ltnH 2>/dev/null | grep -q "127.0.0.1:${port} "; then up=1; break; fi
+        sleep 0.5
+    done
+    if (( up )); then
+        sleep 2
+        # $families 故意不加引号（"4 6" 需要分词成两个参数）
+        if warp_probe_report "$port" $families; then rc=0; fi
+    fi
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    logtail=$(tail -n 8 "$tmplog" 2>/dev/null) || true
+    rm -rf "$tmpdir"
+
+    if (( ! up )); then
+        log_error "$(t sb.warp.temp_start_fail "$port")"
+        echo -e "${YELLOW}$(t sb.warp.core_output)${NC}"
+        sed 's/^/    /' <<<"$logtail"
+        return 1
+    fi
+    if (( rc )); then
+        echo -e "${YELLOW}$(t warp.probe.common_reasons)${NC}"
+        echo -e "${YELLOW}$(t sb.warp.core_output)${NC}"
+        sed 's/^/    /' <<<"$logtail"
+        return 1
+    fi
+    return 0
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────
@@ -661,19 +731,21 @@ sb_route_menu() {
             "$(t sb.route.menu.outb_add)" \
             "$(t sb.route.menu.outb_del)" \
             "$(t sb.route.menu.warp)" \
+            "$(t sb.route.menu.warp_check)" \
             "$(t sb.route.menu.ads)" \
             "$(t sb.route.menu.quic)"
 
         case "$MENU_CHOICE" in
-            1) sb_route_show;        press_enter ;;
-            2) sb_route_add_wizard;  press_enter ;;
-            3) sb_route_delete;      press_enter ;;
-            4) sb_outb_show;         press_enter ;;
-            5) sb_outb_add_wizard;   press_enter ;;
-            6) sb_outb_delete;       press_enter ;;
-            7) sb_warp_setup;        press_enter ;;
-            8) sb_route_toggle_preset "preset-ads";  press_enter ;;
-            9) sb_route_toggle_preset "preset-quic"; press_enter ;;
+            1) sb_route_show;         press_enter ;;
+            2) sb_route_add_wizard;   press_enter ;;
+            3) sb_route_delete;       press_enter ;;
+            4) sb_outb_show;          press_enter ;;
+            5) sb_outb_add_wizard;    press_enter ;;
+            6) sb_outb_delete;        press_enter ;;
+            7) sb_warp_setup;         press_enter ;;
+            8) sb_warp_check_exit_ip; press_enter ;;
+            9) sb_route_toggle_preset "preset-ads";  press_enter ;;
+            10) sb_route_toggle_preset "preset-quic"; press_enter ;;
             0) return ;;
         esac
     done

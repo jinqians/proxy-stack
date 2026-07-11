@@ -334,6 +334,7 @@ MSG[sb.route.menu.outb_show]="Показать outbound-узлы"
 MSG[sb.route.menu.outb_add]="Добавить outbound-узел"
 MSG[sb.route.menu.outb_del]="Удалить outbound-узел"
 MSG[sb.route.menu.warp]="WARP outbound для разблокировки (Netflix / OpenAI и т. д.)"
+MSG[sb.route.menu.warp_check]="Показать реальный внешний IP WARP"
 MSG[sb.route.menu.ads]="Переключить блокировку рекламы"
 MSG[sb.route.menu.quic]="Переключить блокировку QUIC"
 
@@ -351,6 +352,9 @@ MSG[sb.warp.ask_family]="Выбор [1]: "
 MSG[sb.warp.added]="WARP outbound out-warp добавлен и применен."
 MSG[sb.warp.ask_quick_rules]="Направить OpenAI / Netflix / Disney через WARP одним действием?"
 MSG[sb.warp.quick_added]="Правило добавлено: openai,netflix,disney → out-warp"
+MSG[sb.warp.not_configured]="WARP outbound ещё не настроен — сначала выполните «WARP outbound для разблокировки»"
+MSG[sb.warp.temp_start_fail]="Не удалось запустить временный sing-box (порт 127.0.0.1:%s недоступен); проверка невозможна"
+MSG[sb.warp.core_output]="Вывод sing-box (для диагностики):"
 
 # ── core additions: Snell protocol ───────────────────────────────────────────
 MSG[sb.protocol.snell]="Snell             (экосистема Surge, TCP, требуется sing-box 1.14+)"

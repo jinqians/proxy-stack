@@ -8,6 +8,7 @@
 # binary required, just curl + jq + wg (wireguard-tools, for keypair gen).
 
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../warp_probe.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/outbound.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/routing.sh"
@@ -283,10 +284,11 @@ warp_switch_family() {
 # traffic actually flows, so the sole way to learn it is to send a request
 # through the tunnel. We stand up a throwaway Xray (socks inbound -> out-warp)
 # on localhost, curl Cloudflare's trace endpoint through it, then tear it down —
-# without touching the production Xray.
+# without touching the production Xray. Probing is per address family (via
+# warp_probe_report), so a dual-stack egress shows BOTH its v4 and v6 exit IPs.
 warp_check_exit_ip() {
     _warp_registered || { log_warn "$(t xray.warp.not_registered)"; return 1; }
-    command -v curl &>/dev/null || { log_error "$(t xray.warp.no_curl)"; return 1; }
+    command -v curl &>/dev/null || { log_error "$(t warp.probe.no_curl)"; return 1; }
 
     local ob; ob=$(_outb_get_by_tag "$WARP_OUTBOUND_TAG")
     if ! echo "$ob" | jq -e '.tag' &>/dev/null; then
@@ -295,6 +297,13 @@ warp_check_exit_ip() {
     fi
     local xray_ob; xray_ob=$(_outb_build_xray "$ob")
     [[ -n "$xray_ob" ]] || { log_error "$(t xray.warp.build_fail)"; return 1; }
+
+    # Which families to probe follows the configured egress family (4/6/46),
+    # degrading to v4-only when the account has no v6 tunnel address — the same
+    # fallback _outb_build_xray applies when it builds the outbound.
+    local families
+    families=$(warp_probe_families "$(echo "$ob" | jq -r '.family // "4"')" \
+                                   "$(echo "$ob" | jq -r '.local_v6 // ""')")
 
     # Pick a free localhost port for the throwaway socks inbound.
     local port=47100
@@ -306,7 +315,7 @@ warp_check_exit_ip() {
     # (its locals are out of scope + unbound under `set -u` when it fires) and
     # instead clean up on a single path. Xray picks config format by extension,
     # so the temp file MUST end in .json or it errors "Failed to get format".
-    local xpid="" up=0 i trace="" logtail=""
+    local xpid="" up=0 logtail=""
     local tmpdir tmpcfg tmplog
     tmpdir=$(mktemp -d)                 # -d is portable; named .json inside
     tmpcfg="$tmpdir/probe.json"; tmplog="$tmpdir/xray.log"
@@ -318,7 +327,7 @@ warp_check_exit_ip() {
         outbounds: [$ob]
     }' > "$tmpcfg"
 
-    log_step "$(t xray.warp.probing)"
+    log_step "$(t warp.probe.probing)"
     "$XRAY_BIN" run -c "$tmpcfg" >"$tmplog" 2>&1 &
     xpid=$!
 
@@ -329,16 +338,12 @@ warp_check_exit_ip() {
         sleep 0.5
     done
 
-    # If it came up, give the WireGuard handshake a moment, then probe.
-    # socks5h → resolve the hostname through the proxy. Try two endpoints.
+    # If it came up, give the WireGuard handshake a moment, then probe each
+    # configured family through the tunnel ($families intentionally unquoted).
+    local rc=1
     if (( up )); then
         sleep 2
-        trace=$(curl -s --max-time 15 -x "socks5h://127.0.0.1:${port}" \
-            "https://www.cloudflare.com/cdn-cgi/trace" 2>/dev/null) || true
-        if [[ -z "$trace" ]]; then
-            trace=$(curl -s --max-time 15 -x "socks5h://127.0.0.1:${port}" \
-                "https://1.1.1.1/cdn-cgi/trace" 2>/dev/null) || true
-        fi
+        if warp_probe_report "$port" $families; then rc=0; fi
     fi
 
     # Single cleanup path: stop the throwaway Xray, keep its log tail, remove temps.
@@ -354,34 +359,13 @@ warp_check_exit_ip() {
         return 1
     fi
 
-    if [[ -z "$trace" ]]; then
-        log_error "$(t xray.warp.probe_fail)"
-        echo -e "${YELLOW}$(t xray.warp.common_reasons)${NC}"
+    if (( rc )); then
+        echo -e "${YELLOW}$(t warp.probe.common_reasons)${NC}"
         echo -e "${YELLOW}$(t xray.warp.xray_output)${NC}"
         sed 's/^/    /' <<<"$logtail"
         return 1
     fi
-
-    local exit_ip loc warp_state
-    exit_ip=$(awk -F= '/^ip=/{print $2}'   <<<"$trace")
-    loc=$(awk -F= '/^loc=/{print $2}'      <<<"$trace")
-    warp_state=$(awk -F= '/^warp=/{print $2}' <<<"$trace")
-
-    echo ""
-    echo -e "${BOLD}${BLUE}$(t xray.warp.exit_title)${NC}"
-    echo -e "  ${GREEN}$(t xray.warp.exit_ip "${exit_ip:-$(t xray.warp.unknown)}")${NC}"
-    echo -e "  $(t xray.warp.exit_loc "${loc:-$(t xray.warp.unknown)}")"
-    if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
-        echo -e "  ${GREEN}$(t xray.warp.state_on "$warp_state")${NC}"
-        echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
-        return 0
-    fi
-    # Got a public IP but warp=off → traffic reached the internet WITHOUT the
-    # tunnel. WARP is not actually carrying traffic, so this counts as a failure.
-    echo -e "  ${YELLOW}$(t xray.warp.state_off "${warp_state:-off}")${NC}"
-    echo -e "  ${YELLOW}$(t xray.warp.off_hint)${NC}"
-    echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
-    return 1
+    return 0
 }
 
 # ── Menu ──────────────────────────────────────────────────────────────────────

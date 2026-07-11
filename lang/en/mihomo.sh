@@ -335,6 +335,7 @@ MSG[mh.route.menu.outb_show]="Show outbound nodes"
 MSG[mh.route.menu.outb_add]="Add outbound node"
 MSG[mh.route.menu.outb_del]="Delete outbound node"
 MSG[mh.route.menu.warp]="WARP unlock outbound (Netflix / OpenAI, etc.)"
+MSG[mh.route.menu.warp_check]="Show real WARP exit IP"
 MSG[mh.route.menu.ads]="Toggle ad blocking"
 MSG[mh.route.menu.quic]="Toggle QUIC blocking"
 
@@ -352,6 +353,9 @@ MSG[mh.warp.ask_family]="Select [1]: "
 MSG[mh.warp.added]="WARP outbound out-warp added and applied."
 MSG[mh.warp.ask_quick_rules]="Route OpenAI / Netflix / Disney through WARP in one tap?"
 MSG[mh.warp.quick_added]="Rule added: openai,netflix,disney → out-warp"
+MSG[mh.warp.not_configured]="WARP outbound is not configured yet; run \"WARP unlock outbound\" first"
+MSG[mh.warp.temp_start_fail]="Temporary mihomo failed to start (could not listen on 127.0.0.1:%s); cannot probe"
+MSG[mh.warp.core_output]="mihomo output (for troubleshooting):"
 
 # ── core additions: Snell protocol ───────────────────────────────────────────
 MSG[mh.protocol.snell]="Snell             (Surge ecosystem, TCP)"

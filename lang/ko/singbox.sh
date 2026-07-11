@@ -334,6 +334,7 @@ MSG[sb.route.menu.outb_show]="아웃바운드 노드 표시"
 MSG[sb.route.menu.outb_add]="아웃바운드 노드 추가"
 MSG[sb.route.menu.outb_del]="아웃바운드 노드 삭제"
 MSG[sb.route.menu.warp]="WARP 해제 아웃바운드(Netflix / OpenAI 등)"
+MSG[sb.route.menu.warp_check]="WARP 실제 출구 IP 보기"
 MSG[sb.route.menu.ads]="광고 차단 전환"
 MSG[sb.route.menu.quic]="QUIC 차단 전환"
 
@@ -351,6 +352,9 @@ MSG[sb.warp.ask_family]="선택 [1]: "
 MSG[sb.warp.added]="WARP 아웃바운드 out-warp가 추가되고 적용되었습니다."
 MSG[sb.warp.ask_quick_rules]="OpenAI / Netflix / Disney를 한 번에 WARP로 라우팅할까요?"
 MSG[sb.warp.quick_added]="규칙 추가됨: openai,netflix,disney → out-warp"
+MSG[sb.warp.not_configured]="WARP 아웃바운드가 아직 구성되지 않았습니다. 먼저 「WARP 해제 아웃바운드」를 실행하세요"
+MSG[sb.warp.temp_start_fail]="임시 sing-box를 시작하지 못했습니다(127.0.0.1:%s 수신 불가). 탐지할 수 없습니다"
+MSG[sb.warp.core_output]="sing-box 출력(문제 해결용):"
 
 # ── core additions: Snell protocol ───────────────────────────────────────────
 MSG[sb.protocol.snell]="Snell             (Surge 생태계, TCP, sing-box 1.14+ 필요)"

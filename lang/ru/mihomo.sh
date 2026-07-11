@@ -335,6 +335,7 @@ MSG[mh.route.menu.outb_show]="Показать outbound-узлы"
 MSG[mh.route.menu.outb_add]="Добавить outbound-узел"
 MSG[mh.route.menu.outb_del]="Удалить outbound-узел"
 MSG[mh.route.menu.warp]="WARP outbound для разблокировки (Netflix / OpenAI и т. д.)"
+MSG[mh.route.menu.warp_check]="Показать реальный внешний IP WARP"
 MSG[mh.route.menu.ads]="Переключить блокировку рекламы"
 MSG[mh.route.menu.quic]="Переключить блокировку QUIC"
 
@@ -352,6 +353,9 @@ MSG[mh.warp.ask_family]="Выбор [1]: "
 MSG[mh.warp.added]="WARP outbound out-warp добавлен и применен."
 MSG[mh.warp.ask_quick_rules]="Направить OpenAI / Netflix / Disney через WARP одним действием?"
 MSG[mh.warp.quick_added]="Правило добавлено: openai,netflix,disney → out-warp"
+MSG[mh.warp.not_configured]="WARP outbound ещё не настроен — сначала выполните «WARP outbound для разблокировки»"
+MSG[mh.warp.temp_start_fail]="Не удалось запустить временный mihomo (порт 127.0.0.1:%s недоступен); проверка невозможна"
+MSG[mh.warp.core_output]="Вывод mihomo (для диагностики):"
 
 # ── core additions: Snell protocol ───────────────────────────────────────────
 MSG[mh.protocol.snell]="Snell             (экосистема Surge, TCP)"

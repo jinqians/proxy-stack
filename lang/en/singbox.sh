@@ -334,6 +334,7 @@ MSG[sb.route.menu.outb_show]="Show outbound nodes"
 MSG[sb.route.menu.outb_add]="Add outbound node"
 MSG[sb.route.menu.outb_del]="Delete outbound node"
 MSG[sb.route.menu.warp]="WARP unlock outbound (Netflix / OpenAI, etc.)"
+MSG[sb.route.menu.warp_check]="Show real WARP exit IP"
 MSG[sb.route.menu.ads]="Toggle ad blocking"
 MSG[sb.route.menu.quic]="Toggle QUIC blocking"
 
@@ -351,6 +352,9 @@ MSG[sb.warp.ask_family]="Select [1]: "
 MSG[sb.warp.added]="WARP outbound out-warp added and applied."
 MSG[sb.warp.ask_quick_rules]="Route OpenAI / Netflix / Disney through WARP in one tap?"
 MSG[sb.warp.quick_added]="Rule added: openai,netflix,disney → out-warp"
+MSG[sb.warp.not_configured]="WARP outbound is not configured yet; run \"WARP unlock outbound\" first"
+MSG[sb.warp.temp_start_fail]="Temporary sing-box failed to start (could not listen on 127.0.0.1:%s); cannot probe"
+MSG[sb.warp.core_output]="sing-box output (for troubleshooting):"
 
 # ── core additions: Snell protocol ───────────────────────────────────────────
 MSG[sb.protocol.snell]="Snell             (Surge ecosystem, TCP, requires sing-box 1.14+)"

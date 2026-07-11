@@ -335,6 +335,7 @@ MSG[mh.route.menu.outb_show]="아웃바운드 노드 표시"
 MSG[mh.route.menu.outb_add]="아웃바운드 노드 추가"
 MSG[mh.route.menu.outb_del]="아웃바운드 노드 삭제"
 MSG[mh.route.menu.warp]="WARP 해제 아웃바운드(Netflix / OpenAI 등)"
+MSG[mh.route.menu.warp_check]="WARP 실제 출구 IP 보기"
 MSG[mh.route.menu.ads]="광고 차단 전환"
 MSG[mh.route.menu.quic]="QUIC 차단 전환"
 
@@ -352,6 +353,9 @@ MSG[mh.warp.ask_family]="선택 [1]: "
 MSG[mh.warp.added]="WARP 아웃바운드 out-warp가 추가되고 적용되었습니다."
 MSG[mh.warp.ask_quick_rules]="OpenAI / Netflix / Disney를 한 번에 WARP로 라우팅할까요?"
 MSG[mh.warp.quick_added]="규칙 추가됨: openai,netflix,disney → out-warp"
+MSG[mh.warp.not_configured]="WARP 아웃바운드가 아직 구성되지 않았습니다. 먼저 「WARP 해제 아웃바운드」를 실행하세요"
+MSG[mh.warp.temp_start_fail]="임시 mihomo를 시작하지 못했습니다(127.0.0.1:%s 수신 불가). 탐지할 수 없습니다"
+MSG[mh.warp.core_output]="mihomo 출력(문제 해결용):"
 
 # ── core additions: Snell protocol ───────────────────────────────────────────
 MSG[mh.protocol.snell]="Snell             (Surge 생태계, TCP)"

@@ -4,6 +4,7 @@
 # 节点入站模块只管理 .listeners；本文件独占 .proxies / .proxy-groups / .rules。
 
 source "$(dirname "${BASH_SOURCE[0]}")/../common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../warp_probe.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
 
 MH_ROUTE_CFG="$MH_STORE_DIR/routing.json"
@@ -108,11 +109,14 @@ _mh_outb_build() {
             }'
             ;;
         wireguard)
+            # ip/ipv6 按存储条目取舍：出口地址族选 6 时可以只有 ipv6，选 46 时两者都有
             echo "$e" | jq '{
                 name, type:"wireguard", server, port,
-                ip, "private-key": ."private-key", "public-key": ."public-key",
+                "private-key": ."private-key", "public-key": ."public-key",
                 reserved:(.reserved // [0,0,0]), udp:true, mtu:(.mtu // 1280)
-            }'
+            }
+            + (if (.ip   // "") != "" then {ip}   else {} end)
+            + (if (.ipv6 // "") != "" then {ipv6} else {} end)'
             ;;
     esac
 }
@@ -444,10 +448,25 @@ mh_route_toggle_preset() {
 
 mh_warp_setup() {
     _mh_require_installed || return
-    [[ -f "$MH_WARP_ACCOUNT" ]] || { log_error "$(t mh.warp.register_fail)"; return 1; }
-    local priv reserved ip peer endpoint host port
+    echo -e "\n${BOLD}$(t mh.warp.title)${NC}"
+    # 复用 xray 模块注册的 WARP 身份；未注册则现在注册（与 sing-box 流程一致）
+    source "$LIB_DIR/xray/warp.sh" 2>/dev/null || true
+    if [[ ! -f "$MH_WARP_ACCOUNT" ]] || ! jq -e '.secret_key // empty' "$MH_WARP_ACCOUNT" &>/dev/null; then
+        log_info "$(t mh.warp.not_registered)"
+        ask_yn "$(t mh.warp.ask_register)" Y || return
+        if declare -f _warp_register &>/dev/null; then
+            _warp_register || { log_error "$(t mh.warp.register_fail)"; return 1; }
+        else
+            log_error "$(t mh.warp.register_fail)"; return 1
+        fi
+    else
+        log_info "$(t mh.warp.reuse)"
+    fi
+
+    local priv reserved v4 v6 peer endpoint host port
     priv=$(jq -r '.secret_key // .private_key // empty' "$MH_WARP_ACCOUNT")
-    ip=$(jq -r '.local_v4 // "172.16.0.2"' "$MH_WARP_ACCOUNT")
+    v4=$(jq -r '.local_v4 // "172.16.0.2"' "$MH_WARP_ACCOUNT")
+    v6=$(jq -r '.local_v6 // empty' "$MH_WARP_ACCOUNT")
     peer=$(jq -r '.peer_public_key // empty' "$MH_WARP_ACCOUNT")
     reserved=$(jq -c '.reserved // [0,0,0]' "$MH_WARP_ACCOUNT")
     endpoint=$(jq -r '.endpoint // "engage.cloudflareclient.com:2408"' "$MH_WARP_ACCOUNT")
@@ -455,10 +474,30 @@ mh_warp_setup() {
     port="${endpoint##*:}"
     [[ "$port" =~ ^[0-9]+$ ]] || port=2408
     [[ -z "$priv" || -z "$peer" ]] && { log_error "$(t mh.warp.register_fail)"; return 1; }
+
+    echo -e "  $(t mh.warp.family_title)"
+    echo "    1. $(t mh.warp.family_4)"
+    echo "    2. $(t mh.warp.family_6)"
+    echo "    3. $(t mh.warp.family_46)"
+    local fs; read -rp "$(echo -e "${CYAN}$(t mh.warp.ask_family)${NC}")" fs
+    local family; case "${fs:-1}" in 2) family="6" ;; 3) family="46" ;; *) family="4" ;; esac
+    # 账号没有 v6 隧道地址时回落纯 v4（与 xray/sing-box 的降级逻辑一致）
+    [[ -z "$v6" && "$family" != "4" ]] && family="4"
+
+    local ip_arg="" ipv6_arg=""
+    case "$family" in
+        6)  ipv6_arg="${v6}/128" ;;
+        46) ip_arg="${v4}/32"; ipv6_arg="${v6}/128" ;;
+        *)  ip_arg="${v4}/32" ;;
+    esac
+
     local entry; entry=$(jq -n --argjson reserved "$reserved" --arg priv "$priv" \
-        --arg ip "$ip" --arg peer "$peer" --arg host "$host" --argjson port "$port" \
+        --arg ip "$ip_arg" --arg ipv6 "$ipv6_arg" --arg family "$family" \
+        --arg peer "$peer" --arg host "$host" --argjson port "$port" \
         '{name:"warp-out",remark:"WARP",type:"wireguard",server:$host,port:$port,
-          ip:($ip + "/32"),"private-key":$priv,"public-key":$peer,reserved:$reserved,mtu:1280}')
+          family:$family,"private-key":$priv,"public-key":$peer,reserved:$reserved,mtu:1280}
+         + (if $ip   != "" then {ip:$ip}     else {} end)
+         + (if $ipv6 != "" then {ipv6:$ipv6} else {} end)')
     local prev; prev=$(_mh_route_load)
     _mh_outb_upsert "$entry"
     if _mh_route_apply; then
@@ -468,6 +507,77 @@ mh_warp_setup() {
         log_error "$(t mh.change_reverted)"
         return 1
     fi
+
+    # 验证隧道真的能出网，并展示每个地址族的真实出口 IP（与 xray 流程一致）
+    echo ""
+    if ! mh_warp_check_exit_ip; then
+        log_warn "$(t warp.probe.setup_warn)"
+        return 1
+    fi
+}
+
+# ── WARP 出口探测 ─────────────────────────────────────────────────────────────
+# 拉起一个临时 mihomo（socks 入站 + MATCH → warp-out），经本地 socks 按地址族
+# 逐个探测真实出口 IP 与 warp 状态，探完即销毁，不碰生产配置。
+# （mihomo 配置是 YAML，而 JSON 是 YAML 的子集，直接写 JSON 即可。）
+mh_warp_check_exit_ip() {
+    command -v curl &>/dev/null || { log_error "$(t warp.probe.no_curl)"; return 1; }
+    local e; e=$(_mh_route_outbounds | jq -c '[.[] | select(.type == "wireguard")][0] // empty')
+    [[ -n "$e" ]] || { log_warn "$(t mh.warp.not_configured)"; return 1; }
+    local proxy; proxy=$(_mh_outb_build "$e")
+    [[ -n "$proxy" ]] || { log_error "$(t mh.warp.register_fail)"; return 1; }
+
+    local families
+    families=$(warp_probe_families "$(echo "$e" | jq -r '.family // "4"')" \
+                                   "$(echo "$e" | jq -r '.ipv6 // ""')")
+
+    local port=47300
+    while ss -ltnH 2>/dev/null | grep -q ":${port} "; do port=$((port+1)); done
+
+    local pid="" up=0 rc=1 logtail=""
+    local tmpdir tmpcfg tmplog
+    tmpdir=$(mktemp -d)
+    tmpcfg="$tmpdir/probe.yaml"; tmplog="$tmpdir/mihomo.log"
+    jq -n --argjson p "$proxy" --argjson port "$port" '{
+        "log-level": "warning",
+        "allow-lan": false,
+        "socks-port": $port,
+        mode: "rule",
+        proxies: [$p],
+        rules: [("MATCH," + $p.name)]
+    }' > "$tmpcfg"
+
+    log_step "$(t warp.probe.probing)"
+    "$MH_BIN" -f "$tmpcfg" -d "$tmpdir" >"$tmplog" 2>&1 &
+    pid=$!
+    for _ in $(seq 1 12); do
+        kill -0 "$pid" 2>/dev/null || break
+        if ss -ltnH 2>/dev/null | grep -q ":${port} "; then up=1; break; fi
+        sleep 0.5
+    done
+    if (( up )); then
+        sleep 2
+        # $families 故意不加引号（"4 6" 需要分词成两个参数）
+        if warp_probe_report "$port" $families; then rc=0; fi
+    fi
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    logtail=$(tail -n 8 "$tmplog" 2>/dev/null) || true
+    rm -rf "$tmpdir"
+
+    if (( ! up )); then
+        log_error "$(t mh.warp.temp_start_fail "$port")"
+        echo -e "${YELLOW}$(t mh.warp.core_output)${NC}"
+        sed 's/^/    /' <<<"$logtail"
+        return 1
+    fi
+    if (( rc )); then
+        echo -e "${YELLOW}$(t warp.probe.common_reasons)${NC}"
+        echo -e "${YELLOW}$(t mh.warp.core_output)${NC}"
+        sed 's/^/    /' <<<"$logtail"
+        return 1
+    fi
+    return 0
 }
 
 mh_route_menu() {
@@ -481,6 +591,7 @@ mh_route_menu() {
             "$(t mh.route.menu.outb_add)" \
             "$(t mh.route.menu.outb_del)" \
             "$(t mh.route.menu.warp)" \
+            "$(t mh.route.menu.warp_check)" \
             "$(t mh.route.menu.ads)" \
             "$(t mh.route.menu.quic)"
 
@@ -492,8 +603,9 @@ mh_route_menu() {
             5) mh_outb_add_wizard; press_enter ;;
             6) mh_outb_delete; press_enter ;;
             7) mh_warp_setup; press_enter ;;
-            8) mh_route_toggle_preset "ads"; press_enter ;;
-            9) mh_route_toggle_preset "quic"; press_enter ;;
+            8) mh_warp_check_exit_ip; press_enter ;;
+            9) mh_route_toggle_preset "ads"; press_enter ;;
+            10) mh_route_toggle_preset "quic"; press_enter ;;
             0) return ;;
         esac
     done

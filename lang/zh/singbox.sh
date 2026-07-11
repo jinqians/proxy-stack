@@ -334,6 +334,7 @@ MSG[sb.route.menu.outb_show]="查看出站节点"
 MSG[sb.route.menu.outb_add]="添加出站节点"
 MSG[sb.route.menu.outb_del]="删除出站节点"
 MSG[sb.route.menu.warp]="WARP 解锁出站（Netflix / OpenAI 等）"
+MSG[sb.route.menu.warp_check]="查看 WARP 实际出口 IP"
 MSG[sb.route.menu.ads]="一键拦截广告（开/关）"
 MSG[sb.route.menu.quic]="一键屏蔽 QUIC（开/关）"
 
@@ -351,6 +352,9 @@ MSG[sb.warp.ask_family]="选择 [1]: "
 MSG[sb.warp.added]="WARP 出站 out-warp 已添加并应用。"
 MSG[sb.warp.ask_quick_rules]="是否一键把 OpenAI / Netflix / Disney 走 WARP？"
 MSG[sb.warp.quick_added]="已添加规则：openai,netflix,disney → out-warp"
+MSG[sb.warp.not_configured]="WARP 出站尚未配置，请先执行「WARP 解锁出站」"
+MSG[sb.warp.temp_start_fail]="临时 sing-box 未能启动（无法监听 127.0.0.1:%s），无法探测"
+MSG[sb.warp.core_output]="sing-box 输出（便于排查）："
 
 # ── core 补充：Snell 协议 ─────────────────────────────────────────────────────
 MSG[sb.protocol.snell]="Snell             (Surge 生态，TCP，需 sing-box 1.14+)"

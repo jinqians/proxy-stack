@@ -335,6 +335,7 @@ MSG[mh.route.menu.outb_show]="查看出站节点"
 MSG[mh.route.menu.outb_add]="添加出站节点"
 MSG[mh.route.menu.outb_del]="删除出站节点"
 MSG[mh.route.menu.warp]="WARP 解锁出站（Netflix / OpenAI 等）"
+MSG[mh.route.menu.warp_check]="查看 WARP 实际出口 IP"
 MSG[mh.route.menu.ads]="一键拦截广告（开/关）"
 MSG[mh.route.menu.quic]="一键屏蔽 QUIC（开/关）"
 
@@ -352,6 +353,9 @@ MSG[mh.warp.ask_family]="选择 [1]: "
 MSG[mh.warp.added]="WARP 出站 out-warp 已添加并应用。"
 MSG[mh.warp.ask_quick_rules]="是否一键把 OpenAI / Netflix / Disney 走 WARP？"
 MSG[mh.warp.quick_added]="已添加规则：openai,netflix,disney → out-warp"
+MSG[mh.warp.not_configured]="WARP 出站尚未配置，请先执行「WARP 解锁出站」"
+MSG[mh.warp.temp_start_fail]="临时 mihomo 未能启动（无法监听 127.0.0.1:%s），无法探测"
+MSG[mh.warp.core_output]="mihomo 输出（便于排查）："
 
 # ── core 补充：Snell 协议 ─────────────────────────────────────────────────────
 MSG[mh.protocol.snell]="Snell             (Surge 生态，TCP)"

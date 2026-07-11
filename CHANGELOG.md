@@ -4,6 +4,9 @@ All notable user-facing changes should be recorded here.
 
 ## Unreleased
 
+- Fixed dual-stack WARP egress verification showing only the IPv6 exit IP: probing is now done per address family via IP-literal endpoints (IPv4 through 1.1.1.1, IPv6 through 2606:4700:4700::1111), so a dual-stack egress reports both its IPv4 and IPv6 WARP exit IPs.
+- Added WARP exit-IP verification to sing-box and mihomo, matching Xray: after setup the real egress IP and warp status are probed and shown per family, and a new "Show real WARP exit IP" menu item allows re-checking at any time.
+- mihomo WARP setup now registers a WARP identity when missing and supports choosing the egress address family (IPv4 / IPv6 / dual-stack), including an IPv6 tunnel address.
 - Extended Nginx 443 SNI multiplexing to sing-box and mihomo Reality/AnyTLS nodes, letting them share the public 443 port alongside Xray nodes.
 - Extended per-node traffic metering and quota enforcement (with Telegram quota warnings and automatic pause) to sing-box and mihomo nodes.
 - Added a core-services section to the Telegram daily health report covering every proxy core and Nginx.
