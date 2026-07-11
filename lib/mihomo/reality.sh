@@ -209,23 +209,51 @@ mh_reality_add_node() {
     read -rp "$(echo -e "${CYAN}$(t mh.reality.ask_flow)${NC}")" fc
     [[ "$fc" == "2" ]] && flow="" || flow="xtls-rprx-vision"
 
-    # 端口选择：直连监听，每节点独占公网端口
-    while true; do
-        ask port "$(t mh.reality.ask_port)" "$(_mh_reality_suggest_port)"
-        if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-            log_error "$(t mh.reality.invalid_port)"; continue
+    # ── 监听模式：直连独占公网端口（默认），或挂到 Nginx 443 SNI 分流 ──
+    # 挂载模式不要求自有域名：Reality 的伪装域名（decoy SNI）就是路由键。
+    local listen_addr="0.0.0.0" public_port="" use_nginx=0
+    echo ""
+    ask_yn "$(t mh.front.ask_mount)" N && use_nginx=1
+
+    if (( use_nginx )); then
+        _mh_front_ensure_nginx || { log_info "$(t mh.reality.cancelled)"; return 1; }
+        if _mh_front_sni_conflict "$server_name"; then
+            log_info "$(t mh.reality.cancelled)"; return 1
         fi
-        if _mh_reality_port_is_risky "$port"; then
-            log_warn "$(t mh.reality.risky_port "$port")"
-            ask_yn "$(t mh.reality.ask_use_port)" N || continue
-        fi
-        if _mh_reality_port_in_use "$port"; then
-            log_warn "$(t mh.reality.port_in_use "$port")"
-            ask_yn "$(t mh.reality.ask_use_port)" N || continue
-        fi
-        break
-    done
-    _mh_check_port_conflict "$port" || { log_info "$(t mh.reality.cancelled)"; return 1; }
+        listen_addr="127.0.0.1"
+        public_port=443
+        while true; do
+            ask port "$(t mh.front.ask_local_port)" "$(_mh_front_suggest_local_port $((4443 + count)))"
+            if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+                log_error "$(t mh.reality.invalid_port)"; continue
+            fi
+            if _mh_local_port_in_use "$port"; then
+                log_warn "$(t mh.reality.port_in_use "$port")"
+                ask_yn "$(t mh.reality.ask_use_port)" N || continue
+            fi
+            break
+        done
+        _mh_check_port_conflict "$port" || { log_info "$(t mh.reality.cancelled)"; return 1; }
+    else
+        # 端口选择：直连监听，每节点独占公网端口
+        while true; do
+            ask port "$(t mh.reality.ask_port)" "$(_mh_reality_suggest_port)"
+            if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+                log_error "$(t mh.reality.invalid_port)"; continue
+            fi
+            if _mh_reality_port_is_risky "$port"; then
+                log_warn "$(t mh.reality.risky_port "$port")"
+                ask_yn "$(t mh.reality.ask_use_port)" N || continue
+            fi
+            if _mh_reality_port_in_use "$port"; then
+                log_warn "$(t mh.reality.port_in_use "$port")"
+                ask_yn "$(t mh.reality.ask_use_port)" N || continue
+            fi
+            break
+        done
+        _mh_check_port_conflict "$port" || { log_info "$(t mh.reality.cancelled)"; return 1; }
+        public_port="$port"
+    fi
 
     log_step "$(t mh.reality.gen_keys)"
     _mh_reality_gen_keys || return 1
@@ -240,6 +268,7 @@ mh_reality_add_node() {
     node_json=$(jq -n \
         --arg tag         "$tag" \
         --argjson port    "$port" \
+        --argjson public_port "$public_port" \
         --arg uuid        "$uuid" \
         --arg priv_key    "$MH_REALITY_PRIVATE_KEY" \
         --arg pub_key     "$MH_REALITY_PUBLIC_KEY" \
@@ -247,9 +276,9 @@ mh_reality_add_node() {
         --arg dest        "$dest" \
         --arg flow        "$flow" \
         --argjson short   "[\"$short_id\"]" \
-        --arg listen_addr "0.0.0.0" \
+        --arg listen_addr "$listen_addr" \
         '{
-          tag: $tag, port: $port, uuid: $uuid,
+          tag: $tag, port: $port, public_port: $public_port, uuid: $uuid,
           private_key: $priv_key, public_key: $pub_key,
           server_name: $server_name, dest: $dest, flow: $flow,
           short_ids: $short, listen_addr: $listen_addr
@@ -262,10 +291,17 @@ mh_reality_add_node() {
     echo ""
     log_ok "$(t mh.reality.added "$tag" "$port")"
 
-    ask_yn "$(t mh.reality.ask_firewall "$port")" Y && {
-        source "$LIB_DIR/system.sh"
-        firewall_open_port "$port" "tcp"
-    }
+    if (( use_nginx )); then
+        # 路由条目在 mihomo 应用成功后再写，避免失败时留下指向死端口的路由
+        _sni_add_entry "$server_name" "127.0.0.1:${port}" \
+            || log_warn "$(t mh.front.map_failed "$server_name")"
+        log_ok "$(t mh.front.mounted "$server_name" "$port")"
+    else
+        ask_yn "$(t mh.reality.ask_firewall "$port")" Y && {
+            source "$LIB_DIR/system.sh"
+            firewall_open_port "$port" "tcp"
+        }
+    fi
 
     echo ""
     mh_reality_show_uri "$tag"
@@ -278,6 +314,13 @@ mh_reality_delete_node() {
     local node; node=$(_mh_reality_get_by_tag "$tag")
     [[ -z "$node" ]] && { log_error "$(t mh.reality.not_found "$tag")"; return 1; }
     ask_yn "$(t mh.reality.ask_confirm_del "$tag")" N || return 0
+
+    # 挂载在 Nginx 443 上的节点：先摘除 SNI 路由条目
+    if [[ "$(echo "$node" | jq -r '.listen_addr // "0.0.0.0"')" == "127.0.0.1" ]]; then
+        local sn; sn=$(echo "$node" | jq -r '.server_name')
+        source "$LIB_DIR/nginx.sh"
+        _sni_remove_entry "$sn" 2>/dev/null || true
+    fi
 
     # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
     local _prev_store; _prev_store=$(_mh_reality_load)
@@ -311,15 +354,22 @@ mh_reality_modify_port() {
     local node; node=$(_mh_reality_get_by_tag "$tag")
     [[ -z "$node" ]] && { log_error "$(t mh.reality.not_found "$tag")"; return 1; }
     local old_port; old_port=$(echo "$node" | jq -r '.port')
+    local fronted=0
+    [[ "$(echo "$node" | jq -r '.listen_addr // "0.0.0.0"')" == "127.0.0.1" ]] && fronted=1
 
     local port
     while true; do
-        ask port "$(t mh.reality.ask_new_port)" "$old_port"
+        if (( fronted )); then
+            ask port "$(t mh.front.ask_local_port)" "$old_port"
+        else
+            ask port "$(t mh.reality.ask_new_port)" "$old_port"
+        fi
         [[ "$port" == "$old_port" ]] && { log_info "$(t mh.reality.port_unchanged)"; return 0; }
         if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
             log_error "$(t mh.reality.invalid_port)"; continue
         fi
-        if _mh_reality_port_is_risky "$port"; then
+        # 回环端口不暴露公网，风险端口告警只对直连模式有意义
+        if (( ! fronted )) && _mh_reality_port_is_risky "$port"; then
             log_warn "$(t mh.reality.risky_port "$port")"
             ask_yn "$(t mh.reality.ask_use_port)" N || continue
         fi
@@ -331,17 +381,26 @@ mh_reality_modify_port() {
     done
     _mh_check_port_conflict "$port" || { log_info "$(t mh.reality.cancelled)"; return 1; }
 
-    node=$(echo "$node" | jq --argjson p "$port" '.port = $p')
+    node=$(echo "$node" | jq --argjson p "$port" \
+        '.port = $p | (if .listen_addr != "127.0.0.1" then .public_port = $p else . end)')
     local _prev_store; _prev_store=$(_mh_reality_load)
     _mh_reality_upsert "$node"
     _mh_reality_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t mh.reality.port_updated "$tag" "$old_port" "$port")"
 
-    ask_yn "$(t mh.reality.ask_firewall "$port")" Y && {
-        source "$LIB_DIR/system.sh"
-        firewall_open_port "$port" "tcp"
-    }
-    log_info "$(t mh.reality.old_port_hint "$old_port")"
+    if (( fronted )); then
+        # 同步 SNI 路由到新的回环端口
+        local sn; sn=$(echo "$node" | jq -r '.server_name')
+        source "$LIB_DIR/nginx.sh"
+        _sni_add_entry "$sn" "127.0.0.1:${port}" \
+            || log_warn "$(t mh.front.map_failed "$sn")"
+    else
+        ask_yn "$(t mh.reality.ask_firewall "$port")" Y && {
+            source "$LIB_DIR/system.sh"
+            firewall_open_port "$port" "tcp"
+        }
+        log_info "$(t mh.reality.old_port_hint "$old_port")"
+    fi
 }
 
 mh_reality_rotate_keys() {
@@ -376,12 +435,26 @@ mh_reality_modify_servername() {
     local tag; ask tag "$(t mh.reality.ask_tag)"
     local node; node=$(_mh_reality_get_by_tag "$tag")
     [[ -z "$node" ]] && { log_error "$(t mh.reality.not_found "$tag")"; return 1; }
+    local fronted=0 old_sn port
+    [[ "$(echo "$node" | jq -r '.listen_addr // "0.0.0.0"')" == "127.0.0.1" ]] && fronted=1
+    old_sn=$(echo "$node" | jq -r '.server_name')
+    port=$(echo "$node" | jq -r '.port')
     local sn; ask sn "$(t mh.reality.ask_new_sni)"
     local primary; primary=$(echo "$sn" | cut -d',' -f1 | tr -d ' ')
+    if (( fronted )); then
+        source "$LIB_DIR/nginx.sh"
+        _mh_front_sni_conflict "$primary" "$port" && return 1
+    fi
     node=$(echo "$node" | jq --arg p "$primary" '.server_name=$p')
     local _prev_store; _prev_store=$(_mh_reality_load)
     _mh_reality_upsert "$node"
     _mh_reality_apply_or_revert "$_prev_store" || return 1
+    if (( fronted )); then
+        # SNI 是路由键：迁移 map 条目到新域名
+        [[ "$old_sn" != "$primary" ]] && _sni_remove_entry "$old_sn" 2>/dev/null || true
+        _sni_add_entry "$primary" "127.0.0.1:${port}" \
+            || log_warn "$(t mh.front.map_failed "$primary")"
+    fi
     log_ok "$(t mh.reality.sni_updated)"
 }
 
@@ -426,7 +499,7 @@ mh_reality_show_uri() {
     local short_id;    short_id=$(echo "$node"    | jq -r '.short_ids[0]')
     local server_name; server_name=$(echo "$node" | jq -r '.server_name')
     local flow;        flow=$(echo "$node"        | jq -r '.flow')
-    local port;        port=$(echo "$node"        | jq -r '.port')
+    local port;        port=$(echo "$node"        | jq -r '.public_port // .port')
     local ipv4;        ipv4=$(get_ipv4)
     local ipv6;        ipv6=$(get_ipv6 2>/dev/null || echo "")
 
@@ -469,7 +542,7 @@ mh_reality_export_clash() {
     local short_id;    short_id=$(echo "$node"    | jq -r '.short_ids[0]')
     local server_name; server_name=$(echo "$node" | jq -r '.server_name')
     local flow;        flow=$(echo "$node"        | jq -r '.flow')
-    local port;        port=$(echo "$node"        | jq -r '.port')
+    local port;        port=$(echo "$node"        | jq -r '.public_port // .port')
     local ip;          ip=$(get_ipv4)
 
     echo -e "\n${BOLD}${GREEN}── Clash Meta ──${NC}"
@@ -505,7 +578,7 @@ mh_reality_export_mihomo() {
     local short_id;    short_id=$(echo "$node"    | jq -r '.short_ids[0]')
     local server_name; server_name=$(echo "$node" | jq -r '.server_name')
     local flow;        flow=$(echo "$node"        | jq -r '.flow')
-    local port;        port=$(echo "$node"        | jq -r '.port')
+    local port;        port=$(echo "$node"        | jq -r '.public_port // .port')
     local ip;          ip=$(get_ipv4)
 
     echo -e "\n${BOLD}${GREEN}── mihomo $(t mh.reality.outbound_label) ──${NC}"

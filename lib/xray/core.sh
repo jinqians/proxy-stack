@@ -105,7 +105,8 @@ xray_install() {
     if [[ -f "$XRAY_CFG" ]]; then
         if ! "$XRAY_BIN" run -test -config "$XRAY_CFG" &>/dev/null \
             && ! "$XRAY_BIN" -test -config "$XRAY_CFG" &>/dev/null; then
-            local backup_cfg="${XRAY_CFG}.bad.$(date +%Y%m%d%H%M%S)"
+            local backup_cfg
+            backup_cfg="${XRAY_CFG}.bad.$(date +%Y%m%d%H%M%S)"
             cp -a "$XRAY_CFG" "$backup_cfg"
             log_warn "$(t xray.bad_config_backup "$backup_cfg")"
             _write_skeleton_config

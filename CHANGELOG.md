@@ -4,6 +4,11 @@ All notable user-facing changes should be recorded here.
 
 ## Unreleased
 
+- Extended Nginx 443 SNI multiplexing to sing-box and mihomo Reality/AnyTLS nodes, letting them share the public 443 port alongside Xray nodes.
+- Extended per-node traffic metering and quota enforcement (with Telegram quota warnings and automatic pause) to sing-box and mihomo nodes.
+- Added a core-services section to the Telegram daily health report covering every proxy core and Nginx.
+- Added `psm doctor` with human-readable and stable JSON reports for system, dependency, configuration, core-service, disk, and certificate health.
+- Added a non-interactive `psm node` CLI covering 14 Xray/sing-box/mihomo node types with CRUD, export, JSON input/output, default credential redaction, locking, port checks, and transactional rollback.
 - Expanded Chinese and English README files with clearer positioning, target users, reasons to choose PSM, uninstall behavior, system write paths, FAQ, and project resource links.
 - Added GitHub Issue templates for installation failures, bug reports, and feature requests to make user feedback easier to triage.
 - Added `CHANGELOG.md` to track user-visible changes by commit/date until formal versioned releases are introduced.

@@ -81,7 +81,8 @@ _f2b_repair_stale_configs() {
 _f2b_quarantine_dropins() {
     local dir="$F2B_JAIL_DIR"
     compgen -G "$dir/psm-*.conf" >/dev/null 2>&1 || return 0
-    local q="$dir/psm-quarantine.$(date +%Y%m%d%H%M%S)"
+    local q
+    q="$dir/psm-quarantine.$(date +%Y%m%d%H%M%S)"
     mkdir -p "$q"
     mv "$dir"/psm-*.conf "$q"/ 2>/dev/null || true
     log_warn "$(t security.f2b.quarantined "$q")"

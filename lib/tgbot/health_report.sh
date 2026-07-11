@@ -35,6 +35,25 @@ EOF
 }
 
 # ── Section builders ──────────────────────────────────────────────────────────
+_hr_section_services() {
+    command -v systemctl &>/dev/null || return 0
+    local lines="" total=0 down=0 entry name svc state
+    for entry in "Xray:xray" "sing-box:sing-box" "mihomo:mihomo" \
+                 "Hysteria2:hysteria-server" "ss-rust:ss-rust" "Snell:snell" \
+                 "Nginx:nginx"; do
+        name="${entry%%:*}"; svc="${entry#*:}"
+        state=$(systemctl show "$svc" --property=LoadState --value 2>/dev/null || true)
+        [[ "$state" == "loaded" ]] || continue
+        total=$(( total + 1 ))
+        if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+            down=$(( down + 1 ))
+            lines="${lines}$(t tgbot.hr.svc_down_line "$name" "$svc")"
+        fi
+    done
+    (( total == 0 )) && return 0
+    printf "$(t tgbot.hr.services_section)" "$total" "$(( total - down ))" "$down" "$lines"
+}
+
 _hr_section_traffic() {
     source "$LIB_DIR/traffic.sh" 2>/dev/null || return 0
     declare -f _trf_get_tags &>/dev/null || return 0
@@ -177,8 +196,8 @@ hr_build_report() {
     local now; now=$(date '+%Y-%m-%d %H:%M')
     local body=""
     local section
-    for section in _hr_section_traffic _hr_section_expiry _hr_section_reality_watchdog \
-                   _hr_section_security _hr_section_warp; do
+    for section in _hr_section_services _hr_section_traffic _hr_section_expiry \
+                   _hr_section_reality_watchdog _hr_section_security _hr_section_warp; do
         local part; part=$("$section")
         [[ -n "$part" ]] && body="${body}${part}\n\n"
     done

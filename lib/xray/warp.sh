@@ -323,7 +323,7 @@ warp_check_exit_ip() {
     xpid=$!
 
     # Wait (max ~6s) for the throwaway Xray's socks port to actually listen.
-    for i in $(seq 1 12); do
+    for _ in $(seq 1 12); do
         kill -0 "$xpid" 2>/dev/null || break          # xray died on startup
         if ss -ltnH 2>/dev/null | grep -q "127.0.0.1:${port} "; then up=1; break; fi
         sleep 0.5

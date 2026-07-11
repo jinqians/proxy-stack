@@ -8,6 +8,43 @@ LIB_DIR="$PSM_ROOT/lib"
 
 source "$LIB_DIR/common.sh"
 
+# ── Scriptable command interface ───────────────────────────────────────────────
+# These commands run before the interactive root check and automatic updater.
+# Read-only automation must not unexpectedly mutate the checked-out program.
+case "${1:-}" in
+    doctor)
+        shift
+        source "$LIB_DIR/doctor.sh"
+        psm_doctor_cli "$@"
+        exit $?
+        ;;
+    node)
+        shift
+        source "$LIB_DIR/node_cli.sh"
+        psm_node_cli "$@"
+        exit $?
+        ;;
+    help|--help|-h)
+        cat <<'EOF'
+Usage:
+  psm                         Open the interactive manager
+  psm doctor [--json]         Run read-only system and configuration checks
+  psm node <command> [...]    Manage nodes non-interactively
+
+Node commands:
+  psm node list [--core CORE] [--protocol PROTOCOL] [--json]
+  psm node show CORE PROTOCOL TAG [--json]
+  psm node add CORE PROTOCOL --tag TAG [options]
+  psm node update CORE PROTOCOL TAG [options]
+  psm node delete CORE PROTOCOL TAG [--yes]
+  psm node export CORE PROTOCOL TAG [--format FORMAT] [--json]
+
+Run `psm node help` for the full option reference.
+EOF
+        exit 0
+        ;;
+esac
+
 # ── Non-interactive invocation (--flag mode) ──────────────────────────────────
 case "${1:-}" in
     --ddns-update)
@@ -84,24 +121,29 @@ _banner() {
     clear
     local ipv4; ipv4=$(get_ipv4 2>/dev/null || echo "N/A")
 
-    local nginx_ver="$(t mgr.status.not_installed)"
+    local nginx_ver
+    nginx_ver="$(t mgr.status.not_installed)"
     command -v nginx &>/dev/null \
         && nginx_ver=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
-    local xray_ver="$(t mgr.status.not_installed)"
+    local xray_ver
+    xray_ver="$(t mgr.status.not_installed)"
     [[ -x "${XRAY_BIN:-}" ]] \
         && xray_ver=$("$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2}')
 
-    local sb_ver="$(t mgr.status.not_installed)"
+    local sb_ver
+    sb_ver="$(t mgr.status.not_installed)"
     [[ -x "${SINGBOX_BIN:-}" ]] \
         && sb_ver=$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR==1{print $3}')
 
-    local mh_ver="$(t mgr.status.not_installed)"
+    local mh_ver
+    mh_ver="$(t mgr.status.not_installed)"
     [[ -x "${MIHOMO_BIN:-}" ]] \
         && mh_ver=$("$MIHOMO_BIN" -v 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     [[ -z "$mh_ver" ]] && mh_ver="$(t mgr.status.installed)"
 
-    local hy2_ver="$(t mgr.status.not_installed)"
+    local hy2_ver
+    hy2_ver="$(t mgr.status.not_installed)"
     if [[ -x "/usr/local/bin/hysteria" ]]; then
         hy2_ver=$(/usr/local/bin/hysteria version 2>/dev/null | awk 'NR==1{print $NF}')
         [[ -z "$hy2_ver" ]] && hy2_ver="$(t mgr.status.installed)"

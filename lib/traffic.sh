@@ -53,6 +53,15 @@ _trf_get() {
     jq -r --arg t "$tag" --arg f "$field" '.[$t][$f] // ""' "$TRAFFIC_STATE" 2>/dev/null || echo ""
 }
 
+# Port used for iptables accounting/pause rules. Falls back to the public port
+# for entries enrolled before count_port existed. When 443-multiplexed nodes
+# (Nginx SNI → 127.0.0.1:backend) arrive, count_port will hold the loopback
+# backend port while "port" stays the public-facing one shown to users.
+_trf_count_port() {
+    local cp; cp=$(_trf_get "$1" "count_port")
+    [[ -n "$cp" ]] && printf '%s' "$cp" || _trf_get "$1" "port"
+}
+
 _trf_init_tag() {
     local tag="$1" port="$2"
     local tmp; tmp=$(mktemp)
@@ -99,17 +108,18 @@ _trf_cleanup_node() {
     [[ -f "$TRAFFIC_STATE" ]] || return 0
     jq -e --arg t "$tag" '.[$t]' "$TRAFFIC_STATE" &>/dev/null || return 0
 
-    local port;   port=$(_trf_get "$tag" "port")
+    local cport;  cport=$(_trf_count_port "$tag")
     local source; source=$(_trf_get "$tag" "source"); source="${source:-xray}"
     local paused; paused=$(_trf_get "$tag" "paused")
 
     if [[ "$paused" == "true" ]]; then
         case "$source" in
             xray)     _trf_xray_unblock_inbound "$tag" 2>/dev/null || true ;;
-            iptables) [[ -n "$port" ]] && _trf_iptables_resume "$port" ;;
+            iptables) [[ -n "$cport" ]] && _trf_iptables_resume "$cport" ;;
         esac
     fi
-    [[ "$source" == "iptables" ]] && [[ -n "$port" ]] && _trf_ipt_remove_rules "$tag" "$port"
+    [[ "$source" == "iptables" ]] && [[ -n "$cport" ]] && \
+        _trf_ipt_remove_rules "$tag" "$cport" "$(_trf_get "$tag" "count_iface")"
     _trf_delete_tag "$tag"
     # Also remove expiry record if the expiry module is loaded
     declare -f exp_delete &>/dev/null && exp_delete "$tag" 2>/dev/null || true
@@ -258,7 +268,7 @@ _trf_check_monthly_reset() {
         log_info "$(t traffic.monthly_reset "$tag" "$reset_day")"
         echo "$(TZ="Asia/Hong_Kong" date '+%Y-%m-%d %H:%M:%S') RESET tag=${tag}" >> "$TRAFFIC_LOG"
 
-        local port;   port=$(_trf_get "$tag" "port")
+        local cport;  cport=$(_trf_count_port "$tag")
         local source; source=$(_trf_get "$tag" "source"); source="${source:-xray}"
         # Snapshot the live counter and use it as the new checkpoint so that
         # the next delta = current - checkpoint = 0 (not a ghost re-accumulation).
@@ -280,7 +290,7 @@ _trf_check_monthly_reset() {
 
         case "$source" in
             xray)     _trf_xray_unblock_inbound "$tag" 2>/dev/null || true ;;
-            iptables) [[ -n "$port" ]] && _trf_iptables_resume "$port" ;;
+            iptables) [[ -n "$cport" ]] && _trf_iptables_resume "$cport" ;;
         esac
 
     done < <(_trf_get_tags)
@@ -420,29 +430,45 @@ _trf_ipt_ensure_chain() {
 _trf_ipt_ensure_rules() {
     # Add accounting rules for tag/port if they don't already exist.
     # -C before -A preserves existing counters (no reset on re-run).
-    local tag="$1" port="$2"
+    # $3 (optional) = interface for loopback-backend nodes ("lo"). Nginx-fronted
+    # nodes are metered on their 127.0.0.1 backend port; loopback packets
+    # traverse BOTH PREROUTING and POSTROUTING (which both jump into this
+    # chain), so bare port matching would count them twice. Restricting the
+    # in-rule to -i lo and the out-rule to -o lo makes each direction match in
+    # exactly one hook.
+    local tag="$1" port="$2" iface="${3:-}"
     _trf_ipt_ensure_chain
     local proto
+    local -a in_if=() out_if=()
+    [[ -n "$iface" ]] && { in_if=(-i "$iface"); out_if=(-o "$iface"); }
     for proto in tcp udp; do
-        $_IPT -t mangle -C "$IPT_CHAIN" -p "$proto" --dport "$port" \
+        $_IPT -t mangle -C "$IPT_CHAIN" "${in_if[@]}" -p "$proto" --dport "$port" \
             -m comment --comment "psm-in-${tag}" -j RETURN 2>/dev/null || \
-            $_IPT -t mangle -A "$IPT_CHAIN" -p "$proto" --dport "$port" \
+            $_IPT -t mangle -A "$IPT_CHAIN" "${in_if[@]}" -p "$proto" --dport "$port" \
                 -m comment --comment "psm-in-${tag}" -j RETURN
-        $_IPT -t mangle -C "$IPT_CHAIN" -p "$proto" --sport "$port" \
+        $_IPT -t mangle -C "$IPT_CHAIN" "${out_if[@]}" -p "$proto" --sport "$port" \
             -m comment --comment "psm-out-${tag}" -j RETURN 2>/dev/null || \
-            $_IPT -t mangle -A "$IPT_CHAIN" -p "$proto" --sport "$port" \
+            $_IPT -t mangle -A "$IPT_CHAIN" "${out_if[@]}" -p "$proto" --sport "$port" \
                 -m comment --comment "psm-out-${tag}" -j RETURN
     done
 }
 
 _trf_ipt_remove_rules() {
-    local tag="$1" port="$2"
+    # Deletes both the bare and the interface-restricted rule variants so a
+    # node cleans up correctly regardless of which mode it was enrolled in.
+    local tag="$1" port="$2" iface="${3:-}"
     local proto
     for proto in tcp udp; do
         $_IPT -t mangle -D "$IPT_CHAIN" -p "$proto" --dport "$port" \
             -m comment --comment "psm-in-${tag}"  -j RETURN 2>/dev/null || true
         $_IPT -t mangle -D "$IPT_CHAIN" -p "$proto" --sport "$port" \
             -m comment --comment "psm-out-${tag}" -j RETURN 2>/dev/null || true
+        if [[ -n "$iface" ]]; then
+            $_IPT -t mangle -D "$IPT_CHAIN" -i "$iface" -p "$proto" --dport "$port" \
+                -m comment --comment "psm-in-${tag}"  -j RETURN 2>/dev/null || true
+            $_IPT -t mangle -D "$IPT_CHAIN" -o "$iface" -p "$proto" --sport "$port" \
+                -m comment --comment "psm-out-${tag}" -j RETURN 2>/dev/null || true
+        fi
     done
 }
 
@@ -465,14 +491,16 @@ _trf_ipt_restore_all() {
     while IFS= read -r tag; do
         local source; source=$(_trf_get "$tag" "source"); source="${source:-xray}"
         [[ "$source" != "iptables" ]] && continue
-        local port; port=$(_trf_get "$tag" "port")
-        [[ -n "$port" ]] && _trf_ipt_ensure_rules "$tag" "$port"
+        local cport; cport=$(_trf_count_port "$tag")
+        local ciface; ciface=$(_trf_get "$tag" "count_iface")
+        [[ -n "$cport" ]] && _trf_ipt_ensure_rules "$tag" "$cport" "$ciface"
     done < <(_trf_get_tags)
 }
 
 _trf_pause_tag() {
     local tag="$1"
     local port;   port=$(_trf_get "$tag" "port")
+    local cport;  cport=$(_trf_count_port "$tag")
     local source; source=$(_trf_get "$tag" "source"); source="${source:-xray}"
     local ts;     ts=$(TZ="Asia/Hong_Kong" date '+%Y-%m-%dT%H:%M:%S')
 
@@ -485,7 +513,7 @@ _trf_pause_tag() {
             _trf_xray_block_inbound "$tag"
             ;;
         iptables)
-            _trf_iptables_pause "$port"
+            _trf_iptables_pause "$cport"
             ;;
     esac
 
@@ -507,6 +535,7 @@ _trf_pause_tag() {
 _trf_resume_tag() {
     local tag="$1"
     local port;   port=$(_trf_get "$tag" "port")
+    local cport;  cport=$(_trf_count_port "$tag")
     local source; source=$(_trf_get "$tag" "source"); source="${source:-xray}"
 
     case "$source" in
@@ -514,7 +543,7 @@ _trf_resume_tag() {
             _trf_xray_unblock_inbound "$tag"
             ;;
         iptables)
-            _trf_iptables_resume "$port"
+            _trf_iptables_resume "$cport"
             ;;
     esac
 
@@ -556,8 +585,9 @@ _trf_enforce() {
         # - Xray blackhole rules are in the config file → survive Xray restarts,
         #   but re-calling _trf_xray_block_inbound is idempotent (no restart if
         #   the rule is already present).
-        if [[ "$paused" == "true" ]] && [[ -n "$port" ]]; then
+        if [[ "$paused" == "true" ]]; then
             local source_e; source_e=$(_trf_get "$tag" "source"); source_e="${source_e:-xray}"
+            local cport_e;  cport_e=$(_trf_count_port "$tag")
             case "$source_e" in
                 xray)
                     _trf_xray_block_inbound "$tag" 2>/dev/null || true
@@ -565,7 +595,7 @@ _trf_enforce() {
                 iptables)
                     # Re-apply both TCP and UDP block rules lost on reboot.
                     # _trf_iptables_pause is idempotent (-C before -I).
-                    _trf_iptables_pause "$port" 2>/dev/null || true
+                    [[ -n "$cport_e" ]] && _trf_iptables_pause "$cport_e" 2>/dev/null || true
                     ;;
             esac
         fi
@@ -745,8 +775,11 @@ _trf_show_status() {
 _trf_add_wizard() {
     _trf_init
 
-    # Collect available nodes from all supported protocols
-    local tags=() ports=() sources=()
+    # Collect available nodes from all supported protocols.
+    # ports  = user-facing port (443 for Nginx-fronted nodes)
+    # cports = accounting port (loopback backend port for fronted nodes)
+    # ifaces = "lo" for fronted nodes so meter rules bind to loopback
+    local tags=() ports=() sources=() cports=() ifaces=()
     local i=0
 
     echo -e "\n${BOLD}$(t traffic.wizard.available_nodes)${NC}"
@@ -755,7 +788,7 @@ _trf_add_wizard() {
     {
         source "$LIB_DIR/xray/reality.sh" 2>/dev/null && \
             while IFS=$'\t' read -r tag port _; do
-                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray")
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
                 printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${YELLOW}[Reality / Xray API]${NC}\n" \
                     "$i" "$tag" "$(t traffic.port_label)" "$port"
             done < <(_reality_list 2>/dev/null)
@@ -763,7 +796,7 @@ _trf_add_wizard() {
     {
         source "$LIB_DIR/xray/vision.sh" 2>/dev/null && \
             while IFS=$'\t' read -r tag port _; do
-                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray")
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
                 printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${YELLOW}[Vision / Xray API]${NC}\n" \
                     "$i" "$tag" "$(t traffic.port_label)" "$port"
             done < <(_vision_list 2>/dev/null)
@@ -771,7 +804,7 @@ _trf_add_wizard() {
     {
         source "$LIB_DIR/xray/xhttp.sh" 2>/dev/null && \
             while IFS=$'\t' read -r tag port _; do
-                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray")
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
                 printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${YELLOW}[XHTTP / Xray API]${NC}\n" \
                     "$i" "$tag" "$(t traffic.port_label)" "$port"
             done < <(_xhttp_list 2>/dev/null)
@@ -779,7 +812,7 @@ _trf_add_wizard() {
     {
         source "$LIB_DIR/xray/ss2022.sh" 2>/dev/null && \
             while IFS=$'\t' read -r tag port _; do
-                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray")
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
                 printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${CYAN}[SS2022 / Xray API]${NC}\n" \
                     "$i" "$tag" "$(t traffic.port_label)" "$port"
             done < <(_xss_list 2>/dev/null)
@@ -791,7 +824,7 @@ _trf_add_wizard() {
         local snell_port
         snell_port=$(grep -E '^listen' "$snell_conf" | grep -oP ':\K[0-9]+$' 2>/dev/null || true)
         if [[ -n "$snell_port" ]]; then
-            i=$((i+1)); tags+=("snell"); ports+=("$snell_port"); sources+=("iptables")
+            i=$((i+1)); tags+=("snell"); ports+=("$snell_port"); sources+=("iptables"); cports+=("$snell_port"); ifaces+=("")
             printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${GREEN}[Snell / iptables]${NC}\n" \
                 "$i" "snell" "$(t traffic.port_label)" "$snell_port"
         fi
@@ -803,11 +836,42 @@ _trf_add_wizard() {
         local ss_port
         ss_port=$(jq -r '.server_port // empty' "$ss_conf" 2>/dev/null || true)
         if [[ -n "$ss_port" ]]; then
-            i=$((i+1)); tags+=("ss2022"); ports+=("$ss_port"); sources+=("iptables")
+            i=$((i+1)); tags+=("ss2022"); ports+=("$ss_port"); sources+=("iptables"); cports+=("$ss_port"); ifaces+=("")
             printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${GREEN}[SS2022 / iptables]${NC}\n" \
                 "$i" "ss2022" "$(t traffic.port_label)" "$ss_port"
         fi
     fi
+
+    # ── sing-box / mihomo nodes (stats via iptables port counters) ───────────
+    # Node stores are the single source of truth. Direct-listen nodes are
+    # metered on their public port; Nginx-fronted nodes (listen_addr=127.0.0.1)
+    # are metered on their loopback backend port with lo-bound rules, while
+    # users see the public 443.
+    local pair store_dir core_label proto proto_label store_file tag dport cport laddr ifc
+    for pair in "singbox:sing-box" "mihomo:mihomo"; do
+        store_dir="$CFG_DIR/${pair%%:*}"; core_label="${pair#*:}"
+        for proto in reality ss2022 hysteria2 anytls snell; do
+            store_file="$store_dir/$proto.json"
+            [[ -f "$store_file" ]] || continue
+            case "$proto" in
+                reality)   proto_label="Reality" ;;
+                ss2022)    proto_label="SS2022" ;;
+                hysteria2) proto_label="Hysteria2" ;;
+                anytls)    proto_label="AnyTLS" ;;
+                snell)     proto_label="Snell" ;;
+            esac
+            while IFS=$'\t' read -r tag dport cport laddr; do
+                [[ -n "$tag" && -n "$dport" ]] || continue
+                ifc=""; [[ "$laddr" == "127.0.0.1" ]] && ifc="lo"
+                i=$((i+1)); tags+=("$tag"); ports+=("$dport"); sources+=("iptables")
+                cports+=("$cport"); ifaces+=("$ifc")
+                printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${GREEN}[%s / %s / iptables]${NC}\n" \
+                    "$i" "$tag" "$(t traffic.port_label)" "$dport" "$proto_label" "$core_label"
+            done < <(jq -r '.[]? | select(.tag != null and .port != null)
+                | [.tag, ((.public_port // .port) | tostring), (.port | tostring),
+                   (.listen_addr // "")] | @tsv' "$store_file" 2>/dev/null)
+        done
+    done
 
     if (( i == 0 )); then
         log_warn "$(t traffic.wizard.no_nodes)"
@@ -825,6 +889,8 @@ _trf_add_wizard() {
     local tag="${tags[$((sel-1))]}"
     local port="${ports[$((sel-1))]}"
     local source="${sources[$((sel-1))]}"
+    local cport="${cports[$((sel-1))]:-$port}"
+    local iface="${ifaces[$((sel-1))]:-}"
 
     # Show existing config if any
     local cur_limit; cur_limit=$(_trf_get "$tag" "limit_bytes")
@@ -850,6 +916,11 @@ _trf_add_wizard() {
     _trf_set_field "$tag" "limit_bytes" "$limit_bytes"
     _trf_set_field "$tag" "reset_day"   "$reset_day"
     _trf_set_str   "$tag" "source"      "$source"
+    # "port" is what users/tgbot see; count_port is where iptables meters and
+    # blocks. Identical for direct-listen nodes; for Nginx-fronted nodes
+    # count_port is the 127.0.0.1 backend port and count_iface is "lo".
+    _trf_set_field "$tag" "count_port"  "$cport"
+    _trf_set_str   "$tag" "count_iface" "$iface"
 
     log_ok "$(t traffic.limit.set "$tag" "$port" "$limit_gb" "$reset_day")"
     log_info "$(t traffic.source_method "$source")"
@@ -865,7 +936,7 @@ _trf_add_wizard() {
             ;;
         iptables)
             log_step "$(t traffic.iptables.init_rules)"
-            _trf_ipt_ensure_rules "$tag" "$port"
+            _trf_ipt_ensure_rules "$tag" "$cport" "$iface"
             log_ok "$(t traffic.iptables.rules_ready "$IPT_CHAIN")"
             ;;
     esac

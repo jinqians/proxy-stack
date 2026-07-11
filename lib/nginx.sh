@@ -365,6 +365,22 @@ _sni_add_entry() {
     log_ok "$(t nginx.sni.ready "$domain" "$upstream")"
 }
 
+# Print the upstream currently mapped to <domain> (e.g. "127.0.0.1:2443").
+# Prints nothing / returns 1 when the domain has no entry. Lets callers detect
+# cross-core SNI collisions before _sni_add_entry silently overwrites a route.
+_sni_lookup_entry() {
+    local domain="$1" file upstream
+    file="$(_sni_map_file)"
+    [[ -f "$file" ]] || return 1
+    upstream=$(awk -v d="$domain" '
+        /# PSM:ENTRIES:BEGIN/ {s=1; next}
+        /# PSM:ENTRIES:END/   {s=0}
+        s && $1 == d          {gsub(/;$/, "", $2); print $2; exit}
+    ' "$file")
+    [[ -n "$upstream" ]] || return 1
+    printf '%s' "$upstream"
+}
+
 _sni_remove_entry() {
     local domain="$1"
     local file; file="$(_sni_map_file)"
@@ -407,7 +423,7 @@ list_sites() {
 }
 
 add_site() {
-    local domain port proxy_pass tls="no" h3="no" ws="no"
+    local domain proxy_pass tls="no" h3="no" ws="no"
     ask domain "$(t nginx.ask.domain)"
     is_domain "$domain" || { log_error "$(t nginx.invalid_domain)"; return 1; }
 

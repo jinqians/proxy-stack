@@ -1,10 +1,7 @@
 # Runtime state (may contain credentials/passwords)
-config/psm.state
-config/xray/
-config/mihomo/
-config/stream/
-config/http/
-config/ssl/
+# Ignore the whole directory so a new protocol store cannot accidentally leak
+# UUIDs, passwords, tokens, or private keys before .gitignore is updated.
+config/
 
 # Backup archives
 backup/
@@ -13,8 +10,15 @@ backup/
 # Logs
 logs/
 
+# Control-plane runtime data and Python bytecode
+__pycache__/
+*.py[cod]
+
 # macOS
 .DS_Store
 
-# Local dev notes (internal handoff spec, keep out of the public repo)
-docs/mihomo-dev-spec.md
+# Local dev notes, tests, and CI tooling (keep out of the public repo)
+docs/
+tests/
+scripts/ci.sh
+.github/

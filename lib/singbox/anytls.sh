@@ -55,14 +55,16 @@ _sb_anytls_build_inbound() {
     local sni;  sni=$(echo "$node_json"  | jq -r '.sni')
     local cert; cert=$(echo "$node_json" | jq -r '.cert_path')
     local key;  key=$(echo "$node_json"  | jq -r '.key_path')
+    local listen_addr; listen_addr=$(echo "$node_json" | jq -r '.listen_addr // "::"')
 
     jq -n \
         --arg tag "$tag" --argjson p "$port" --arg pass "$pass" \
         --arg sni "$sni" --arg cert "$cert" --arg key "$key" \
+        --arg listen "$listen_addr" \
     '{
         type: "anytls",
         tag: $tag,
-        listen: "::",
+        listen: $listen,
         listen_port: $p,
         users: [ { name: "psm", password: $pass } ],
         tls: {
@@ -107,7 +109,7 @@ _sb_anytls_uri() {
     [[ -z "$node" ]] && { log_error "$(t sb.anytls.not_found "$tag")"; return 1; }
 
     local port pass sni insec
-    port=$(echo "$node"  | jq -r '.port')
+    port=$(echo "$node"  | jq -r '.public_port // .port')
     pass=$(echo "$node"  | jq -r '.password')
     sni=$(echo "$node"   | jq -r '.sni')
     insec=$(echo "$node" | jq -r '.insecure')
@@ -140,7 +142,21 @@ sb_anytls_add_node() {
     local tag port password domain
     ask tag  "$(t sb.anytls.ask_tag)"  "sb-anytls-$(tr -dc a-z0-9 </dev/urandom 2>/dev/null | head -c4)"
     [[ "$tag" =~ ^sb-anytls- ]] || tag="sb-anytls-${tag}"
-    ask port "$(t sb.anytls.ask_port)" "$SB_ANYTLS_DEFAULT_PORT"
+
+    # ── 监听模式：直连独占公网端口（默认），或挂到 Nginx 443 SNI 分流 ──
+    # 挂载模式不要求自有域名：自签名证书时以伪装 SNI（默认 www.bing.com）做路由键。
+    local listen_addr="::" public_port="" use_nginx=0
+    ask_yn "$(t sb.front.ask_mount)" N && use_nginx=1
+
+    if (( use_nginx )); then
+        _sb_front_ensure_nginx || { log_info "$(t sb.anytls.cancelled)"; return 1; }
+        listen_addr="127.0.0.1"
+        public_port=443
+        ask port "$(t sb.front.ask_local_port)" \
+            "$(_sb_front_suggest_local_port $((3443 + $(_sb_anytls_count))))"
+    else
+        ask port "$(t sb.anytls.ask_port)" "$SB_ANYTLS_DEFAULT_PORT"
+    fi
     if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
         log_error "$(t sb.anytls.invalid_port)"; return 1
     fi
@@ -158,23 +174,38 @@ sb_anytls_add_node() {
     local cert_path key_path sni insecure
     IFS=$'\t' read -r cert_path key_path sni insecure <<<"$tls"
 
+    # SNI 是 443 分流的路由键，必须全局唯一（跨内核共用一张 map）
+    if (( use_nginx )) && _sb_front_sni_conflict "$sni"; then
+        log_info "$(t sb.anytls.cancelled)"; return 1
+    fi
+
     local node_json
     node_json=$(jq -n \
         --arg tag "$tag" --argjson port "$port" --arg pass "$password" \
         --arg domain "$domain" --arg sni "$sni" \
         --arg cert "$cert_path" --arg key "$key_path" --argjson insec "$insecure" \
-        '{tag:$tag, port:$port, password:$pass, domain:$domain, sni:$sni,
-          cert_path:$cert, key_path:$key, insecure:$insec}')
+        --arg listen_addr "$listen_addr" \
+        --argjson public_port "${public_port:-$port}" \
+        '{tag:$tag, port:$port, public_port:$public_port, password:$pass,
+          domain:$domain, sni:$sni,
+          cert_path:$cert, key_path:$key, insecure:$insec, listen_addr:$listen_addr}')
 
     local _prev_store; _prev_store=$(_sb_anytls_load)
     _sb_anytls_upsert "$node_json"
     _sb_anytls_apply_or_revert "$_prev_store" || return 1
     log_ok "$(t sb.anytls.added "$tag" "$port")"
 
-    ask_yn "$(t sb.anytls.ask_firewall "$port")" Y && {
-        source "$LIB_DIR/system.sh"
-        firewall_open_port "$port" "tcp"
-    }
+    if (( use_nginx )); then
+        # 路由条目在 sing-box 应用成功后再写，避免失败时留下指向死端口的路由
+        _sni_add_entry "$sni" "127.0.0.1:${port}" \
+            || log_warn "$(t sb.front.map_failed "$sni")"
+        log_ok "$(t sb.front.mounted "$sni" "$port")"
+    else
+        ask_yn "$(t sb.anytls.ask_firewall "$port")" Y && {
+            source "$LIB_DIR/system.sh"
+            firewall_open_port "$port" "tcp"
+        }
+    fi
     _sb_anytls_uri "$tag"
 }
 
@@ -200,6 +231,13 @@ sb_anytls_delete_node() {
     _sb_anytls_select_node || return
     local tag="$SB_ANYTLS_SEL_TAG"
     ask_yn "$(t sb.anytls.ask_confirm_del "$tag")" N || return
+    # 挂载在 Nginx 443 上的节点：先摘除 SNI 路由条目
+    local node; node=$(_sb_anytls_get_by_tag "$tag")
+    if [[ "$(echo "$node" | jq -r '.listen_addr // "::"')" == "127.0.0.1" ]]; then
+        local sn; sn=$(echo "$node" | jq -r '.sni')
+        source "$LIB_DIR/nginx.sh"
+        _sni_remove_entry "$sn" 2>/dev/null || true
+    fi
     # 删除动作 apply 成功时 store 的删除必须保留；仅在 apply 失败时才还原
     local _prev_store; _prev_store=$(_sb_anytls_load)
     _sb_anytls_delete "$tag"

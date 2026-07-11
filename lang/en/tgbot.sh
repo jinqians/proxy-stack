@@ -33,6 +33,8 @@ Your node (port \`%s\`) has been renewed.
 Thank you for using the service."
 
 # ── Health report ────────────────────────────────────────────────────────────
+MSG[tgbot.hr.services_section]="*🧩 Core services*\n%d installed, %d running, %d down%b\n"
+MSG[tgbot.hr.svc_down_line]="\n  ❌ %s (%s) not running"
 MSG[tgbot.hr.traffic_paused_line]="\n  🚫 %s (port %s) paused"
 MSG[tgbot.hr.traffic_warn_line]="\n  ⚠️ %s (port %s) %s%%"
 MSG[tgbot.hr.traffic_section]="*🚦 Traffic*\n%d node(s), %d at ≥90%%, %d paused%b\n"

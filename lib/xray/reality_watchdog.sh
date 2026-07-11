@@ -583,7 +583,8 @@ rwd_status() {
             | while IFS=$'\t' read -r sn dest fail rtt warn; do
                 local mark="  "
                 [[ "$sn" == "$active" ]] && mark="${GREEN}●${NC} "
-                local health="${GREEN}$(t xray.rwd.healthy)${NC}"
+                local health
+                health="${GREEN}$(t xray.rwd.healthy)${NC}"
                 (( fail > 0 )) && health="${RED}$(t xray.rwd.failed_times "$fail")${NC}"
                 local extra=""
                 [[ -n "$rtt"  ]] && extra="${extra} ${rtt}ms"

@@ -81,6 +81,8 @@ Benefits:
 - **Multiple tenants per node** — no need to open a separate port/key pair per user; multiple UUIDs under the same SNI share one entry point, with traffic billed independently per user
 - **UDP 443 reuse is independent** — Hysteria2 runs over UDP, a completely separate listening stack from the TCP routing above, so there's no conflict even though the port number is the same
 
+> **Unified across cores**: Xray's Reality / Vision / XHTTP plus sing-box and mihomo Reality / AnyTLS nodes can all mount on the same 443, sharing this one SNI routing table; reusing the same camouflage domain across cores is automatically detected and blocked to prevent routing conflicts.
+
 ---
 
 ## How to Use
@@ -174,6 +176,22 @@ manager.sh --health-report         # Send one daily health report
 
 These are the real entry points invoked by each module's scheduled tasks. The "enable scheduled task" options in the menus register them for you — no manual cron setup needed.
 
+### Diagnostics and node automation CLI
+
+```bash
+psm doctor                         # Read-only host and configuration diagnostics
+psm doctor --json                  # Structured JSON report
+
+psm node list --json               # List nodes from all three cores
+psm node show xray reality node-1 --json
+psm node add xray reality --tag node-1 --port 24443
+psm node update xray reality node-1 --port 25443
+psm node export xray reality node-1 --server 203.0.113.10
+psm node delete xray reality node-1 --yes
+```
+
+The node CLI covers 14 stored node types across Xray, sing-box, and mihomo, with JSON input, field-level updates, credential redaction by default, mutation locking, port-conflict checks, and rollback on apply failure. Run `psm node help` for the full option reference.
+
 ### Uninstall
 
 ```bash
@@ -200,6 +218,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Routing management** — geosite / geoip / domain suffix / IP CIDR / inbound tag → chosen outbound or reject, with one-tap ad-block and QUIC-block presets
 - **Outbound manager** — 10 outbound types: ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2 (Salamander obfuscation) / tuic
 - **WARP outbound** — reuses the WARP account registered on the Xray side as a WireGuard endpoint
+- **443 port reuse** — Reality and AnyTLS nodes can mount on the Nginx 443 SNI router, sharing the public 443 with Xray / mihomo nodes so clients only connect to 443; direct-listen on a dedicated port still works too
 - **Transactional config changes** — every change is preceded by an automatic backup; if `sing-box check` fails, both the config and the node store are rolled back, so a bad config can never take the service down
 
 ### mihomo core (third core)
@@ -208,6 +227,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Clash-style routing** — manages `proxies` / `proxy-groups` / `rules` directly, supporting DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME with a fixed `MATCH,DIRECT` fallback
 - **Outbound manager** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard outbound types
 - **WARP outbound reuse** — reuses the WARP account registered on the Xray side and generates a mihomo wireguard proxy
+- **443 port reuse** — Reality and AnyTLS nodes can mount on the Nginx 443 SNI router, sharing the public 443 with Xray / sing-box nodes so clients only connect to 443; direct-listen on a dedicated port still works too
 - **Transactional config changes** — every change rebuilds the config and runs `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`; failed checks roll back automatically without affecting the running old config
 
 ### Standalone protocols & relay
@@ -234,9 +254,9 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 
 ### Operations & monitoring
 
-- **Traffic management** — monthly quota per node, automatic pause at threshold, per-minute accounting, automatic monthly reset
+- **Traffic management** — covers nodes across all three cores (Xray / sing-box / mihomo); monthly quota per node, automatic pause at threshold with a Telegram alert, per-minute accounting, automatic monthly reset
 - **Expiry management** — per-node expiry dates, automatic reminders and service pause on expiry, one-click renewal
-- **Daily health report** — a scheduled Telegram digest: traffic warnings, expiry reminders, Reality liveness switches, SSH/BBR/Fail2ban/honeypot/WARP status — the whole picture in one message
+- **Daily health report** — a scheduled Telegram digest: core-service status (Xray / sing-box / mihomo / Nginx, …), traffic warnings, expiry reminders, Reality liveness switches, SSH/BBR/Fail2ban/honeypot/WARP status — the whole picture in one message
 - **Telegram Bot** — query node traffic, manage user bindings, renew expiries, health reports — all from inside Telegram, no server login needed
 - **Backup & restore** — full / selective backups (including Docker volumes), scheduled backups, one-click restore
 - **System management** — BBR congestion control, sysctl network tuning, firewall, DNS, timezone, and common VPS test tools (local health, latency/route, NodeQuality, YABS, IP.Check.Place, RegionRestrictionCheck, bench.sh, LemonBench)

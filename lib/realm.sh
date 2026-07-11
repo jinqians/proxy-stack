@@ -350,7 +350,7 @@ _realm_show_node_list() {
     fi
     local ip; ip=$(get_ipv4 2>/dev/null || echo "?")
     _realm_list | while IFS=$'\t' read -r tag lp rh rp proto; do
-        printf "  %s %s:%s → %s:%s | %s\n" "$proto" "$ip" "$lp" "$rh" "$rp"
+        printf "  %s %s:%s → %s:%s\n" "$proto" "$ip" "$lp" "$rh" "$rp"
     done
 }
 

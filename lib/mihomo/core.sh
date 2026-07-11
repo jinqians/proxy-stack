@@ -63,7 +63,8 @@ mh_install() {
 
     if [[ -f "$MH_CFG" ]]; then
         if ! "$MH_BIN" -t -d "$MH_CFG_DIR" -f "$MH_CFG" &>/dev/null; then
-            local backup_cfg="${MH_CFG}.bad.$(date +%Y%m%d%H%M%S)"
+            local backup_cfg
+            backup_cfg="${MH_CFG}.bad.$(date +%Y%m%d%H%M%S)"
             cp -a "$MH_CFG" "$backup_cfg"
             log_warn "$(t mh.bad_config_backup "$backup_cfg")"
             _mh_write_skeleton_config
@@ -202,6 +203,17 @@ mh_uninstall() {
             _trf_cleanup_node "$_tag" 2>/dev/null || true
         done < <(jq -r '.[]?.tag' "$MH_STORE_DIR/$_store.json" 2>/dev/null)
     done
+
+    # 摘除挂在 Nginx 443 SNI 分流上的节点路由（reality 按 server_name，anytls 按 sni）
+    if source "$LIB_DIR/nginx.sh" 2>/dev/null && declare -f _sni_remove_entry &>/dev/null; then
+        local _sn
+        while IFS= read -r _sn; do
+            [[ -n "$_sn" ]] && _sni_remove_entry "$_sn" 2>/dev/null || true
+        done < <(jq -r '.[]? | select(.listen_addr == "127.0.0.1") | .server_name // empty' \
+                    "$MH_STORE_DIR/reality.json" 2>/dev/null
+                 jq -r '.[]? | select(.listen_addr == "127.0.0.1") | .sni // empty' \
+                    "$MH_STORE_DIR/anytls.json" 2>/dev/null)
+    fi
 
     rm -f  "$MH_BIN" "$MH_SERVICE"
     rm -rf "$MH_CFG_DIR" "$MH_STORE_DIR"
@@ -362,6 +374,50 @@ _mh_check_port_conflict() {
     _hp_is_reserved_port "$port" || return 0
     log_warn "$(t mh.port_conflict "$port")"
     ask_yn "$(t mh.ask_use_port)" N
+}
+
+# ── Nginx 443 SNI 分流（端口复用）helpers ─────────────────────────────────────
+# 挂载模式：节点监听 127.0.0.1:回环端口，Nginx stream ssl_preread 按 SNI 把
+# 443 的 TCP 流透传过来。公网端口统一为 443（public_port），map 由 nginx.sh 管理。
+# 与 lib/singbox/core.sh 的 _sb_front_* 同构。
+
+_mh_front_ensure_nginx() {
+    source "$LIB_DIR/nginx.sh"
+    if ! is_installed nginx; then
+        log_warn "$(t mh.front.nginx_missing)"
+        ask_yn "$(t mh.front.ask_install_nginx)" Y || return 1
+        nginx_install || return 1
+    fi
+    nginx_ensure_stream_sni
+}
+
+# SNI 已被其它后端占用时返回 0（冲突）。$2 为本节点回环端口：条目已指向自己
+# 视为无冲突（重试/更新场景）。map 是全局的，同时覆盖 Xray/sing-box 挂载的节点。
+_mh_front_sni_conflict() {
+    local sn="$1" own_port="${2:-}" cur
+    cur=$(_sni_lookup_entry "$sn" 2>/dev/null) || return 1
+    [[ -n "$own_port" && "$cur" == "127.0.0.1:${own_port}" ]] && return 1
+    log_error "$(t mh.front.sni_taken "$sn" "$cur")"
+    return 0
+}
+
+_mh_local_port_in_use() {
+    local port="$1"; [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    if command -v ss &>/dev/null; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; return
+    fi
+    if command -v netstat &>/dev/null; then
+        netstat -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; return
+    fi
+    return 1
+}
+
+# 从 $1 起挑一个空闲回环端口（mh reality 用 4443 起、anytls 用 5443 起，
+# 避开 Xray 的 1443 段与 sing-box 的 2443/3443 段）。
+_mh_front_suggest_local_port() {
+    local p="$1"
+    while _mh_local_port_in_use "$p"; do p=$(( p + 1 )); done
+    printf '%s' "$p"
 }
 
 # ── Centralized node viewer ───────────────────────────────────────────────────

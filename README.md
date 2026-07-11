@@ -81,6 +81,8 @@ flowchart TD
 - **一个节点多个租户**：不需要为每个用户单独开一个端口/一套密钥，同一个 SNI 下的多个 UUID 共享入口，各自流量独立计费
 - **UDP 443 独立复用**：Hysteria2 走的是 UDP，和上面的 TCP 分流是两个独立的监听栈，端口号相同也不会冲突
 
+> **三内核统一**：Xray 的 Reality / Vision / XHTTP，以及 sing-box、mihomo 的 Reality / AnyTLS 节点都可以挂到同一个 443 端口上，共用这张 SNI 分流表；跨内核若使用相同伪装域名会被自动检测并拦截，避免路由冲突。
+
 ---
 
 ## 如何使用
@@ -174,6 +176,22 @@ manager.sh --health-report         # 发送一次每日体检报告
 
 这些都是各自功能模块背后的定时任务真正调用的入口，菜单里对应的"启用定时任务"选项会自动帮你注册好，不需要手动配置 cron。
 
+### 诊断与节点自动化 CLI
+
+```bash
+psm doctor                         # 只读系统与配置诊断
+psm doctor --json                  # 结构化 JSON 报告
+
+psm node list --json               # 列出三内核的全部节点
+psm node show xray reality node-1 --json
+psm node add xray reality --tag node-1 --port 24443
+psm node update xray reality node-1 --port 25443
+psm node export xray reality node-1 --server 203.0.113.10
+psm node delete xray reality node-1 --yes
+```
+
+节点 CLI 覆盖 Xray、sing-box 和 mihomo 的 14 类存储型节点，支持 JSON 输入、字段更新、默认密钥脱敏、并发锁、端口冲突检查和应用失败回滚。详细命令参数运行 `psm node help`。
+
 ### 卸载
 
 ```bash
@@ -200,6 +218,7 @@ bash /opt/psm/uninstall.sh
 - **路由分流管理** — geosite / geoip / 域名后缀 / IP CIDR / 入站标签 → 指定出站或拦截，内置一键去广告、禁 QUIC 预设
 - **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2（Salamander 混淆）/ tuic 共 10 种出站类型
 - **WARP 出站** — 复用 Xray 侧注册的 WARP 账户，一键接入 WireGuard endpoint
+- **443 端口复用** — Reality 与 AnyTLS 节点可挂到 Nginx 443 SNI 分流，与 Xray / mihomo 节点共用公网 443，客户端只需连 443；也可继续直连独占端口
 - **事务化配置变更** — 每次变更前自动备份，`sing-box check` 校验失败自动回滚配置与节点存储，不会留下坏配置导致服务起不来
 
 ### mihomo 内核（第三内核）
@@ -208,6 +227,7 @@ bash /opt/psm/uninstall.sh
 - **Clash 规则分流** — 直接管理 `proxies` / `proxy-groups` / `rules`，支持 DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME，并固定兜底 `MATCH,DIRECT`
 - **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard 等出站类型
 - **WARP 出站复用** — 复用 Xray 侧注册的 WARP 账户，生成 mihomo wireguard proxy
+- **443 端口复用** — Reality 与 AnyTLS 节点可挂到 Nginx 443 SNI 分流，与 Xray / sing-box 节点共用公网 443，客户端只需连 443；也可继续直连独占端口
 - **事务化配置变更** — 每次变更都会重建配置并执行 `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`，校验失败自动回滚，不影响正在运行的旧配置
 
 ### 独立协议与中转
@@ -234,9 +254,9 @@ bash /opt/psm/uninstall.sh
 
 ### 运维监控
 
-- **流量管理** — 按节点设置月度流量配额，达阈值自动暂停，每分钟统计，月末自动重置
+- **流量管理** — 覆盖 Xray / sing-box / mihomo 三内核节点，按节点设置月度流量配额，达阈值自动暂停并推送 Telegram 提醒，每分钟统计，月末自动重置
 - **到期管理** — 按节点设置到期时间，临期 / 到期自动提醒并暂停服务，支持一键续费
-- **每日体检报告** — 定时通过 Telegram 推送一份汇总报告：流量预警、到期提醒、Reality 测活切换记录、SSH/BBR/Fail2ban/蜜罐/WARP 状态，一条消息看全貌
+- **每日体检报告** — 定时通过 Telegram 推送一份汇总报告：核心服务运行状态（Xray / sing-box / mihomo / Nginx 等）、流量预警、到期提醒、Reality 测活切换记录、SSH/BBR/Fail2ban/蜜罐/WARP 状态，一条消息看全貌
 - **Telegram Bot** — 查询节点流量、管理用户绑定、到期续费、体检报告，全部可在 Telegram 内完成，无需登录服务器
 - **备份与恢复** — 全量 / 选择性备份（含 Docker 数据卷），定时备份，一键恢复
 - **系统管理** — BBR 拥塞控制、sysctl 网络调优、防火墙、DNS、时区、VPS 常用测试工具（本机体检、延迟/路由、NodeQuality、YABS、IP.Check.Place、RegionRestrictionCheck、bench.sh、LemonBench）

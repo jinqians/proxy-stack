@@ -79,7 +79,8 @@ _ssh_set_ports() {
 
 _ssh_backup() {
     _ssh_init
-    local dst="$SSH_BACKUP_DIR/sshd_config.$(date +%Y%m%d%H%M%S)"
+    local dst
+    dst="$SSH_BACKUP_DIR/sshd_config.$(date +%Y%m%d%H%M%S)"
     cp -a "$SSHD_CFG" "$dst"
     printf '%s' "$dst"
 }

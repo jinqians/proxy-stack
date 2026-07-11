@@ -33,6 +33,8 @@ MSG[tgbot.expiry.renewed]="✅ *续期成功*
 感谢您的使用！"
 
 # ── Health report ────────────────────────────────────────────────────────────
+MSG[tgbot.hr.services_section]="*🧩 核心服务*\n已安装 %d 个，运行中 %d 个，异常 %d 个%b\n"
+MSG[tgbot.hr.svc_down_line]="\n  ❌ %s（%s）未运行"
 MSG[tgbot.hr.traffic_paused_line]="\n  🚫 %s（端口 %s）已暂停"
 MSG[tgbot.hr.traffic_warn_line]="\n  ⚠️ %s（端口 %s）%s%%"
 MSG[tgbot.hr.traffic_section]="*🚦 流量*\n共 %d 个节点，%d 个 ≥90%%，%d 个已暂停%b\n"
