@@ -121,35 +121,28 @@ _banner() {
     clear
     local ipv4; ipv4=$(get_ipv4 2>/dev/null || echo "N/A")
 
-    local nginx_ver
-    nginx_ver="$(t mgr.status.not_installed)"
-    command -v nginx &>/dev/null \
-        && nginx_ver=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-
-    local xray_ver
-    xray_ver="$(t mgr.status.not_installed)"
-    [[ -x "${XRAY_BIN:-}" ]] \
-        && xray_ver=$("$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2}')
-
-    local sb_ver
-    sb_ver="$(t mgr.status.not_installed)"
-    [[ -x "${SINGBOX_BIN:-}" ]] \
-        && sb_ver=$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR==1{print $3}')
-
-    local mh_ver
-    mh_ver="$(t mgr.status.not_installed)"
-    [[ -x "${MIHOMO_BIN:-}" ]] \
-        && mh_ver=$("$MIHOMO_BIN" -v 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
-    [[ -z "$mh_ver" ]] && mh_ver="$(t mgr.status.installed)"
-
-    local hy2_ver
-    hy2_ver="$(t mgr.status.not_installed)"
+    # 逐个探测组件版本；未安装的留空 → 状态栏只显示已安装的组件
+    local nginx_ver="" xray_ver="" sb_ver="" mh_ver="" hy2_ver="" snell_ver="" ss_ver=""
+    if command -v nginx &>/dev/null; then
+        nginx_ver=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        [[ -z "$nginx_ver" ]] && nginx_ver="$(t mgr.status.installed)"
+    fi
+    if [[ -x "${XRAY_BIN:-}" ]]; then
+        xray_ver=$("$XRAY_BIN" version 2>/dev/null | awk 'NR==1{print $2}')
+        [[ -z "$xray_ver" ]] && xray_ver="$(t mgr.status.installed)"
+    fi
+    if [[ -x "${SINGBOX_BIN:-}" ]]; then
+        sb_ver=$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR==1{print $3}')
+        [[ -z "$sb_ver" ]] && sb_ver="$(t mgr.status.installed)"
+    fi
+    if [[ -x "${MIHOMO_BIN:-}" ]]; then
+        mh_ver=$("$MIHOMO_BIN" -v 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+        [[ -z "$mh_ver" ]] && mh_ver="$(t mgr.status.installed)"
+    fi
     if [[ -x "/usr/local/bin/hysteria" ]]; then
         hy2_ver=$(/usr/local/bin/hysteria version 2>/dev/null | awk 'NR==1{print $NF}')
         [[ -z "$hy2_ver" ]] && hy2_ver="$(t mgr.status.installed)"
     fi
-
-    local snell_ver="" ss_ver=""
     if [[ -x "/usr/local/bin/snell-server" ]]; then
         local _sv; _sv=$(/usr/local/bin/snell-server --v 2>&1 || true)
         if   echo "$_sv" | grep -q "v6"; then snell_ver="v6"
@@ -161,6 +154,16 @@ _banner() {
         ss_ver=$(/usr/local/bin/ss-rust --version 2>/dev/null | awk '{print $2}' | head -1)
         [[ -z "$ss_ver" ]] && ss_ver="$(t mgr.status.installed)"
     fi
+
+    # 状态栏条目：IP 永远在首位，之后只收已安装组件（标签全 ASCII，便于对齐）
+    local labels=("IP") values=("$ipv4")
+    [[ -n "$nginx_ver" ]] && { labels+=("Nginx");     values+=("$nginx_ver"); }
+    [[ -n "$xray_ver"  ]] && { labels+=("Xray");      values+=("$xray_ver"); }
+    [[ -n "$sb_ver"    ]] && { labels+=("Sing-box");  values+=("$sb_ver"); }
+    [[ -n "$mh_ver"    ]] && { labels+=("Mihomo");    values+=("$mh_ver"); }
+    [[ -n "$hy2_ver"   ]] && { labels+=("Hysteria2"); values+=("$hy2_ver"); }
+    [[ -n "$snell_ver" ]] && { labels+=("Snell");     values+=("$snell_ver"); }
+    [[ -n "$ss_ver"    ]] && { labels+=("ss-rust");   values+=("$ss_ver"); }
 
     # Bright color variants (local, not in common.sh)
     local BC='\033[96m'   # bright cyan
@@ -182,15 +185,21 @@ _banner() {
     printf "  ${BOLD}${BB}%s${NC}\n"  "$L4"
     printf "  ${BOLD}${BC}%s${NC}\n"  "$L5"
     printf "\n"
-    printf "  ${BOLD}${WH}Proxy Stack Manager${NC}  ${DM}·····${NC}  ${YELLOW}◆ jinqians.com${NC}\n"
-    printf "  ${BLUE}──────────────────────────────────────────${NC}\n"
-    printf "  ${CYAN}IP   ${NC}▶  %-20s  ${CYAN}Nginx${NC}     ▶  %s\n"  "$ipv4"     "$nginx_ver"
-    printf "  ${CYAN}Xray ${NC}▶  %-20s  ${CYAN}Hysteria2${NC} ▶  %s\n"  "$xray_ver" "$hy2_ver"
-    printf "  ${CYAN}Sing-box${NC} ▶  %-20s  ${CYAN}Mihomo${NC}     ▶  %s\n"  "$sb_ver" "$mh_ver"
-    [[ -n "$snell_ver" || -n "$ss_ver" ]] && \
-        printf "  ${CYAN}Snell${NC} ▶  %-20s  ${CYAN}ss-rust${NC}   ▶  %s\n" \
-               "${snell_ver:----}" "${ss_ver:----}"
-    printf "  ${BLUE}──────────────────────────────────────────${NC}\n"
+    printf "  ${BOLD}${WH}Proxy Stack Manager${NC}  ${DM}·····${NC}  ${YELLOW}◆ https://jinqians.com${NC}\n"
+    printf "  ${BLUE}──────────────────────────────────────────────${NC}\n"
+    # 两列布局：标签固定 9 列（最长 Hysteria2），左列值按显示宽度补齐到 16 列
+    # （值可能是中文"已安装"，占 2 显示列/字，必须用 _mpad 而不是 %-16s）
+    local i n=${#labels[@]}
+    for (( i=0; i<n; i+=2 )); do
+        if (( i+1 < n )); then
+            printf "  ${CYAN}%-9s${NC} ▶  %s ${CYAN}%-9s${NC} ▶  %s\n" \
+                "${labels[i]}"   "$(_mpad "${values[i]}" 16)" \
+                "${labels[i+1]}" "${values[i+1]}"
+        else
+            printf "  ${CYAN}%-9s${NC} ▶  %s\n" "${labels[i]}" "${values[i]}"
+        fi
+    done
+    printf "  ${BLUE}──────────────────────────────────────────────${NC}\n"
     echo ""
 }
 
