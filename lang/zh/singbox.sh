@@ -177,6 +177,7 @@ MSG[sb.protocol.anytls]="AnyTLS            (TCP + TLS，需 sing-box 1.12+)"
 MSG[sb.protocol_menu.hysteria2]="Hysteria2 (QUIC / UDP，高速抗封锁)"
 MSG[sb.protocol_menu.anytls]="AnyTLS    (TCP + TLS，需 sing-box 1.12+)"
 MSG[sb.tls.cert_unavailable]="证书不可用，改用自签名证书（客户端需设置 insecure=1）。"
+MSG[sb.tls.resolve_failed]="TLS 证书解析结果异常（内部输出被污染），已中止本次操作。"
 
 # ── hysteria2 ─────────────────────────────────────────────────────────────────
 MSG[sb.hy2.add_title]="添加 sing-box Hysteria2 节点"

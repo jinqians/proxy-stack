@@ -177,6 +177,7 @@ MSG[sb.protocol.anytls]="AnyTLS            (TCP + TLS, sing-box 1.12+ 필요)"
 MSG[sb.protocol_menu.hysteria2]="Hysteria2 (QUIC / UDP, 빠르고 검열 저항)"
 MSG[sb.protocol_menu.anytls]="AnyTLS    (TCP + TLS, sing-box 1.12+ 필요)"
 MSG[sb.tls.cert_unavailable]="인증서를 사용할 수 없습니다. 자체 서명 인증서를 사용합니다(클라이언트는 insecure=1 설정 필요)."
+MSG[sb.tls.resolve_failed]="TLS 인증서 확인 결과가 비정상입니다(내부 출력 오염). 작업을 중단합니다."
 
 # ── hysteria2 ─────────────────────────────────────────────────────────────────
 MSG[sb.hy2.add_title]="sing-box Hysteria2 노드 추가"

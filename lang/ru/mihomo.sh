@@ -177,6 +177,7 @@ MSG[mh.protocol.anytls]="AnyTLS            (TCP + TLS, требуется mihomo
 MSG[mh.protocol_menu.hysteria2]="Hysteria2 (QUIC / UDP, быстрый и устойчивый к цензуре)"
 MSG[mh.protocol_menu.anytls]="AnyTLS    (TCP + TLS, требуется mihomo 1.19.3+)"
 MSG[mh.tls.cert_unavailable]="Сертификат недоступен; используется самоподписанный сертификат (клиенты должны установить insecure=1)."
+MSG[mh.tls.resolve_failed]="Некорректный результат разрешения TLS (внутренний вывод повреждён); операция прервана."
 
 # ── hysteria2 ─────────────────────────────────────────────────────────────────
 MSG[mh.hy2.add_title]="Добавить узел mihomo Hysteria2"

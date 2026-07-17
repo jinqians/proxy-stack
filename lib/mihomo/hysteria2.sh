@@ -176,6 +176,8 @@ mh_hy2_add_node() {
     local tls; tls=$(_mh_resolve_tls "$domain" "$tag" "www.bing.com")
     local cert_path key_path sni insecure
     IFS=$'\t' read -r cert_path key_path sni insecure <<<"$tls"
+    _mh_tls_tuple_valid "$cert_path" "$key_path" "$sni" "$insecure" \
+        || { log_error "$(t mh.tls.resolve_failed)"; return 1; }
 
     ask masq "$(t mh.hy2.ask_masq)" "$MH_HY2_DEFAULT_MASQ"
     ask up   "$(t mh.hy2.ask_up)"   "0"

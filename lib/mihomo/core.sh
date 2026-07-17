@@ -161,17 +161,28 @@ _mh_resolve_tls() {
     local domain="$1" name="$2" fake_sni="$3"
     if [[ -n "$domain" ]]; then
         source "$LIB_DIR/cert.sh"
-        if cert_ensure_domain "$domain" 2>/dev/null; then
+        # Callers capture stdout to parse the tab-separated result below.
+        # Keep certificate prompts/status output visible on stderr so it cannot
+        # become part of cert_path/key_path/sni/insecure and break jq --argjson.
+        if cert_ensure_domain "$domain" >&2; then
             local d="$NGINX_SSL_DIR/$domain"
             if [[ -s "$d/fullchain.pem" && -s "$d/privkey.pem" ]]; then
                 printf '%s\t%s\t%s\t0\n' "$d/fullchain.pem" "$d/privkey.pem" "$domain"
                 return 0
             fi
         fi
-        log_warn "$(t mh.tls.cert_unavailable)"
+        log_warn "$(t mh.tls.cert_unavailable)" >&2
     fi
     local pair; pair=$(_mh_ensure_self_signed "$fake_sni" "$name")
     printf '%s\t%s\t%s\t1\n' "${pair%%$'\t'*}" "${pair#*$'\t'}" "$fake_sni"
+}
+
+# 校验 _mh_resolve_tls 的四元组：cert/key 存在、sni 非空、insecure 为 0/1。
+# 任何子调用向 stdout 泄漏文本都会污染捕获结果，让下游 jq --argjson 报出
+# 难懂的错误（见 issue #1）；在这里拦下并给出明确提示。
+# 用法：_mh_tls_tuple_valid <cert_path> <key_path> <sni> <insecure>
+_mh_tls_tuple_valid() {
+    [[ -s "$1" && -s "$2" && -n "$3" ]] && [[ "$4" == "0" || "$4" == "1" ]]
 }
 
 # ── Upgrade ───────────────────────────────────────────────────────────────────

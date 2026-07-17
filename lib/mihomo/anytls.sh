@@ -171,6 +171,8 @@ mh_anytls_add_node() {
     local tls; tls=$(_mh_resolve_tls "$domain" "$tag" "www.bing.com")
     local cert_path key_path sni insecure
     IFS=$'\t' read -r cert_path key_path sni insecure <<<"$tls"
+    _mh_tls_tuple_valid "$cert_path" "$key_path" "$sni" "$insecure" \
+        || { log_error "$(t mh.tls.resolve_failed)"; return 1; }
 
     # SNI 是 443 分流的路由键，必须全局唯一（跨内核共用一张 map）
     if (( use_nginx )) && _mh_front_sni_conflict "$sni"; then

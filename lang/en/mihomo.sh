@@ -177,6 +177,7 @@ MSG[mh.protocol.anytls]="AnyTLS            (TCP + TLS, requires mihomo 1.19.3+)"
 MSG[mh.protocol_menu.hysteria2]="Hysteria2 (QUIC / UDP, fast & censorship-resistant)"
 MSG[mh.protocol_menu.anytls]="AnyTLS    (TCP + TLS, requires mihomo 1.19.3+)"
 MSG[mh.tls.cert_unavailable]="Certificate unavailable; using a self-signed cert (clients must set insecure=1)."
+MSG[mh.tls.resolve_failed]="Unexpected TLS resolve result (internal output was polluted); operation aborted."
 
 # ── hysteria2 ─────────────────────────────────────────────────────────────────
 MSG[mh.hy2.add_title]="Add mihomo Hysteria2 Node"

@@ -177,6 +177,7 @@ MSG[sb.protocol.anytls]="AnyTLS            (TCP + TLS, требуется sing-b
 MSG[sb.protocol_menu.hysteria2]="Hysteria2 (QUIC / UDP, быстрый и устойчивый к цензуре)"
 MSG[sb.protocol_menu.anytls]="AnyTLS    (TCP + TLS, требуется sing-box 1.12+)"
 MSG[sb.tls.cert_unavailable]="Сертификат недоступен; используется самоподписанный сертификат (клиенты должны установить insecure=1)."
+MSG[sb.tls.resolve_failed]="Некорректный результат разрешения TLS (внутренний вывод повреждён); операция прервана."
 
 # ── hysteria2 ─────────────────────────────────────────────────────────────────
 MSG[sb.hy2.add_title]="Добавить узел sing-box Hysteria2"

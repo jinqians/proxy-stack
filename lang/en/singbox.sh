@@ -177,6 +177,7 @@ MSG[sb.protocol.anytls]="AnyTLS            (TCP + TLS, requires sing-box 1.12+)"
 MSG[sb.protocol_menu.hysteria2]="Hysteria2 (QUIC / UDP, fast & censorship-resistant)"
 MSG[sb.protocol_menu.anytls]="AnyTLS    (TCP + TLS, requires sing-box 1.12+)"
 MSG[sb.tls.cert_unavailable]="Certificate unavailable; using a self-signed cert (clients must set insecure=1)."
+MSG[sb.tls.resolve_failed]="Unexpected TLS resolve result (internal output was polluted); operation aborted."
 
 # ── hysteria2 ─────────────────────────────────────────────────────────────────
 MSG[sb.hy2.add_title]="Add sing-box Hysteria2 Node"
