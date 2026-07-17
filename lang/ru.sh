@@ -66,6 +66,11 @@ MSG[common.pkg.installed]="Установлено: %s"
 MSG[common.pkg.install_fail]="Не удалось установить следующие пакеты: %s (связанные функции могут быть ограничены)"
 MSG[common.none]="Нет"
 MSG[common.not_configured]="Не настроено"
+# reality: проверка цели маскировки (общая для добавления узлов xray / sing-box / mihomo)
+MSG[common.reality.checking_dest]="Проверка цели маскировки %s (SNI %s)..."
+MSG[common.reality.dest_ok]="Цель маскировки доступна и совместима с Reality (%sms)."
+MSG[common.reality.dest_check_failed]="Проверка цели маскировки не пройдена: %s. При несоответствии SNI и dest узел устанавливается, но ни один клиент не сможет завершить рукопожатие Reality."
+MSG[common.reality.proceed_anyway]="Использовать эту пару SNI/dest в любом случае?"
 
 # ── manager.sh (update / status overview / main loop) ─────────────────────────
 MSG[mgr.update.checking]="Проверка обновлений PSM..."

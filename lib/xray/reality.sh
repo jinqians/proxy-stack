@@ -349,10 +349,37 @@ reality_add_node() {
                 log_info "$(t xray.reality.picked_sni "$server_names_raw" "$dest")"
             fi
         fi
-        [[ -z "$server_names_raw" ]] && \
+        # Manual entry (mapping engine declined or found nothing). The engine
+        # path above already yields a validated, self-consistent (SNI, dest)
+        # pair, so only this branch needs the default-tracking + advisory check.
+        if [[ -z "$server_names_raw" ]]; then
+            # P1: ask the SNI first, then default the camouflage dest to the
+            # primary SNI. Reality forwards the client's handshake to dest, whose
+            # cert must cover the presented SNI — a hardcoded dest that ignored
+            # the SNI builds and passes -test yet lets no client handshake.
+            local _sn
             ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
-        [[ -z "$dest" ]] && \
-            ask dest             "$(t xray.reality.ask_dest)" "$REALITY_DEFAULT_DEST"
+            _sn=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+            ask dest "$(t xray.reality.ask_dest)" "${_sn}:443"
+
+            # P2: advisory validation of the manual pair, reusing the watchdog's
+            # proven _rwd_check_dest (TLS1.3 + matching cert + X25519). Never
+            # hard-blocks: on failure the operator can re-enter or proceed anyway.
+            # Skipped for local/loopback dests (a private camouflage backend).
+            source "$LIB_DIR/xray/reality_watchdog.sh"
+            while ! reality_dest_is_local "$dest"; do
+                log_step "$(t common.reality.checking_dest "$dest" "$_sn")"
+                if _rwd_check_dest "$dest" "$_sn"; then
+                    [[ -n "$RWD_CHECK_RTT_MS" ]] && log_info "$(t common.reality.dest_ok "$RWD_CHECK_RTT_MS")"
+                    break
+                fi
+                log_warn "$(t common.reality.dest_check_failed "${RWD_CHECK_REASON:-unknown}")"
+                ask_yn "$(t common.reality.proceed_anyway)" N && break
+                ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
+                _sn=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+                ask dest "$(t xray.reality.ask_dest)" "${_sn}:443"
+            done
+        fi
         domain="$server_names_raw"
     fi
 

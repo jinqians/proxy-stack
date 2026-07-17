@@ -66,6 +66,11 @@ MSG[common.pkg.installed]="已安装：%s"
 MSG[common.pkg.install_fail]="以下软件包未能安装：%s（相关功能可能受限）"
 MSG[common.none]="无"
 MSG[common.not_configured]="未配置"
+# reality 伪装目标校验（xray / sing-box / mihomo 添加流程共用）
+MSG[common.reality.checking_dest]="正在校验伪装目标 %s（SNI %s）..."
+MSG[common.reality.dest_ok]="伪装目标可达且兼容 Reality（%sms）。"
+MSG[common.reality.dest_check_failed]="伪装目标校验失败：%s。SNI 与 dest 不匹配虽能安装，但客户端无法完成 Reality 握手。"
+MSG[common.reality.proceed_anyway]="仍使用该 SNI/dest 组合？"
 
 # ── manager.sh（更新 / 状态总览 / 主循环）─────────────────────────────────────
 MSG[mgr.update.checking]="正在检查 PSM 更新..."

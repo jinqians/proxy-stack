@@ -198,9 +198,29 @@ mh_reality_add_node() {
     ask tag "$(t mh.reality.ask_tag)" "mh-reality-$((count+1))"
     [[ "$tag" =~ ^mh-reality ]] || tag="mh-reality-${tag}"
 
-    ask server_names_raw "$(t mh.reality.ask_sni)"  "$MH_REALITY_DEFAULT_SN"
-    ask dest             "$(t mh.reality.ask_dest)" "$MH_REALITY_DEFAULT_DEST"
+    # P1: ask the SNI first, compute the primary server_name, then default the
+    # camouflage dest to it. Reality forwards the client handshake to dest, whose
+    # cert must cover the presented SNI — a hardcoded dest that ignored the SNI
+    # builds and passes the config test yet lets no client handshake.
+    ask server_names_raw "$(t mh.reality.ask_sni)" "$MH_REALITY_DEFAULT_SN"
     local server_name; server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+    ask dest "$(t mh.reality.ask_dest)" "${server_name}:443"
+
+    # P2: advisory validation of the (SNI, dest) pair via the shared openssl-only
+    # validator. Never hard-blocks: on failure the operator can re-enter or
+    # proceed anyway. Skipped for local/loopback dests.
+    while ! reality_dest_is_local "$dest"; do
+        log_step "$(t common.reality.checking_dest "$dest" "$server_name")"
+        if reality_validate_dest "$dest" "$server_name"; then
+            [[ -n "$REALITY_DEST_RTT_MS" ]] && log_info "$(t common.reality.dest_ok "$REALITY_DEST_RTT_MS")"
+            break
+        fi
+        log_warn "$(t common.reality.dest_check_failed "${REALITY_DEST_REASON:-unknown}")"
+        ask_yn "$(t common.reality.proceed_anyway)" N && break
+        ask server_names_raw "$(t mh.reality.ask_sni)" "$MH_REALITY_DEFAULT_SN"
+        server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+        ask dest "$(t mh.reality.ask_dest)" "${server_name}:443"
+    done
 
     ask uuid "$(t mh.reality.ask_uuid)" ""
     [[ -z "$uuid" ]] && uuid=$(mh_gen_uuid)

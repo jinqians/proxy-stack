@@ -66,6 +66,11 @@ MSG[common.pkg.installed]="Installed: %s"
 MSG[common.pkg.install_fail]="The following packages failed to install: %s (related features may be limited)"
 MSG[common.none]="None"
 MSG[common.not_configured]="Not configured"
+# reality camouflage dest validation (shared by xray / sing-box / mihomo add-flows)
+MSG[common.reality.checking_dest]="Checking camouflage target %s against SNI %s..."
+MSG[common.reality.dest_ok]="Camouflage target reachable and Reality-compatible (%sms)."
+MSG[common.reality.dest_check_failed]="Camouflage target check failed: %s. A mismatched SNI/dest installs but no client can complete the Reality handshake."
+MSG[common.reality.proceed_anyway]="Use this SNI/dest pair anyway?"
 
 # ── manager.sh (update / status overview / main loop) ─────────────────────────
 MSG[mgr.update.checking]="Checking for PSM updates..."

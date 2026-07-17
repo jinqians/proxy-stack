@@ -66,6 +66,11 @@ MSG[common.pkg.installed]="설치됨: %s"
 MSG[common.pkg.install_fail]="다음 패키지 설치에 실패했습니다: %s (관련 기능이 제한될 수 있음)"
 MSG[common.none]="없음"
 MSG[common.not_configured]="설정되지 않음"
+# reality 위장 대상 검증 (xray / sing-box / mihomo 추가 절차 공용)
+MSG[common.reality.checking_dest]="위장 대상 %s 검증 중 (SNI %s)..."
+MSG[common.reality.dest_ok]="위장 대상에 연결할 수 있으며 Reality와 호환됩니다 (%sms)."
+MSG[common.reality.dest_check_failed]="위장 대상 검증 실패: %s. SNI와 dest가 일치하지 않으면 설치는 되지만 어떤 클라이언트도 Reality 핸드셰이크를 완료할 수 없습니다."
+MSG[common.reality.proceed_anyway]="이 SNI/dest 조합을 그대로 사용하시겠습니까?"
 
 # ── manager.sh (update / status overview / main loop) ─────────────────────────
 MSG[mgr.update.checking]="PSM 업데이트를 확인하는 중..."

@@ -423,6 +423,114 @@ is_ipv4() {
     [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 }
 
+# ── Reality camouflage-target validation (shared by all cores) ────────────────
+# A Reality "dest" is the real TLS 1.3 site the server forwards the client's
+# handshake to for camouflage; the client presents <sni> and expects that dest
+# to serve a certificate covering it. A mismatched (sni, dest) pair installs and
+# passes -test but NO client can complete the Reality handshake. These helpers
+# let an add-flow vet a manually entered pair before saving the node.
+
+# True when <dest> points at a loopback/local backend (a private camouflage site
+# the server cannot SNI-cert-validate from its own vantage — e.g. Nginx's
+# 127.0.0.1:8443 HTTPS site). Callers skip the advisory check for these, mirroring
+# how the watchdog's _rwd_check_dest tolerates IP literals / local hosts.
+reality_dest_is_local() {
+    local host="$1"
+    host="${host%:*}"           # strip :port  (leaves host or [ipv6])
+    host="${host#[}"; host="${host%]}"
+    case "$host" in
+        127.*|::1|0.0.0.0|localhost|localhost.*) return 0 ;;
+    esac
+    return 1
+}
+
+# Advisory validator: is <dest> a usable Reality camouflage target for <sni>?
+# openssl-only distillation of xray/reality_watchdog.sh's _rwd_check_dest, so
+# sing-box/mihomo (which never load the watchdog) can vet a pair too. Asserts the
+# four hard Reality requirements: TCP reachable + TLS 1.3 negotiated + leaf cert
+# host-matches the SNI + X25519 in the negotiated group. Returns 0 on success
+# (round-trip in REALITY_DEST_RTT_MS); on failure sets REALITY_DEST_REASON to a
+# short code (same vocabulary as _rwd_check_dest) and returns 1. Advisory only —
+# callers may proceed regardless.
+reality_validate_dest() {
+    local dest="$1" sni="$2"
+    REALITY_DEST_REASON=""
+    REALITY_DEST_RTT_MS=""
+
+    # Parse "host:port" or "[ipv6]:port"
+    local host port
+    if [[ "$dest" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"; port="${BASH_REMATCH[2]}"
+    elif [[ "$dest" == *:* && "$dest" != *:*:* ]]; then
+        host="${dest%:*}"; port="${dest##*:}"
+    else
+        REALITY_DEST_REASON="bad_dest"; return 1
+    fi
+    [[ -n "$host" && "$port" =~ ^[0-9]+$ ]] || { REALITY_DEST_REASON="bad_dest"; return 1; }
+
+    local connect="${host}:${port}"
+    [[ "$host" == *:* ]] && connect="[${host}]:${port}"
+
+    local out rc start_ms end_ms
+    out=$(mktemp) || { REALITY_DEST_REASON="tmp_failed"; return 1; }
+
+    start_ms=$(date +%s%3N 2>/dev/null); [[ "$start_ms" =~ ^[0-9]+$ ]] || start_ms=$(( $(date +%s) * 1000 ))
+    if command -v timeout &>/dev/null; then
+        timeout 8 openssl s_client -connect "$connect" -servername "$sni" \
+            -tls1_3 -alpn h2,http/1.1 -showcerts </dev/null >"$out" 2>&1
+        rc=$?
+    else
+        openssl s_client -connect "$connect" -servername "$sni" \
+            -tls1_3 -alpn h2,http/1.1 -showcerts </dev/null >"$out" 2>&1
+        rc=$?
+    fi
+    end_ms=$(date +%s%3N 2>/dev/null); [[ "$end_ms" =~ ^[0-9]+$ ]] || end_ms=$(( $(date +%s) * 1000 ))
+    REALITY_DEST_RTT_MS=$(( end_ms - start_ms ))
+
+    local reason=""
+    if [[ "$rc" == "124" ]]; then
+        reason="tls_timeout"
+    elif grep -Eqi "connect:errno|Connection refused|No route to host|Network is unreachable|Connection timed out|Operation timed out|Operation not permitted|Name or service not known|nodename nor servname" "$out"; then
+        reason="tcp_failed"
+    elif grep -Eqi "protocol version|unsupported protocol|wrong version number|no protocols available|tlsv1 alert protocol version" "$out"; then
+        reason="tls13_unsupported"
+    elif ! grep -Eq "New, TLSv1\.3|Protocol *: TLSv1\.3|Protocol version: TLSv1\.3" "$out"; then
+        reason="tls13_failed"
+    else
+        # Reality auth rides on X25519, so the negotiated group must contain it
+        # (a hybrid like X25519MLKEM768 still counts). If openssl didn't report
+        # the group (very old build), don't judge.
+        local grp; grp=$(grep -Ei "Server Temp Key|Negotiated TLS1\.3 group" "$out")
+        if [[ -n "$grp" ]] && ! printf '%s\n' "$grp" | grep -qi "X25519"; then
+            reason="no_x25519"
+        else
+            local cert; cert=$(mktemp)
+            awk '/-----BEGIN CERTIFICATE-----/{c=1} c{print} /-----END CERTIFICATE-----/{exit}' "$out" > "$cert"
+            if ! grep -q "BEGIN CERTIFICATE" "$cert"; then
+                reason="no_certificate"
+            else
+                local clean_sni="${sni#[}"; clean_sni="${clean_sni%]}"
+                if is_ipv4 "$clean_sni" || [[ "$clean_sni" == *:* ]]; then
+                    # IP-literal SNI: assert cert covers the IP only when openssl
+                    # supports -checkip; otherwise we cannot judge, so accept.
+                    if openssl x509 -help 2>&1 | grep -q -- "-checkip" \
+                        && ! openssl x509 -in "$cert" -noout -checkip "$clean_sni" >/dev/null 2>&1; then
+                        reason="sni_cert_mismatch"
+                    fi
+                elif openssl x509 -help 2>&1 | grep -q -- "-checkhost" \
+                    && ! openssl x509 -in "$cert" -noout -checkhost "$sni" >/dev/null 2>&1; then
+                    reason="sni_cert_mismatch"
+                fi
+            fi
+            rm -f "$cert"
+        fi
+    fi
+
+    rm -f "$out"
+    [[ -z "$reason" ]] && return 0
+    REALITY_DEST_REASON="$reason"; return 1
+}
+
 # ── JSON helpers (requires jq) ────────────────────────────────────────────────
 jq_get() {
     # jq_get <file> <jq_filter>
