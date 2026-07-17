@@ -294,6 +294,11 @@ server {
 }
 EOF
 
+    # 443 是 SNI 分流的公网入口。防火墙（ufw/firewalld/iptables）开启时若不放行，
+    # 所有挂载节点都表现为 TCP 超时；直连分支会询问放行，挂载分支此前从未放行。
+    source "$LIB_DIR/system.sh"
+    firewall_open_port 443 tcp
+
     # UDP 443 is handled by Hysteria2 directly (separate listener)
     log_ok "$(t nginx.stream.sni_initialized)"
 }
@@ -308,7 +313,13 @@ nginx_ensure_stream_sni() {
     _nginx_ensure_stream_module
     _nginx_selinux_permit
     _write_nginx_main
-    [[ -f "$(_sni_map_file)" ]] || init_stream_sni
+    if [[ -f "$(_sni_map_file)" ]]; then
+        # 幂等重放 443/tcp 放行：挂载流程每次经过这里，覆盖建表后才启用防火墙的场景
+        source "$LIB_DIR/system.sh"
+        firewall_open_port 443 tcp
+    else
+        init_stream_sni
+    fi
     nginx_test_reload
 }
 
