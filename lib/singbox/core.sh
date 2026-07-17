@@ -172,7 +172,7 @@ _sb_resolve_tls() {
     local domain="$1" name="$2" fake_sni="$3"
     if [[ -n "$domain" ]]; then
         source "$LIB_DIR/cert.sh"
-        if cert_ensure_domain "$domain" 2>/dev/null; then
+        if cert_ensure_domain "$domain" >&2; then
             local d="$NGINX_SSL_DIR/$domain"
             if [[ -s "$d/fullchain.pem" && -s "$d/privkey.pem" ]]; then
                 printf '%s\t%s\t%s\t0\n' "$d/fullchain.pem" "$d/privkey.pem" "$domain"
