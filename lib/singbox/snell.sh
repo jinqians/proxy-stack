@@ -47,7 +47,7 @@ _sb_snell_select_node() {
 }
 
 # ── Build sing-box snell inbound ──────────────────────────────────────────────
-# v5：可选 http 混淆（obfs_mode/obfs_host）；v6：整形模式（mode）。psk 即预共享密钥。
+# v5：可选 http 混淆（入站只有 obfs_mode）；v6：整形模式（mode）。psk 即预共享密钥。
 _sb_snell_build_inbound() {
     local node_json="$1"
     local tag;  tag=$(echo "$node_json"  | jq -r '.tag')
@@ -56,11 +56,10 @@ _sb_snell_build_inbound() {
     local psk;  psk=$(echo "$node_json"  | jq -r '.psk')
     local listen; listen=$(echo "$node_json" | jq -r '.listen // "::"')
     local om;   om=$(echo "$node_json"   | jq -r '.obfs_mode // ""')
-    local oh;   oh=$(echo "$node_json"   | jq -r '.obfs_host // ""')
 
     jq -n \
         --arg tag "$tag" --arg listen "$listen" --argjson p "$port" \
-        --argjson ver "$ver" --arg psk "$psk" --arg om "$om" --arg oh "$oh" \
+        --argjson ver "$ver" --arg psk "$psk" --arg om "$om" \
     '{
         type: "snell",
         tag: $tag,
@@ -70,9 +69,11 @@ _sb_snell_build_inbound() {
         psk: $psk
     }
     + (if $ver == 6 then { mode: "default" } else {} end)
-    + (if ($ver == 5 and $om == "http")
-       then { obfs_mode: "http", obfs_host: (if $oh == "" then "bing.com" else $oh end) }
-       else {} end)'
+    # v5 入站只接受 obfs_mode：上游 SnellObfsServerOptions 没有 obfs_host，
+    # 它属于 outbound 的 SnellObfsClientOptions。多写会让 sing-box 报
+    # `unknown field "obfs_host"` 直接拒绝整份配置。obfs_host 仍存在节点存储里，
+    # 只在 _sb_snell_share 导出 Surge / Clash 客户端配置时使用。
+    + (if ($ver == 5 and $om == "http") then { obfs_mode: "http" } else {} end)'
 }
 
 # ── Apply all Snell nodes into sing-box config ────────────────────────────────
@@ -145,8 +146,13 @@ _sb_snell_share() {
 # ── Add node ──────────────────────────────────────────────────────────────────
 sb_snell_add_node() {
     _sb_require_installed || return
-    # 版本门禁：Snell 入站需 sing-box 1.14.0+，不满足则在填任何参数前拦截
-    _sb_require_version "1.14.0" "sb.snell.feature" || return 1
+    # 版本门禁：Snell 入站需 sing-box 1.14.0+，不满足则在填任何参数前拦截。
+    # 1.14 尚未转正，稳定通道永远达不到门槛，所以这里指向安装菜单的预览通道，
+    # 免得用户以为是脚本坏了。
+    _sb_require_version "1.14.0" "sb.snell.feature" || {
+        log_info "$(t sb.snell.need_preview)"
+        return 1
+    }
     echo -e "\n${BOLD}$(t sb.snell.add_title)${NC}"
     log_info "$(t sb.snell.version_hint)"
 

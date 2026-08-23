@@ -14,6 +14,59 @@ SB_SERVICE="/etc/systemd/system/sing-box.service"
 SB_STORE_DIR="$CFG_DIR/singbox"        # 各协议节点存储（唯一事实源）
 SB_RELEASES="https://github.com/SagerNet/sing-box/releases"
 
+# ── Release channel ───────────────────────────────────────────────────────────
+# 稳定版 = /releases/latest；预览版 = /releases 里最新的 prerelease。
+# 预览通道存在的理由：部分入站只在尚未转正的分支里（如 Snell 需 1.14+，而 1.14
+# 目前仍是 beta），没有这个通道那些协议在稳定版上永远不可达。默认仍走稳定版。
+SB_STABLE_FALLBACK="v1.13.19"   # API 不可达时的兜底，必须是真实存在的稳定 tag
+
+_sb_choose_channel() {
+    # 非交互场景（管道 / 自动化）不提问，直接走稳定版
+    [[ -t 0 ]] || { printf 'stable'; return; }
+    echo "" >&2
+    echo "  $(t sb.channel.title)" >&2
+    echo "    1. $(t sb.channel.stable)" >&2
+    echo "    2. $(t sb.channel.preview)" >&2
+    local c; read -rp "$(echo -e "${CYAN}$(t sb.channel.ask)${NC}")" c
+    case "${c:-1}" in 2) printf 'preview' ;; *) printf 'stable' ;; esac
+}
+
+# 解析通道 → tag。稳定版失败时回落到 SB_STABLE_FALLBACK；
+# 预览版失败时回落到稳定版（宁可装个能用的旧版，也不要下载一个不存在的 tag）。
+_sb_resolve_tag() {
+    local channel="$1" tag=""
+    if [[ "$channel" == "preview" ]]; then
+        log_step "$(t sb.fetching_preview)"
+        tag=$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" 2>/dev/null \
+              | jq -r 'map(select(.prerelease == true and (.draft | not))) | .[0].tag_name // empty' || true)
+        if [[ "$tag" =~ ^v[0-9] ]]; then
+            log_warn "$(t sb.channel.preview_warn "$tag")"
+            printf '%s' "$tag"; return 0
+        fi
+        log_warn "$(t sb.preview_unavailable)"
+    fi
+
+    log_step "$(t sb.fetching_latest)"
+    tag=$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" 2>/dev/null \
+          | jq -r '.tag_name // empty' || true)
+    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t sb.latest_fallback "$SB_STABLE_FALLBACK")"; tag="$SB_STABLE_FALLBACK"; }
+    printf '%s' "$tag"
+}
+
+# 降级保护：已有节点用到的协议在目标版本里不存在时，装上去会让整份 config 校验
+# 失败、sing-box 起不来。目前只有 Snell（1.14+）会踩到——预览版装完再切回稳定版
+# 就是典型路径。返回 1 表示用户选择中止安装。
+_sb_warn_feature_downgrade() {
+    local tag="$1"
+    local target="${tag#v}"; target="${target%%-*}"
+    [[ -s "$SB_STORE_DIR/snell.json" ]] || return 0
+    local n; n=$(jq 'length' "$SB_STORE_DIR/snell.json" 2>/dev/null || echo 0)
+    (( n > 0 )) || return 0
+    _sb_version_ge "$target" "1.14.0" && return 0
+    log_warn "$(t sb.downgrade.snell "$n" "$tag")"
+    ask_yn "$(t sb.downgrade.ask)" N
+}
+
 # ── Install ───────────────────────────────────────────────────────────────────
 sb_install() {
     ensure_pkg_deps curl tar jq
@@ -33,14 +86,9 @@ sb_install() {
         *)     die "$(t sb.unsupported_arch "$arch")" ;;
     esac
 
-    local tag
-    log_step "$(t sb.fetching_latest)"
-    tag=$(curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" 2>/dev/null \
-          | jq -r '.tag_name // empty' || true)
-    # 主路径始终取 GitHub 最新稳定版（/releases/latest 已排除 alpha/beta）。
-    # 备用版本仅在 API 不可达时使用，固定为一个支持全部协议的版本
-    # （Snell 入站需 1.14+，AnyTLS 需 1.12+）。
-    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t sb.latest_fallback)"; tag="v1.14.0"; }
+    local channel; channel=$(_sb_choose_channel)
+    local tag; tag=$(_sb_resolve_tag "$channel") || return 1
+    _sb_warn_feature_downgrade "$tag" || return 0
 
     local ver="${tag#v}"
     local tarball="sing-box-${ver}-linux-${sb_arch}.tar.gz"

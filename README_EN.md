@@ -215,6 +215,8 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 ### sing-box core (second core)
 
 - **A full protocol stack parallel to Xray** — VLESS Reality, SS2022, Hysteria2, AnyTLS (requires sing-box 1.12+), and Snell (requires sing-box 1.14+) inbounds sharing one kernel and one config file
+- **Stable and preview channels for Xray** — XTLS has marked every release since v26.3.27 as a pre-release, so the stable channel can lag months behind while preview tracks the newest build. Choosing preview warns you that from v26.4.13 REALITY refuses clients on a core older than v26.3.27 (including the cores bundled in many phone apps); the Reality menu lets you relax that per node
+- **Stable and preview release channels** — pick a kernel channel at install and upgrade time. Stable is the default; preview installs the latest beta/rc and is currently the only way to reach protocols upstream has not stabilised yet (the Snell inbound needs 1.14+, and 1.14 is still in beta). Switching back to stable while Snell nodes exist is blocked with an explanation, so the config cannot end up failing validation with the service down
 - **Routing management** — geosite / geoip / domain suffix / IP CIDR / inbound tag → chosen outbound or reject, with one-tap ad-block and QUIC-block presets
 - **Outbound manager** — 10 outbound types: ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2 (Salamander obfuscation) / tuic
 - **WARP outbound** — reuses the WARP account registered on the Xray side as a WireGuard endpoint
@@ -336,6 +338,14 @@ They are independent, parallel cores. Xray has the richest tooling (liveness wat
 ### Why does the uninstaller let me keep certain components?
 
 Nginx, Docker, certificates, Cloudflare Tunnel, etc. may be shared with other sites or services. The uninstaller removes PSM's own traces by default and confirms each shared component one by one.
+
+### My log shows "REALITY: Listening on non-443 ports" — is that a problem?
+
+Not under 443 port multiplexing; the warning is expected there. Since v26.3.27 Xray warns about any REALITY inbound listening on a non-443 port, because in a direct-connection setup a non-443 port really is easier for the GFW to fingerprint. But in PSM's multiplexing mode the node listens on a loopback port on `127.0.0.1` (1443, 2443, and so on) and Nginx forwards to it from public port 443 by SNI — **the port exposed to the internet is 443**, so the risk the warning describes does not apply.
+
+If a node is not mounted behind the Nginx 443 split and instead listens on a public non-443 port directly, the warning is a genuine one: move it to 443 or put it behind port multiplexing.
+
+The same version can emit two other REALITY warnings: one when the camouflage target contains `apple` / `icloud` / `microsoft` or ends in `.cn` / `.ru` / `.ir` (pick a different domain), and one from v26.4.13 about the default minimum client core version (see the Xray kernel section above).
 
 ### Will it overwrite my existing Nginx configuration?
 

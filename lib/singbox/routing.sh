@@ -184,6 +184,10 @@ _sb_outb_build_warp() {
 }
 
 # ── Rule-set definition for a geosite-/geoip- tag ─────────────────────────────
+# 下载出站的写法随内核版本变化，两种形式互不兼容，必须按已装版本二选一：
+#   < 1.14  →  download_detour:"direct"   （1.14 起弃用，1.16 移除；1.13 不认识 http_client）
+#  >= 1.14  →  http_client:{detour:"direct"} （1.14 新增，同时消掉「隐式默认 HTTP 客户端」弃用告警）
+# 版本读不出来时按旧写法处理：老内核用新字段会直接 fatal，新内核用旧字段只是告警。
 _sb_ruleset_def() {
     local tag="$1" url
     case "$tag" in
@@ -191,8 +195,15 @@ _sb_ruleset_def() {
         geoip-*)   url="${SB_GEOIP_BASE}/${tag}.srs" ;;
         *) return 1 ;;
     esac
-    jq -n --arg tag "$tag" --arg url "$url" \
-        '{tag:$tag, type:"remote", format:"binary", url:$url, download_detour:"direct"}'
+    local cur; cur=$(_sb_installed_version)
+    local detour
+    if [[ -n "$cur" ]] && _sb_version_ge "$cur" "1.14.0"; then
+        detour='{"http_client":{"detour":"direct"}}'
+    else
+        detour='{"download_detour":"direct"}'
+    fi
+    jq -n --arg tag "$tag" --arg url "$url" --argjson d "$detour" \
+        '{tag:$tag, type:"remote", format:"binary", url:$url} + $d'
 }
 
 # 目标片段：reject → {action:reject}；否则 → {outbound:tag}

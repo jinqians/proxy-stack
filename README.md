@@ -215,6 +215,8 @@ bash /opt/psm/uninstall.sh
 ### sing-box 内核（第二内核）
 
 - **与 Xray 并行的完整协议栈** — VLESS Reality、SS2022、Hysteria2、AnyTLS（需 sing-box 1.12+）、Snell（需 sing-box 1.14+）多协议入站共用一个内核与配置文件
+- **Xray 稳定版 / 预览版双通道** — XTLS 自 v26.3.27 起把每个发布都标成 prerelease，稳定通道可能落后数月，预览通道可取最新构建。选预览版时会明确提示：v26.4.13 起 REALITY 默认拒绝内核老于 v26.3.27 的客户端（含不少手机 App 内置内核），可在 Reality 菜单「客户端最低内核版本」按节点放宽
+- **稳定版 / 预览版双通道** — 安装与升级时可选内核通道。默认稳定版；预览版装最新 beta/rc，用于上游尚未转正的协议（如 Snell 入站需 1.14+，而 1.14 目前仍是 beta）。已配置 Snell 节点时切回稳定版会被拦截并提示，避免配置校验失败导致服务起不来
 - **路由分流管理** — geosite / geoip / 域名后缀 / IP CIDR / 入站标签 → 指定出站或拦截，内置一键去广告、禁 QUIC 预设
 - **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2（Salamander 混淆）/ tuic 共 10 种出站类型
 - **WARP 出站** — 复用 Xray 侧注册的 WARP 账户，一键接入 WireGuard endpoint
@@ -336,6 +338,14 @@ PSM 会尽量把项目自身状态集中在 `/opt/psm`，但部分功能需要�
 ### 卸载后为什么还能选择保留某些组件？
 
 Nginx、Docker、证书、Cloudflare Tunnel 等可能被其他站点或服务共用。PSM 的卸载器会默认清理 PSM 自身痕迹，并对共享组件逐一确认。
+
+### 日志里出现「REALITY: Listening on non-443 ports」警告，要紧吗？
+
+在 443 端口复用模式下不要紧，这是预期内的。Xray 从 v26.3.27 起会对监听非 443 端口的 REALITY 入站发这条警告，因为直连场景下非 443 端口确实更容易被 GFW 识别。但 PSM 的端口复用模式里，节点监听的是 `127.0.0.1` 上的回环端口（如 1443、2443），由 Nginx 在公网 443 上按 SNI 分流转发过来——**对外暴露的端口就是 443**，警告针对的风险并不成立。
+
+如果节点没有挂在 Nginx 443 分流上，而是直接监听公网非 443 端口，那这条警告就是有效提醒，建议改用 443 或挂到端口复用上。
+
+同版本还可能出现另外两条 REALITY 警告：伪装目标含 `apple` / `icloud` / `microsoft` 或 `.cn` / `.ru` / `.ir` 后缀时提示封禁风险（换个伪装域名即可），以及 v26.4.13 起提示默认最低客户端内核版本（见上文 Xray 内核一节）。
 
 ### 会不会覆盖现有 Nginx 配置？
 

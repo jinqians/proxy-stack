@@ -42,6 +42,50 @@ _tz_set_wizard() {
     log_ok "$(t xray.tz.done "$CYAN" "$tz" "$NC")"
 }
 
+# ── Release channel ───────────────────────────────────────────────────────────
+# XTLS 把 v26.3.27 之后的每个发布都标成了 prerelease，所以 /releases/latest 返回的
+# 稳定版可能落后好几个月。稳定版仍是默认，但额外给一个预览通道，让想要新功能的人
+# 能拿到最新构建。
+#
+# 预览通道有个必须先讲清楚的代价：v26.4.13 起 REALITY 的 minClientVer 有了默认值
+# 26.3.27，服务端会拒绝内核更老的客户端——大量手机 App 内置的核心都比这个老。
+# 详见 _xray_reality_min_client_ver_menu，那里允许按节点显式放宽。
+XRAY_STABLE_FALLBACK="v26.3.27"   # API 不可达时的兜底，必须是真实存在的稳定 tag
+XRAY_MIN_CLIENT_VER_DEFAULT="26.3.27"  # 上游 v26.4.13+ 的 minClientVer 内置默认值
+
+_xray_choose_channel() {
+    # 非交互场景（管道 / 自动化）不提问，直接走稳定版
+    [[ -t 0 ]] || { printf 'stable'; return; }
+    echo "" >&2
+    echo "  $(t xray.channel.title)" >&2
+    echo "    1. $(t xray.channel.stable)" >&2
+    echo "    2. $(t xray.channel.preview)" >&2
+    local c; read -rp "$(echo -e "${CYAN}$(t xray.channel.ask)${NC}")" c
+    case "${c:-1}" in 2) printf 'preview' ;; *) printf 'stable' ;; esac
+}
+
+# 解析通道 → tag。预览失败回落稳定版，稳定版失败回落 XRAY_STABLE_FALLBACK。
+_xray_resolve_tag() {
+    local channel="$1" tag=""
+    if [[ "$channel" == "preview" ]]; then
+        log_step "$(t xray.fetching_preview)"
+        tag=$(curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=20" 2>/dev/null \
+              | jq -r 'map(select(.draft | not)) | .[0].tag_name // empty' || true)
+        if [[ "$tag" =~ ^v[0-9] ]]; then
+            log_warn "$(t xray.channel.preview_warn "$tag")"
+            log_warn "$(t xray.channel.min_client_warn "$XRAY_MIN_CLIENT_VER_DEFAULT")"
+            printf '%s' "$tag"; return 0
+        fi
+        log_warn "$(t xray.preview_unavailable)"
+    fi
+
+    log_step "$(t xray.fetching_latest)"
+    tag=$(curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" 2>/dev/null \
+          | jq -r '.tag_name // empty' || true)
+    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t xray.latest_fallback "$XRAY_STABLE_FALLBACK")"; tag="$XRAY_STABLE_FALLBACK"; }
+    printf '%s' "$tag"
+}
+
 # ── Install ───────────────────────────────────────────────────────────────────
 xray_install() {
     ensure_pkg_deps curl unzip jq
@@ -63,12 +107,8 @@ xray_install() {
         *)     die "$(t xray.unsupported_arch "$arch")" ;;
     esac
 
-    local tag
-
-    log_step "$(t xray.fetching_latest)"
-    tag=$(curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" 2>/dev/null \
-          | jq -r '.tag_name // empty' || true)
-    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t xray.latest_fallback)"; tag="v24.9.30"; }
+    local channel; channel=$(_xray_choose_channel)
+    local tag; tag=$(_xray_resolve_tag "$channel") || return 1
 
     local zip_name="Xray-linux-${xray_arch}.zip"
     local url="${XRAY_RELEASES}/download/${tag}/${zip_name}"

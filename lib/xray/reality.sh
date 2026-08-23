@@ -213,6 +213,14 @@ _reality_build_inbound() {
     local server_names_json
     server_names_json=$(echo "$server_names_raw" | tr ',' '\n' | jq -R . | jq -sc .)
 
+    # Xray v26.4.13+ 给 minClientVer 内置了默认值 26.3.27，服务端会拒绝内核更老的
+    # 客户端。留空 = 不写这个字段 = 沿用内核默认（老内核本就没有该默认值，行为不变）。
+    # 只有用户显式设过才写出来，避免给稳定版配置塞一个它不需要的字段。
+    local min_client_ver; min_client_ver=$(echo "$node_json" | jq -r '.min_client_ver // ""')
+    local min_client_ver_line=""
+    [[ -n "$min_client_ver" ]] && min_client_ver_line="
+      \"minClientVer\": \"$min_client_ver\","
+
     cat <<EOF
 {
   "tag": "$tag",
@@ -232,7 +240,7 @@ _reality_build_inbound() {
       "show": false,
       "dest": "$dest",
       "xver": 0,
-      "serverNames": $server_names_json,
+      "serverNames": $server_names_json,$min_client_ver_line
       "privateKey": "$priv_key",
       "shortIds": $short_ids
     }
@@ -705,6 +713,40 @@ reality_modify_dest() {
     log_ok "$(t xray.reality.dest_updated)"
 }
 
+# 客户端最低内核版本门槛（realitySettings.minClientVer）。
+#
+# 背景：Xray v26.4.13 起该字段有了内置默认值 26.3.27，服务端会直接拒绝内核更老的
+# 客户端连接，而不少手机 App 内置的核心都比这个老。上游同时警告，把门槛调低会让
+# 服务器 IP 更容易被封 —— 这是个真实的取舍，所以交给用户自己决定，脚本不代劳。
+#
+# 留空 = 删除该字段，沿用内核默认。
+reality_modify_min_client_ver() {
+    _show_node_list
+    local tag; ask tag "$(t xray.ask.node_tag)"
+    local node; node=$(_reality_get_by_tag "$tag")
+    [[ -z "$node" ]] && { log_error "$(t xray.node_not_found)"; return 1; }
+
+    local cur; cur=$(echo "$node" | jq -r '.min_client_ver // ""')
+    log_info "$(t xray.reality.mcv_current "${cur:-$(t xray.reality.mcv_unset)}")"
+    echo -e "  $(t xray.reality.mcv_hint "$XRAY_MIN_CLIENT_VER_DEFAULT")"
+    echo -e "  ${YELLOW}$(t xray.reality.mcv_risk)${NC}"
+
+    local ver; ask ver "$(t xray.reality.ask_min_client_ver)" ""
+    if [[ -n "$ver" ]] && ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        log_error "$(t xray.reality.mcv_invalid "$ver")"
+        return 1
+    fi
+
+    if [[ -z "$ver" ]]; then
+        node=$(echo "$node" | jq 'del(.min_client_ver)')
+    else
+        node=$(echo "$node" | jq --arg v "$ver" '.min_client_ver = $v')
+    fi
+    _reality_upsert "$node"
+    _reality_apply_all
+    log_ok "$(t xray.reality.mcv_updated "$tag" "${ver:-$(t xray.reality.mcv_unset)}")"
+}
+
 reality_modify_flow() {
     _show_node_list
     local tag; ask tag "$(t xray.ask.node_tag)"
@@ -894,6 +936,7 @@ reality_menu() {
             "$(t xray.reality.menu.sni)" \
             "$(t xray.reality.menu.flow)" \
             "$(t xray.reality.menu.dest)" \
+            "$(t xray.reality.menu.min_client_ver)" \
             "$(t xray.reality.menu.uri)" \
             "$(t xray.reality.menu.clash)" \
             "$(t xray.reality.menu.singbox)" \
@@ -911,12 +954,13 @@ reality_menu() {
             7)  reality_modify_servername ;;
             8)  reality_modify_flow ;;
             9)  reality_modify_dest ;;
-            10) reality_show_uri "" ;;
-            11) reality_export_clash ;;
-            12) reality_export_singbox ;;
-            13) reality_show_config ;;
-            14) _show_node_list ;;
-            15)
+            10) reality_modify_min_client_ver ;;
+            11) reality_show_uri "" ;;
+            12) reality_export_clash ;;
+            13) reality_export_singbox ;;
+            14) reality_show_config ;;
+            15) _show_node_list ;;
+            16)
                 source "$(dirname "${BASH_SOURCE[0]}")/reality_watchdog.sh"
                 rwd_menu
                 continue ;;

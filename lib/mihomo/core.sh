@@ -13,6 +13,7 @@ MH_CFG="$MH_CFG_DIR/config.yaml"
 MH_SERVICE="/etc/systemd/system/mihomo.service"
 MH_STORE_DIR="$CFG_DIR/mihomo"        # 各协议节点存储（唯一事实源）
 MH_RELEASES="https://github.com/MetaCubeX/mihomo/releases"
+MH_STABLE_FALLBACK="v1.19.30"   # API 不可达时的兜底，必须是真实存在的稳定 tag
 
 # ── Install ───────────────────────────────────────────────────────────────────
 mh_install() {
@@ -33,11 +34,13 @@ mh_install() {
         *)     die "$(t mh.unsupported_arch "$arch")" ;;
     esac
 
+    # mihomo 上游按正常节奏发稳定版，/releases/latest 就是最新稳定版，不需要像
+    # Xray / sing-box 那样另开预览通道。兜底版本只在 API 不可达时使用。
     local tag
     log_step "$(t mh.fetching_latest)"
     tag=$(curl -fsSL "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest" 2>/dev/null \
           | jq -r '.tag_name // empty' || true)
-    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t mh.latest_fallback)"; tag="v1.19.27"; }
+    [[ "$tag" =~ ^v[0-9] ]] || { log_warn "$(t mh.latest_fallback "$MH_STABLE_FALLBACK")"; tag="$MH_STABLE_FALLBACK"; }
 
     local asset="mihomo-linux-${asset_arch}-${tag}.gz"
     local url="${MH_RELEASES}/download/${tag}/${asset}"
