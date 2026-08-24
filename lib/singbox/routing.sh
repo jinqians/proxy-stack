@@ -142,6 +142,24 @@ _sb_outb_build() {
           congestion_control:$cc,
           tls:{enabled:true, server_name:$sni, insecure:$insec, alpn:["h3"]}}'
         ;;
+    vpngate)
+        # VPNGate 家宽出口（lib/vpngate/）：direct 出站 + routing_mark。标记由内核
+        # 的 ip rule 引进家宽隧道的独立路由表，出站配置因此与具体节点无关，换家宽
+        # IP 时这里一个字都不用改。
+        # 域名一律解析成 IPv4：隧道只承载 IPv4，AAAA 会撞上隧道表里的 IPv6 黑洞。
+        # 1.12 起 dial 字段 domain_strategy 被 domain_resolver 取代（1.14 已移除），
+        # 按实装版本二选一；psm-local 这个 DNS server 由 _sb_route_apply 顺带补齐。
+        local mark cur dr
+        mark=$(echo "$e" | jq -r '.mark // 8433')
+        cur=$(_sb_installed_version 2>/dev/null) || cur=""
+        if [[ -n "$cur" ]] && _sb_version_ge "$cur" "1.12.0"; then
+            dr='{"domain_resolver":{"server":"psm-local","strategy":"ipv4_only"}}'
+        else
+            dr='{"domain_strategy":"ipv4_only"}'
+        fi
+        jq -n --arg tag "$tag" --argjson mark "$mark" --argjson dr "$dr" \
+        '{type:"direct", tag:$tag, routing_mark:$mark} + $dr'
+        ;;
     esac
 }
 
@@ -296,11 +314,21 @@ _sb_route_apply() {
         RS=$(echo "$RS" | jq --argjson d "$def" '. += [$d]')
     done
 
+    # VPNGate 家宽出口在 sing-box 1.12+ 需要一个具名 DNS server 供 domain_resolver
+    # 引用（dial 字段 domain_strategy 已于 1.14 移除）。没有家宽出站时不碰 .dns，
+    # 有则补一个 type:local 的 psm-local——它等价于原本隐式的系统解析行为。
+    local NEEDDNS=false cur_ver
+    cur_ver=$(_sb_installed_version 2>/dev/null) || cur_ver=""
+    if [[ "$(echo "$outs" | jq '[.[] | select(.protocol == "vpngate")] | length')" != "0" ]] \
+        && [[ -n "$cur_ver" ]] && _sb_version_ge "$cur_ver" "1.12.0"; then
+        NEEDDNS=true
+    fi
+
     # 3) 一次性写回 .outbounds / .endpoints / .route / .experimental
     local tmp; tmp=$(mktemp)
     if ! jq \
         --argjson obs "$OBS" --argjson eps "$EPS" \
-        --argjson rr "$RR" --argjson rs "$RS" '
+        --argjson rr "$RR" --argjson rs "$RS" --argjson needdns "$NEEDDNS" '
         .outbounds = ( [ .outbounds[]? | select((.tag // "") | (startswith("out-") | not)) ] )
         | (if ([ .outbounds[]? | select(.tag == "direct") ] | length) == 0
            then .outbounds += [ {type:"direct", tag:"direct"} ] else . end)
@@ -314,6 +342,16 @@ _sb_route_apply() {
         | (if ($rs | length) > 0
            then .experimental.cache_file = {enabled:true, path:"/etc/sing-box/cache.db"}
            else . end)
+        | (if $needdns
+           then .dns = ((.dns // {}) | .servers = (((.servers // []) | map(select(.tag != "psm-local"))) + [{type:"local", tag:"psm-local"}]))
+                | (if (.route.default_domain_resolver // null) == null
+                   then .route.default_domain_resolver = "psm-local" else . end)
+           else .dns = ((.dns // {}) | .servers = ((.servers // []) | map(select(.tag != "psm-local"))))
+                | (if ((.dns | keys) == ["servers"] and (.dns.servers | length) == 0)
+                   then del(.dns) else . end)
+                | (if (.route.default_domain_resolver // "") == "psm-local"
+                   then del(.route.default_domain_resolver) else . end)
+           end)
     ' "$SB_CFG" > "$tmp"; then
         log_error "$(t sb.route.build_fail)"; rm -f "$tmp"; return 1
     fi
@@ -744,7 +782,8 @@ sb_route_menu() {
             "$(t sb.route.menu.warp)" \
             "$(t sb.route.menu.warp_check)" \
             "$(t sb.route.menu.ads)" \
-            "$(t sb.route.menu.quic)"
+            "$(t sb.route.menu.quic)" \
+            "$(t sb.route.menu.vpngate)"
 
         case "$MENU_CHOICE" in
             1) sb_route_show;         press_enter ;;
@@ -757,6 +796,10 @@ sb_route_menu() {
             8) sb_warp_check_exit_ip; press_enter ;;
             9) sb_route_toggle_preset "preset-ads";  press_enter ;;
             10) sb_route_toggle_preset "preset-quic"; press_enter ;;
+            11)
+                source "$LIB_DIR/vpngate.sh"
+                vpngate_menu singbox
+                ;;
             0) return ;;
         esac
     done

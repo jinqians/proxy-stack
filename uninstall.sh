@@ -159,15 +159,33 @@ ask_yn "$(t uninstall.ask_certs "$NGINX_SSL_DIR")" N && {
 # Remove crons and PSM-owned systemd units.
 rm -f /etc/cron.d/psm-backup /etc/cron.d/psm-ddns
 _systemctl_disable_now psm-reality-watchdog.timer
+_systemctl_disable_now psm-vpngate-watchdog.timer
+_systemctl_disable_now psm-vpngate.service
 _systemctl_disable_now psm-health-report.timer
 _systemctl_disable_now psm-traffic.timer
 _systemctl_disable_now psm-traffic-shutdown.service
 _systemctl_disable_now psm-tgbot.service
 _remove_systemd_units \
     psm-reality-watchdog.service psm-reality-watchdog.timer \
+    psm-vpngate.service psm-vpngate-watchdog.service psm-vpngate-watchdog.timer \
     psm-health-report.service psm-health-report.timer \
     psm-traffic.service psm-traffic.timer psm-traffic-shutdown.service \
     psm-tgbot.service
+# Remove the VPNGate residential-exit tunnel: openvpn config plus the policy
+# routing it installed (dedicated table + ip rules; the main table was never touched).
+rm -f /etc/openvpn/psm-vpngate.conf /etc/openvpn/psm-vpngate.auth \
+      /etc/openvpn/psm-vpngate-up.sh /etc/openvpn/psm-vpngate-down.sh
+# 输出先收进变量再 grep：管道里的 grep -q 会让 ip 吃到 SIGPIPE，本脚本开了
+# pipefail，会把「还有规则」误判成「已经删干净」。
+_psm_vg_rules() { ip "$@" rule list 2>/dev/null || true; }
+while grep -q "lookup 8433" <<<"$(_psm_vg_rules -4)"; do
+    ip rule del lookup 8433 2>/dev/null || break
+done
+while grep -q "lookup 8433" <<<"$(_psm_vg_rules -6)"; do
+    ip -6 rule del lookup 8433 2>/dev/null || break
+done
+ip route flush table 8433 2>/dev/null || true
+ip -6 route flush table 8433 2>/dev/null || true
 # Remove symlink
 rm -f /usr/local/bin/psm
 # Remove sysctl / limits files

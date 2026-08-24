@@ -118,6 +118,17 @@ _mh_outb_build() {
             + (if (.ip   // "") != "" then {ip}   else {} end)
             + (if (.ipv6 // "") != "" then {ipv6} else {} end)'
             ;;
+        vpngate)
+            # VPNGate 家宽出口（lib/vpngate/）：direct 代理 + routing-mark，内核的
+            # ip rule 认这个标记，把连接引进家宽隧道的独立路由表。出站与具体节点
+            # 无关，换家宽 IP 时这里不用改。
+            # ip-version 锁 ipv4：隧道只承载 IPv4，AAAA 会撞上隧道表里的 IPv6 黑洞。
+            echo "$e" | jq '{
+                name, type:"direct",
+                "routing-mark": (.mark // 8433),
+                "ip-version": "ipv4"
+            }'
+            ;;
     esac
 }
 
@@ -593,7 +604,8 @@ mh_route_menu() {
             "$(t mh.route.menu.warp)" \
             "$(t mh.route.menu.warp_check)" \
             "$(t mh.route.menu.ads)" \
-            "$(t mh.route.menu.quic)"
+            "$(t mh.route.menu.quic)" \
+            "$(t mh.route.menu.vpngate)"
 
         case "$MENU_CHOICE" in
             1) mh_route_show; press_enter ;;
@@ -606,6 +618,10 @@ mh_route_menu() {
             8) mh_warp_check_exit_ip; press_enter ;;
             9) mh_route_toggle_preset "ads"; press_enter ;;
             10) mh_route_toggle_preset "quic"; press_enter ;;
+            11)
+                source "$LIB_DIR/vpngate.sh"
+                vpngate_menu mihomo
+                ;;
             0) return ;;
         esac
     done

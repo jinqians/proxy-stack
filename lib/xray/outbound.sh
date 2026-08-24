@@ -213,6 +213,20 @@ _outb_build_xray() {
             }
         }'
         ;;
+    vpngate)
+        # VPNGate 家宽出口（lib/vpngate/）。出站本身就是 freedom 直连，只是给
+        # 连接打上 fwmark：内核的 ip rule 认标记，把这些连接引进家宽隧道的独立
+        # 路由表。这样出站配置与具体家宽节点无关——换节点只重拨隧道，配置不动。
+        # 锁 UseIPv4：隧道只承载 IPv4，解析到 AAAA 会打进隧道表里的 IPv6 黑洞。
+        local mark
+        mark=$(echo "$e" | jq -r '.mark // 8433')
+        jq -n --arg tag "$tag" --argjson mark "$mark" \
+        '{
+            tag: $tag, protocol: "freedom",
+            settings: { domainStrategy: "UseIPv4" },
+            streamSettings: { sockopt: { mark: $mark } }
+        }'
+        ;;
     esac
 }
 

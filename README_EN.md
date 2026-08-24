@@ -170,6 +170,7 @@ manager.sh --update                # Update PSM scripts and components
 manager.sh --traffic-check         # Run one traffic accounting check
 manager.sh --tgbot                 # Start the Telegram Bot daemon
 manager.sh --reality-watchdog      # Run one Reality decoy liveness check
+manager.sh --vpngate-watchdog      # Check the VPNGate residential tunnel once, rotating nodes if it is down
 manager.sh --honeypot-alert <ip> <port>  # Honeypot hit alert (called by fail2ban)
 manager.sh --health-report         # Send one daily health report
 ```
@@ -210,6 +211,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Reality multi-target liveness switching** — configure multiple candidate SNIs for the decoy target; periodic real TLS 1.3 handshake checks switch away from dead targets automatically while old client links keep working
 - **Smart Reality decoy discovery** — when configuring a Reality / XHTTP decoy SNI, cyberspace mapping engines (Netlas / Quake / ZoomEye / FOFA, using your own API key, free tiers suffice) can discover real TLS 1.3 sites in the **same ASN / same datacenter** as your server: nearby, obscure, and free of the over-used big-brand domains. Candidates are verified locally with real handshakes (TLS 1.3 / X25519 / certificate match) before being adopted, and can be batch-added to the liveness pool above. **No local port scanning at any point** (avoiding provider abuse reports) — discovery relies on the engines' datasets; without an engine configured, it falls back to manual input
 - **Cloudflare WARP outbound unlock** — register a WARP identity with one click and wire it into Xray outbounds; combined with routing rules, traffic for Netflix / OpenAI etc. is steered through WARP
+- **VPNGate residential-IP exit** — picks genuine home-broadband IPs out of the public VPNGate list (ip-api batch classification drops datacenter nodes and VPNGate's own relays), brings up a dedicated openvpn tunnel, and wires it in as an fwmark outbound: services that judge you by IP ownership (Netflix / ChatGPT ...) see a residential exit, while the box's own default route and SSH stay untouched (the tunnel only ever writes a dedicated routing table). If the tunnel drops, matching traffic fails closed instead of leaking back through the datacenter IP, and failover is automatic **within the country you picked** (chosen from a numbered list of the countries that actually have nodes), so the exit country never drifts. Xray / sing-box / mihomo share the one tunnel, so switching residential IP changes nothing in any core config
 - **Outbound routing** — custom outbound nodes (VLESS-Reality / TLS / XHTTP, Shadowsocks, Trojan, SOCKS5), forwarding by domain / GeoIP / GeoSite rules to a chosen outbound
 
 ### sing-box core (second core)
@@ -220,6 +222,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Routing management** — geosite / geoip / domain suffix / IP CIDR / inbound tag → chosen outbound or reject, with one-tap ad-block and QUIC-block presets
 - **Outbound manager** — 10 outbound types: ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2 (Salamander obfuscation) / tuic
 - **WARP outbound** — reuses the WARP account registered on the Xray side as a WireGuard endpoint
+- **VPNGate residential exit** — shares the same residential tunnel as Xray; the outbound is `direct` + `routing_mark`, so rotating nodes needs no config change (sing-box 1.12+ switches to `domain_resolver` to pin IPv4)
 - **443 port reuse** — Reality and AnyTLS nodes can mount on the Nginx 443 SNI router, sharing the public 443 with Xray / mihomo nodes so clients only connect to 443; direct-listen on a dedicated port still works too
 - **Transactional config changes** — every change is preceded by an automatic backup; if `sing-box check` fails, both the config and the node store are rolled back, so a bad config can never take the service down
 
@@ -229,6 +232,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 - **Clash-style routing** — manages `proxies` / `proxy-groups` / `rules` directly, supporting DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME with a fixed `MATCH,DIRECT` fallback
 - **Outbound manager** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard outbound types
 - **WARP outbound reuse** — reuses the WARP account registered on the Xray side and generates a mihomo wireguard proxy
+- **VPNGate residential exit** — shares the same residential tunnel as Xray, generating a `type: direct` proxy with `routing-mark` and `ip-version: ipv4`; rotating nodes needs no config change
 - **443 port reuse** — Reality and AnyTLS nodes can mount on the Nginx 443 SNI router, sharing the public 443 with Xray / sing-box nodes so clients only connect to 443; direct-listen on a dedicated port still works too
 - **Transactional config changes** — every change rebuilds the config and runs `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`; failed checks roll back automatically without affecting the running old config
 
@@ -283,6 +287,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 │   ├── xray/             # Reality / Vision / XHTTP / SS2022 / WARP / outbound routing / liveness / decoy discovery
 │   ├── singbox/          # sing-box second core (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / routing)
 │   ├── mihomo/           # mihomo third core (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / routing)
+│   ├── vpngate/          # VPNGate residential exit (list, classification, openvpn tunnel, core wiring)
 │   ├── security/         # SSH hardening / Fail2ban / honeypot
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # Docker extensions (volume backup, …)

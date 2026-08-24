@@ -295,7 +295,8 @@ route_menu() {
             "$(t xray.outbound.menu.add)" \
             "$(t xray.outbound.menu.delete)" \
             "$(t xray.routing.menu.warp_sep)" \
-            "$(t xray.routing.menu.warp)"
+            "$(t xray.routing.menu.warp)" \
+            "$(t xray.routing.menu.vpngate)"
 
         case "$MENU_CHOICE" in
             1) route_show;      press_enter ;;
@@ -309,6 +310,10 @@ route_menu() {
             9)
                 source "$(dirname "${BASH_SOURCE[0]}")/warp.sh"
                 warp_menu
+                ;;
+            10)
+                source "$LIB_DIR/vpngate.sh"
+                vpngate_menu xray
                 ;;
             0) return ;;
         esac

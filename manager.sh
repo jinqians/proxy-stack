@@ -82,6 +82,11 @@ case "${1:-}" in
         rwd_check_all
         exit $?
         ;;
+    --vpngate-watchdog)
+        source "$LIB_DIR/vpngate/tunnel.sh"
+        vg_watchdog_run
+        exit $?
+        ;;
     --honeypot-alert)
         source "$LIB_DIR/security/honeypot.sh"
         hp_alert "${2:-}" "${3:-}"
