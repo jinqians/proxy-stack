@@ -99,9 +99,11 @@ _nginx_selinux_permit() {
 
 # Locate a dynamic nginx module .so by name across distro-specific module dirs.
 _nginx_find_module() {
+    # 同 _tgbot_gen_token：head -1 提前退出会让 find 吃 SIGPIPE，pipefail 下变 141，
+    # 而调用方 `found=$(_nginx_find_module ...)` 是裸赋值，errexit 会当场中止。
     find /usr/lib/nginx/modules /usr/lib64/nginx/modules \
          /usr/share/nginx/modules /etc/nginx/modules \
-         -name "$1" 2>/dev/null | head -1
+         -name "$1" 2>/dev/null | head -1 || true
 }
 
 # True if the stream module can actually be used: compiled statically into

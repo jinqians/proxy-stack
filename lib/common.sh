@@ -43,11 +43,18 @@ ACME_HOME="/root/.acme.sh"
 PSM_STATE="$CFG_DIR/psm.state"   # key=value runtime state
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-log_info()    { echo -e "${GREEN}[$(t log.info)]${NC}  $*"; }
-log_warn()    { echo -e "${YELLOW}[$(t log.warn)]${NC}  $*"; }
+# 全部写 stderr（不只是 log_error）。日志是给人看的诊断信息，不是函数的返回值：
+# 本仓库有大量「stdout 返回一个值、中途 log_step 报进度」的函数，例如三个核心的
+# 版本解析 `tag=$(_xray_resolve_tag ...)`。日志一旦落在 stdout，就会被命令替换
+# 连同返回值一起吃进变量，拼出
+#   https://github.com/.../download/[步骤] 正在获取最新版本...\nv26.3.27/Xray-linux-64.zip
+# 这种 URL，安装直接失败。改到 stderr 后这一整类 bug 从根上不可能再发生；交互体验
+# 不变（终端照样显示），`--json` 之类的机器可读输出反而更干净。
+log_info()    { echo -e "${GREEN}[$(t log.info)]${NC}  $*" >&2; }
+log_warn()    { echo -e "${YELLOW}[$(t log.warn)]${NC}  $*" >&2; }
 log_error()   { echo -e "${RED}[$(t log.error)]${NC}  $*" >&2; }
-log_step()    { echo -e "${CYAN}[$(t log.step)]${NC}  $*"; }
-log_ok()      { echo -e "${GREEN}[$(t log.ok)]${NC}  $*"; }
+log_step()    { echo -e "${CYAN}[$(t log.step)]${NC}  $*" >&2; }
+log_ok()      { echo -e "${GREEN}[$(t log.ok)]${NC}  $*" >&2; }
 
 die() { log_error "$*"; exit 1; }
 
@@ -317,7 +324,27 @@ rand_str() {
 
     # head exits after len bytes, which gives tr a SIGPIPE under pipefail.
     # The output is still correct, so suppress that expected non-zero status.
-    LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c "$len" || true
+    # LC_ALL=C 不能省：UTF-8 locale 下 tr 读 /dev/urandom 会以
+    # "Illegal byte sequence" 报错退出，结果是空串或一两个字符。
+    local out
+    out=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c "$len" || true)
+
+    # 最后一道兜底：本函数产出的是密码 / PSK / 伪装路径，长度不足绝不能悄悄放行。
+    # 这条路径刻意不碰 tr（上面那条正是栽在 tr 上的），只用 od + bash 内建替换。
+    if (( ${#out} < len )); then
+        local hex
+        hex=$(LC_ALL=C od -An -tx1 -N "$len" /dev/urandom 2>/dev/null) || hex=""
+        hex=${hex//[[:space:]]/}
+        out=${hex:0:len}
+    fi
+
+    # 还是拿不到就报错返回非零，让调用方（多在 set -e 下）当场中止：
+    # 宁可装到一半失败，也不能生成一个空密码 / 空 PSK 的节点。
+    if (( ${#out} < len )); then
+        log_error "$(t common.err.rand_failed)"
+        return 1
+    fi
+    printf '%s' "$out"
 }
 
 rand_path() {

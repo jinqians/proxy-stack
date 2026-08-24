@@ -139,9 +139,12 @@ _tgbot_handle_callback() {
 }
 
 # ── Bind-token helpers ────────────────────────────────────────────────────────
-_tgbot_gen_token() {
-    tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c 12
-}
+# 绑定 token 直接复用 common.sh 里已经加固过的 rand_str，不再自己拼 tr 管道。
+# 原来那版有两个隐患：head 提前退出让 tr 吃 SIGPIPE（pipefail 下返回 141，裸赋值
+# 会被 errexit 带走整个 Bot 进程）；更要命的是缺了 LC_ALL=C，UTF-8 locale 下 tr 直接
+# 报 "Illegal byte sequence" 退出，生成的是空 token——而空 token 会让下面的绑定校验
+# 整段跳过（见 _tgbot_set_token 的注释），等于管理员以为加了锁、实际门是开的。
+_tgbot_gen_token() { rand_str 12; }
 
 _tgbot_port_token() {
     local port="$1"
@@ -154,8 +157,12 @@ _tgbot_port_token() {
     return 0
 }
 
+# 绑定校验是 `if [[ -n "$expected" ]]` —— 空 token 会被当成「这个端口不需要 token」
+# 而直接放行。所以这里必须拒绝空值：存不进去要让上层报错，绝不能悄悄存一个
+# 「看起来上了锁、实际谁都能绑」的端口。
 _tgbot_set_token() {
     local port="$1" token="$2"
+    [[ -n "$token" ]] || { log_error "$(t tgbot.token.gen_failed)"; return 1; }
     [[ -f "$BIND_TOKENS_FILE" ]] || echo '{}' > "$BIND_TOKENS_FILE"
     local tmp; tmp=$(mktemp)
     jq --arg p "$port" --arg t "$token" \
@@ -352,7 +359,10 @@ _tgbot_cmd_token() {
 
     if [[ -z "$existing" || "$reset_flag" == "reset" ]]; then
         local new_token; new_token=$(_tgbot_gen_token)
-        _tgbot_set_token "$port" "$new_token"
+        if ! _tgbot_set_token "$port" "$new_token"; then
+            _tgbot_send "$chat_id" "$(t tgbot.token.gen_failed)"
+            return
+        fi
         local action; [[ "$reset_flag" == "reset" ]] && action="$(t tgbot.token.action_reset)" || action="$(t tgbot.token.action_created)"
         _tgbot_send "$chat_id" "$(t tgbot.token.generated "$action" "$port" "$new_token" "$port" "$new_token")"
     else
