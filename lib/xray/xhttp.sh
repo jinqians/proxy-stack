@@ -139,21 +139,34 @@ _xhttp_build_inbound() {
         reality-layer)
             local priv_key; priv_key=$(echo "$n" | jq -r '.private_key // empty')
             local sid;      sid=$(echo "$n"      | jq -r '.short_id // empty')
-            local sn;       sn=$(echo "$n"       | jq -r '.server_name // "www.microsoft.com"')
+            local sn;       sn=$(echo "$n"       | jq -r '.server_name // empty')
+            # 回落限速：仅在 dest 被判定为共享 CDN 前端时写出（见 common.sh 的取值权衡）。
+            # 只影响「认证未通过」的回落连接，已认证客户端的代理流量不受任何影响。
+            local limit_fb; limit_fb=$(echo "$n" | jq -r '.limit_fallback // false')
+            local limit_json='{}'
+            if [[ "$limit_fb" == "true" ]]; then
+                limit_json=$(jq -n \
+                    --argjson after "$REALITY_FALLBACK_AFTER_BYTES" \
+                    --argjson rate  "$REALITY_FALLBACK_BYTES_PER_SEC" \
+                    --argjson burst "$REALITY_FALLBACK_BURST_BYTES_PER_SEC" \
+                    '{ "limitFallbackUpload":   { "afterBytes": $after, "bytesPerSec": $rate, "burstBytesPerSec": $burst },
+                       "limitFallbackDownload": { "afterBytes": $after, "bytesPerSec": $rate, "burstBytesPerSec": $burst } }')
+            fi
             stream_json=$(jq -n \
                 --arg path "$path" --arg sn "$sn" \
                 --arg priv "$priv_key" --arg sid "$sid" \
+                --argjson limit "$limit_json" \
                 '{
                   "network": "xhttp",
                   "security": "reality",
                   "xhttpSettings": { "path": $path, "mode": "auto" },
-                  "realitySettings": {
+                  "realitySettings": ({
                     "show": false,
                     "dest": ($sn + ":443"),
                     "serverNames": [$sn],
                     "privateKey": $priv,
                     "shortIds": [$sid]
-                  }
+                  } + $limit)
                 }')
             ;;
         *)
@@ -298,17 +311,29 @@ xhttp_add_node() {
         local pub_key="${pair#*$'\t'}"
         local sid; sid=$(openssl rand -hex 4)
         local sn=""
-        if ask_yn "$(t xray.xhttp.ask_discover_sni)" N; then
+        if ask_yn "$(t xray.xhttp.ask_discover_sni)" Y; then
             source "$LIB_DIR/xray/sni_finder.sh"
             local _picked; _picked=$(sni_finder_pick_one) || true
             # reality-layer 的 dest 固定为 sn:443（见 _xhttp_build_inbound），此处只取 SNI
             [[ -n "$_picked" ]] && { sn="${_picked%%|*}"; log_info "$(t xray.xhttp.picked_sni "$sn")"; }
         fi
-        [[ -z "$sn" ]] && ask sn "$(t xray.xhttp.ask_sni)" "www.microsoft.com"
+        # 不预置伪装域名：reality-layer 的 dest 就是 sn:443，若 sn 落在多租户 CDN 前端上，
+        # Reality 的回落会把本机变成通往整个 CDN 的免费中继（见 common.sh）。
+        while [[ -z "$sn" ]]; do
+            ask sn "$(t xray.xhttp.ask_sni)" ""
+            [[ -n "$sn" ]] || log_error "$(t common.reality.sni_empty)"
+        done
+        local _xh_shared=false
+        if reality_dest_is_shared_frontend "$sn" 443; then
+            log_warn "$(t common.reality.dest_shared_frontend "${REALITY_DEST_SHARED_BY:-unknown}")"
+            ask_yn "$(t common.reality.proceed_anyway)" N || return 1
+            _xh_shared=true
+        fi
         node=$(echo "$node" | jq \
             --arg pk "$priv_key" --arg pub "$pub_key" \
-            --arg sid "$sid" --arg sn "$sn" \
-            '.private_key=$pk | .public_key=$pub | .short_id=$sid | .server_name=$sn')
+            --arg sid "$sid" --arg sn "$sn" --argjson lfb "$_xh_shared" \
+            '.private_key=$pk | .public_key=$pub | .short_id=$sid | .server_name=$sn
+             | .limit_fallback=$lfb')
         if (( use_nginx )); then
             _sni_add_entry "$sn" "127.0.0.1:${port}"
         fi

@@ -70,6 +70,8 @@ MSG[common.not_configured]="未配置"
 MSG[common.reality.checking_dest]="正在校验伪装目标 %s（SNI %s）..."
 MSG[common.reality.dest_ok]="伪装目标可达且兼容 Reality（%sms）。"
 MSG[common.reality.dest_check_failed]="伪装目标校验失败：%s。SNI 与 dest 不匹配虽能安装，但客户端无法完成 Reality 握手。"
+MSG[common.reality.dest_shared_frontend]="伪装目标位于多租户共享 CDN 前端（探针 %s 在同一 IP 上取得了有效证书）。Reality 会把认证未通过的连接原样转发给它，攻击者只需伪造 SNI 即可拿本机当作通往整个 CDN 的免费中继。建议改用同 ASN、非内容分发源的单租户站点。"
+MSG[common.reality.sni_empty]="伪装 SNI 不能为空。可以用测绘引擎自动发现同 ASN 的目标，或手动填一个你确认过的域名。"
 MSG[common.reality.proceed_anyway]="仍使用该 SNI/dest 组合？"
 
 # ── manager.sh（更新 / 状态总览 / 主循环）─────────────────────────────────────

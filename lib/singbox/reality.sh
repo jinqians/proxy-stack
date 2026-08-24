@@ -11,8 +11,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
 SB_REALITY_CFG="$SB_STORE_DIR/reality.json"
 
 SB_REALITY_DEFAULT_PORT=443
-SB_REALITY_DEFAULT_DEST="www.cloudflare.com:443"
-SB_REALITY_DEFAULT_SN="www.cloudflare.com"
+# 不出厂预置伪装域名：任何写死的知名域名都可能迁到 CDN 后面变成共享前端（见
+# lib/common.sh 的 reality_dest_is_shared_frontend），且全网共用同一个默认值本身
+# 就是指纹。本核心没有测绘发现（那是 Xray 专有），所以这里要求显式输入。
+SB_REALITY_DEFAULT_DEST=""
+SB_REALITY_DEFAULT_SN=""
 
 # 云厂商/ISP 常在上游封锁的端口，直连节点落在这些端口会连不上。
 SB_REALITY_RISKY_PORTS="23 25 110 111 135 137 138 139 143 161 389 445 465 587 993 995 1433 2049 3306 3389 5432 6379 27017"
@@ -209,8 +212,17 @@ sb_reality_add_node() {
     # camouflage dest to it. Reality forwards the client handshake to dest, whose
     # cert must cover the presented SNI — a hardcoded dest that ignored the SNI
     # builds and passes the config test yet lets no client handshake.
-    ask server_names_raw "$(t sb.reality.ask_sni)" "$SB_REALITY_DEFAULT_SN"
-    local server_name; server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+    local server_name
+    while :; do
+        while :; do
+            ask server_names_raw "$(t sb.reality.ask_sni)" "$SB_REALITY_DEFAULT_SN"
+            server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+            [[ -n "$server_name" ]] && break
+            log_error "$(t common.reality.sni_empty)"
+        done
+        [[ -n "$server_name" ]] && break
+        log_error "$(t common.reality.sni_empty)"
+    done
     ask dest "$(t sb.reality.ask_dest)" "${server_name}:443"
 
     # P2: advisory validation of the (SNI, dest) pair via the shared openssl-only
@@ -220,9 +232,13 @@ sb_reality_add_node() {
         log_step "$(t common.reality.checking_dest "$dest" "$server_name")"
         if reality_validate_dest "$dest" "$server_name"; then
             [[ -n "$REALITY_DEST_RTT_MS" ]] && log_info "$(t common.reality.dest_ok "$REALITY_DEST_RTT_MS")"
-            break
+            # 共享 CDN 前端：握手一切正常，但会让 Reality 的回落变成通往整个 CDN 的
+            # 免费隧道。告警而非否决 —— 判定可能误伤，风险由使用者自行取舍。
+            [[ "$REALITY_DEST_WARN" != shared_frontend:* ]] && break
+            log_warn "$(t common.reality.dest_shared_frontend "${REALITY_DEST_WARN#shared_frontend:}")"
+        else
+            log_warn "$(t common.reality.dest_check_failed "${REALITY_DEST_REASON:-unknown}")"
         fi
-        log_warn "$(t common.reality.dest_check_failed "${REALITY_DEST_REASON:-unknown}")"
         ask_yn "$(t common.reality.proceed_anyway)" N && break
         ask server_names_raw "$(t sb.reality.ask_sni)" "$SB_REALITY_DEFAULT_SN"
         server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
@@ -240,7 +256,15 @@ sb_reality_add_node() {
     # 挂载模式不要求自有域名：Reality 的伪装域名（decoy SNI）就是路由键。
     local listen_addr="::" public_port="" use_nginx=0
     echo ""
+    # sing-box 的 reality 入站没有回落限速（Xray/mihomo 有 limitFallback）。dest 又是
+    # 共享 CDN 前端时，直连模式等于三层防护全空 —— 没有 Nginx 的未知 SNI 黑洞挡在前面，
+    # 也没有限速兜底，只剩 dest 选择这一条线。这是所有组合里最容易被当免费中继的一种，
+    # 所以在这里显式提示改走挂载模式。
     ask_yn "$(t sb.front.ask_mount)" N && use_nginx=1
+    if (( use_nginx == 0 )) && [[ "$REALITY_DEST_WARN" == shared_frontend:* ]]; then
+        log_warn "$(t sb.reality.direct_shared_frontend)"
+        ask_yn "$(t sb.front.ask_mount)" Y && use_nginx=1
+    fi
 
     if (( use_nginx )); then
         _sb_front_ensure_nginx || { log_info "$(t sb.reality.cancelled)"; return 1; }

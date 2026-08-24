@@ -7,8 +7,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
 REALITY_CFG="$CFG_DIR/xray/reality.json"
 
 REALITY_DEFAULT_PORT=443
-REALITY_DEFAULT_DEST="www.cloudflare.com:443"
-REALITY_DEFAULT_SERVER_NAME="www.cloudflare.com"
+# 不出厂预置伪装域名。Reality 的最佳实践是「偷同 ASN 的证书」，那只能按机器现场决定，
+# 任何写死的知名域名都可能在作者不知情时迁到 CDN 后面变成共享前端（见 lib/common.sh 的
+# reality_dest_is_shared_frontend），且全网共用同一个默认值本身就是指纹。留空 = 强制
+# 走自动发现，或让使用者显式输入一个自己判断过的目标。
+REALITY_DEFAULT_DEST=""
+REALITY_DEFAULT_SERVER_NAME=""
 
 # Ports clouds/ISPs commonly block upstream, or well-known service ports unfit
 # for a public proxy listener. A direct-listen node landing on one builds fine
@@ -126,10 +130,6 @@ _reality_sync_from_live() {
         if [[ "$listen" == "127.0.0.1" && "$live_port" != "$port" ]]; then
             source "$LIB_DIR/nginx.sh"
             _sni_add_entry "$sn" "127.0.0.1:${live_port}" 2>/dev/null || true
-            if [[ "$(state_get reality_local_port)" == "$port" ]]; then
-                state_set reality_local_port "$live_port"
-                _sni_set_default_backend "127.0.0.1:${live_port}" 2>/dev/null || true
-            fi
         fi
         nodes=$(echo "$nodes" | jq --arg t "$tag" --arg p "$live_port" --arg u "$live_uuid" \
             '(.[] | select(.tag == $t)) |= (.port = ($p|tonumber) | .uuid = $u
@@ -221,6 +221,24 @@ _reality_build_inbound() {
     [[ -n "$min_client_ver" ]] && min_client_ver_line="
       \"minClientVer\": \"$min_client_ver\","
 
+    # 回落限速：仅在 dest 被判定为共享 CDN 前端时写出（见 common.sh 的取值权衡）。
+    # 只影响「认证未通过」的回落连接，已认证客户端的代理流量不受任何影响。
+    local limit_fallback; limit_fallback=$(echo "$node_json" | jq -r '.limit_fallback // false')
+    local limit_fallback_line=""
+    if [[ "$limit_fallback" == "true" ]]; then
+        limit_fallback_line="
+      \"limitFallbackUpload\": {
+        \"afterBytes\": $REALITY_FALLBACK_AFTER_BYTES,
+        \"bytesPerSec\": $REALITY_FALLBACK_BYTES_PER_SEC,
+        \"burstBytesPerSec\": $REALITY_FALLBACK_BURST_BYTES_PER_SEC
+      },
+      \"limitFallbackDownload\": {
+        \"afterBytes\": $REALITY_FALLBACK_AFTER_BYTES,
+        \"bytesPerSec\": $REALITY_FALLBACK_BYTES_PER_SEC,
+        \"burstBytesPerSec\": $REALITY_FALLBACK_BURST_BYTES_PER_SEC
+      },"
+    fi
+
     cat <<EOF
 {
   "tag": "$tag",
@@ -240,7 +258,7 @@ _reality_build_inbound() {
       "show": false,
       "dest": "$dest",
       "xver": 0,
-      "serverNames": $server_names_json,$min_client_ver_line
+      "serverNames": $server_names_json,$min_client_ver_line$limit_fallback_line
       "privateKey": "$priv_key",
       "shortIds": $short_ids
     }
@@ -318,6 +336,8 @@ reality_add_node() {
     local tag port uuid flow server_names_raw dest
     local count; count=$(_reality_count)
     local own_domain=0 domain=""
+    # dest 被判定为共享 CDN 前端且使用者选择继续时置 1 → 给该节点开启回落限速兜底
+    local _dest_shared=0
 
     ask tag  "$(t xray.ask.node_tag)" "reality-$((count+1))"
 
@@ -338,23 +358,38 @@ reality_add_node() {
         else
             # 没有证书时 nginx 不会创建 8443 伪装站（见 nginx_setup_camouflage_site），
             # 若仍把 dest 指向 127.0.0.1:8443 会得到 connection refused，反而暴露。
-            # 因此回退到公共域名伪装：dest 指向真实存在的外部 HTTPS 站点。
             log_warn "$(t xray.reality.no_cert_fallback)"
             own_domain=0
-            server_names_raw="$REALITY_DEFAULT_SERVER_NAME"
-            dest="$REALITY_DEFAULT_DEST"
-            domain="$server_names_raw"
-            log_info "$(t xray.reality.dest_public_fallback "$dest")"
+            # 清空后交给下面的发现/手输流程，而不是塞一个写死的公共域名
+            server_names_raw=""
+            dest=""
         fi
-    else
+    fi
+
+    # 公共域名伪装：自有域名分支没走成（未选择，或证书签发失败）时都到这里。
+    # 默认走测绘发现 —— 同 ASN 的目标天然避开 CDN 共享前端和大内容分发源，
+    # 这也是 Reality 官方的最佳实践。
+    if [[ -z "$server_names_raw" ]]; then
         own_domain=0
-        if ask_yn "$(t xray.reality.ask_discover_sni)" N; then
+        if ask_yn "$(t xray.reality.ask_discover_sni)" Y; then
             source "$LIB_DIR/xray/sni_finder.sh"
             local _picked; _picked=$(sni_finder_pick_one) || true
             if [[ -n "$_picked" ]]; then
                 server_names_raw="${_picked%%|*}"
                 dest="${_picked#*|}"
                 log_info "$(t xray.reality.picked_sni "$server_names_raw" "$dest")"
+                # 发现路径按本机 ASN 找候选，命中 CDN 边缘的概率很低，但仍要判一次：
+                # 候选表的 warn 列只是给人看的，这里才决定是否给节点开回落限速兜底。
+                local _ph _pp
+                if [[ "$dest" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+                    _ph="${BASH_REMATCH[1]}"; _pp="${BASH_REMATCH[2]}"
+                else
+                    _ph="${dest%:*}"; _pp="${dest##*:}"
+                fi
+                if reality_dest_is_shared_frontend "$_ph" "$_pp"; then
+                    log_warn "$(t common.reality.dest_shared_frontend "${REALITY_DEST_SHARED_BY:-unknown}")"
+                    _dest_shared=1
+                fi
             fi
         fi
         # Manual entry (mapping engine declined or found nothing). The engine
@@ -366,8 +401,12 @@ reality_add_node() {
             # cert must cover the presented SNI — a hardcoded dest that ignored
             # the SNI builds and passes -test yet lets no client handshake.
             local _sn
-            ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
-            _sn=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+            while :; do
+                ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
+                _sn=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+                [[ -n "$_sn" ]] && break
+                log_error "$(t common.reality.sni_empty)"
+            done
             ask dest "$(t xray.reality.ask_dest)" "${_sn}:443"
 
             # P2: advisory validation of the manual pair, reusing the watchdog's
@@ -379,12 +418,28 @@ reality_add_node() {
                 log_step "$(t common.reality.checking_dest "$dest" "$_sn")"
                 if _rwd_check_dest "$dest" "$_sn"; then
                     [[ -n "$RWD_CHECK_RTT_MS" ]] && log_info "$(t common.reality.dest_ok "$RWD_CHECK_RTT_MS")"
-                    break
+                    # 共享 CDN 前端：握手一切正常，但会让 Reality 的回落变成通往整个
+                    # CDN 的免费隧道。告警而非否决 —— 判定可能误伤，风险由使用者取舍。
+                    # 选择继续时给该节点打开回落限速作为兜底。
+                    if [[ "$RWD_CHECK_WARN" == *shared_frontend_* ]]; then
+                        log_warn "$(t common.reality.dest_shared_frontend "${REALITY_DEST_SHARED_BY:-unknown}")"
+                        if ask_yn "$(t common.reality.proceed_anyway)" N; then
+                            _dest_shared=1
+                            break
+                        fi
+                    else
+                        break
+                    fi
+                else
+                    log_warn "$(t common.reality.dest_check_failed "${RWD_CHECK_REASON:-unknown}")"
+                    ask_yn "$(t common.reality.proceed_anyway)" N && break
                 fi
-                log_warn "$(t common.reality.dest_check_failed "${RWD_CHECK_REASON:-unknown}")"
-                ask_yn "$(t common.reality.proceed_anyway)" N && break
-                ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
-                _sn=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+                while :; do
+                    ask server_names_raw "$(t xray.reality.ask_sni)" "$REALITY_DEFAULT_SERVER_NAME"
+                    _sn=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+                    [[ -n "$_sn" ]] && break
+                    log_error "$(t common.reality.sni_empty)"
+                done
                 ask dest "$(t xray.reality.ask_dest)" "${_sn}:443"
             done
         fi
@@ -470,11 +525,9 @@ reality_add_node() {
         # Always update the SNI entry. When reuse_sni=1, $port is the shared port
         # of the existing node — this also fixes any stale entry that pointed to a
         # different port (e.g. a previous failed add that overwrote the mapping).
+        # 只写显式条目，绝不把 Reality 设成未知 SNI 的兜底后端 —— 那会让本机成为
+        # 任何人都能白嫖的到 dest 的中继（见 nginx.sh 的 SNI_DEFAULT_BLACKHOLE）。
         _sni_add_entry "$_primary_sn" "127.0.0.1:${port}"
-        if (( count == 0 )); then
-            _sni_set_default_backend "127.0.0.1:${port}"
-            state_set "reality_local_port" "$port"
-        fi
         if (( own_domain )); then
             nginx_setup_camouflage_site "$domain" \
                 || log_warn "$(t xray.reality.camouflage_not_enabled)"
@@ -514,6 +567,7 @@ reality_add_node() {
         --argjson short_ids     "[\"$short_id\"]" \
         --arg  listen_addr      "$listen_addr" \
         --argjson public_port   "$public_port" \
+        --argjson limit_fb      "$([[ $_dest_shared == 1 ]] && echo true || echo false)" \
         '{
           tag:              $tag,
           port:             $port,
@@ -526,7 +580,8 @@ reality_add_node() {
           dest:             $dest,
           flow:             $flow,
           short_ids:        $short_ids,
-          listen_addr:      $listen_addr
+          listen_addr:      $listen_addr,
+          limit_fallback:   $limit_fb
         }')
 
     _reality_upsert "$node_json"
@@ -642,10 +697,6 @@ reality_modify_port() {
     if [[ "$listen" == "127.0.0.1" ]]; then
         source "$LIB_DIR/nginx.sh"
         _sni_add_entry "$sn" "127.0.0.1:${port}"
-        if [[ "$(state_get reality_local_port)" == "$old_port" ]]; then
-            state_set reality_local_port "$port"
-            _sni_set_default_backend "127.0.0.1:${port}"
-        fi
     fi
 
     _reality_apply_all

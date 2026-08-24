@@ -456,6 +456,7 @@ reality_validate_dest() {
     local dest="$1" sni="$2"
     REALITY_DEST_REASON=""
     REALITY_DEST_RTT_MS=""
+    REALITY_DEST_WARN=""
 
     # Parse "host:port" or "[ipv6]:port"
     local host port
@@ -527,8 +528,79 @@ reality_validate_dest() {
     fi
 
     rm -f "$out"
-    [[ -z "$reason" ]] && return 0
-    REALITY_DEST_REASON="$reason"; return 1
+    if [[ -n "$reason" ]]; then
+        REALITY_DEST_REASON="$reason"; return 1
+    fi
+
+    # 握手层面合格后，再判一次「这个 dest 是不是多租户共享前端」。属于告警而非否决：
+    # 判定可能误伤，且是否接受风险由使用者决定（见 reality_dest_is_shared_frontend）。
+    if reality_dest_is_shared_frontend "$host" "$port"; then
+        REALITY_DEST_WARN="shared_frontend:${REALITY_DEST_SHARED_BY}"
+    fi
+    return 0
+}
+
+# ── Reality dest：多租户共享前端（CDN 边缘）判定 ──────────────────────────────
+# Reality 会把「认证未通过」的连接原样转发给 dest 以维持伪装。若 dest 落在共享 CDN 前端
+# 上，攻击者只要把 ClientHello 的 SNI 填成该 CDN 上的任意站点，就能拿本机当作通往整个
+# CDN 的免费隧道 —— Xray 官方文档亦警告此点（"your server effectively becomes a port
+# forwarder for Cloudflare and may be abused after scanning"）。
+#
+# 判定手法：用一批与 dest 无关的探针域名当 SNI 去连同一个 IP:port。单租户站点不会为
+# 别人的域名出示有效证书，共享前端会。这直接测「该 IP 是否按 SNI 服务任意租户」这一
+# 性质本身，不依赖 IP 段或 ASN 名单，因此对各家 CDN 一视同仁，也不会随 IP 段变动失效。
+#
+# 探针必须覆盖想检出的 CDN（各家边缘只服务自家租户），且不能选那些本身常被当作 dest 的
+# 域名 —— 否则 dest 恰好是探针时会因跳过自身而漏判。列表可通过环境变量扩充。
+# 命中时把探针域名回填到 REALITY_DEST_SHARED_BY 并返回 0。
+REALITY_SHARED_FRONTEND_PROBES="${REALITY_SHARED_FRONTEND_PROBES:-cdnjs.cloudflare.com www.fastly.com www.akamai.com}"
+
+# ── Reality 回落限速（Xray: limitFallback* / mihomo: limit-fallback-*）────────
+# 只在 dest 是共享 CDN 前端时才写出来 —— 官方口径也是「迫不得已偷了 CDN 证书时才考虑」。
+# 这是兜底而非解法：两个参数都是「每连接」语义，攻击者循环重连即可绕过，真正有效的是
+# 换掉 dest 和 Nginx 侧的未知 SNI 黑洞。
+#
+# 取值权衡：after_bytes 太小 → 主动探测者拉一次完整页面就撞限速，速度突降本身成为指纹，
+# 反而削弱伪装；太大 → 每条新连接都白送一份额度，等于没限。默认取 1MiB，够覆盖一次
+# 正常页面加载与证书链，又不给多连接白嫖留出太大空间。
+REALITY_FALLBACK_AFTER_BYTES="${REALITY_FALLBACK_AFTER_BYTES:-1048576}"        # 1 MiB
+REALITY_FALLBACK_BYTES_PER_SEC="${REALITY_FALLBACK_BYTES_PER_SEC:-262144}"     # 256 KiB/s
+REALITY_FALLBACK_BURST_BYTES_PER_SEC="${REALITY_FALLBACK_BURST_BYTES_PER_SEC:-1048576}"
+
+reality_dest_is_shared_frontend() {
+    local host="$1" port="${2:-443}"
+    REALITY_DEST_SHARED_BY=""
+    command -v openssl &>/dev/null || return 1
+    # 本地伪装站不出网，不存在被当中继的问题
+    reality_dest_is_local "$host" && return 1
+    # 没有 -checkhost 就无法核验证书归属，宁可不判也不误报
+    openssl x509 -help 2>&1 | grep -q -- "-checkhost" || return 1
+
+    local connect="${host}:${port}"
+    [[ "$host" == *:* ]] && connect="[${host}]:${port}"
+
+    local probe out cert hit=1
+    for probe in $REALITY_SHARED_FRONTEND_PROBES; do
+        [[ "$probe" == "$host" ]] && continue
+        out=$(mktemp) || return 1
+        if command -v timeout &>/dev/null; then
+            timeout 5 openssl s_client -connect "$connect" -servername "$probe" \
+                </dev/null >"$out" 2>&1
+        else
+            openssl s_client -connect "$connect" -servername "$probe" \
+                </dev/null >"$out" 2>&1
+        fi
+        cert=$(mktemp)
+        awk '/-----BEGIN CERTIFICATE-----/{c=1} c{print} /-----END CERTIFICATE-----/{exit}' "$out" > "$cert"
+        if grep -q "BEGIN CERTIFICATE" "$cert" \
+            && openssl x509 -in "$cert" -noout -checkhost "$probe" >/dev/null 2>&1; then
+            REALITY_DEST_SHARED_BY="$probe"
+            hit=0
+        fi
+        rm -f "$out" "$cert"
+        (( hit == 0 )) && return 0
+    done
+    return 1
 }
 
 # ── JSON helpers (requires jq) ────────────────────────────────────────────────

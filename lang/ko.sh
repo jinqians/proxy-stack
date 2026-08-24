@@ -70,6 +70,8 @@ MSG[common.not_configured]="설정되지 않음"
 MSG[common.reality.checking_dest]="위장 대상 %s 검증 중 (SNI %s)..."
 MSG[common.reality.dest_ok]="위장 대상에 연결할 수 있으며 Reality와 호환됩니다 (%sms)."
 MSG[common.reality.dest_check_failed]="위장 대상 검증 실패: %s. SNI와 dest가 일치하지 않으면 설치는 되지만 어떤 클라이언트도 Reality 핸드셰이크를 완료할 수 없습니다."
+MSG[common.reality.dest_shared_frontend]="위장 대상이 멀티테넌트 공유 CDN 프런트엔드에 있습니다(프로브 %s가 동일 IP에서 유효한 인증서를 받았습니다). REALITY는 인증에 실패한 연결을 그대로 전달하므로, 공격자는 SNI만 위조하면 이 서버를 CDN 전체로 향하는 무료 중계로 사용할 수 있습니다. 동일 ASN의 단일 테넌트 사이트를 권장합니다."
+MSG[common.reality.sni_empty]="위장 SNI는 비워 둘 수 없습니다. 매핑 엔진으로 동일 ASN의 대상을 찾거나, 직접 확인한 도메인을 입력하세요."
 MSG[common.reality.proceed_anyway]="이 SNI/dest 조합을 그대로 사용하시겠습니까?"
 
 # ── manager.sh (update / status overview / main loop) ─────────────────────────

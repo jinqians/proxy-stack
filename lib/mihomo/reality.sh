@@ -11,8 +11,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/core.sh"
 MH_REALITY_CFG="$MH_STORE_DIR/reality.json"
 
 MH_REALITY_DEFAULT_PORT=443
-MH_REALITY_DEFAULT_DEST="www.cloudflare.com:443"
-MH_REALITY_DEFAULT_SN="www.cloudflare.com"
+# 不出厂预置伪装域名：任何写死的知名域名都可能迁到 CDN 后面变成共享前端（见
+# lib/common.sh 的 reality_dest_is_shared_frontend），且全网共用同一个默认值本身
+# 就是指纹。本核心没有测绘发现（那是 Xray 专有），所以这里要求显式输入。
+MH_REALITY_DEFAULT_DEST=""
+MH_REALITY_DEFAULT_SN=""
 
 # 云厂商/ISP 常在上游封锁的端口，直连节点落在这些端口会连不上。
 MH_REALITY_RISKY_PORTS="23 25 110 111 135 137 138 139 143 161 389 445 465 587 993 995 1433 2049 3306 3389 5432 6379 27017"
@@ -129,8 +132,21 @@ _mh_reality_build_listener() {
     local flow;        flow=$(echo "$node_json"        | jq -r '.flow')
     local short_ids;   short_ids=$(echo "$node_json"   | jq -c '.short_ids')
     local listen_addr; listen_addr=$(echo "$node_json" | jq -r '.listen_addr // "::"')
+    # 回落限速：仅在 dest 被判定为共享 CDN 前端时写出（见 common.sh 的取值权衡）。
+    # 只影响「认证未通过」的回落连接，已认证客户端的代理流量不受任何影响。
+    local limit_fb; limit_fb=$(echo "$node_json" | jq -r '.limit_fallback // false')
+    local limit_json='{}'
+    if [[ "$limit_fb" == "true" ]]; then
+        limit_json=$(jq -n \
+            --argjson after "$REALITY_FALLBACK_AFTER_BYTES" \
+            --argjson rate  "$REALITY_FALLBACK_BYTES_PER_SEC" \
+            --argjson burst "$REALITY_FALLBACK_BURST_BYTES_PER_SEC" \
+            '{ "limit-fallback-upload":   { "after-bytes": $after, "bytes-per-sec": $rate, "burst-bytes-per-sec": $burst },
+               "limit-fallback-download": { "after-bytes": $after, "bytes-per-sec": $rate, "burst-bytes-per-sec": $burst } }')
+    fi
 
     jq -n \
+        --argjson limit    "$limit_json" \
         --arg  tag         "$tag" \
         --arg  listen      "$listen_addr" \
         --argjson port     "$port" \
@@ -148,12 +164,12 @@ _mh_reality_build_listener() {
         users: [
             ( { username: "u1", uuid: $uuid } + (if $flow == "" then {} else { flow: $flow } end) )
         ],
-        "reality-config": {
+        "reality-config": ({
             dest: $dest,
             "private-key": $priv_key,
             "short-id": $short,
             "server-names": [$sn]
-        }
+        } + $limit)
     }'
 }
 
@@ -193,6 +209,8 @@ mh_reality_add_node() {
     log_step "$(t mh.reality.configuring)"
 
     local tag port uuid flow server_names_raw dest
+    # dest 被判定为共享 CDN 前端且使用者选择继续时置 1 → 给该节点开启回落限速兜底
+    local _dest_shared=0
     local count; count=$(_mh_reality_count)
 
     ask tag "$(t mh.reality.ask_tag)" "mh-reality-$((count+1))"
@@ -202,8 +220,17 @@ mh_reality_add_node() {
     # camouflage dest to it. Reality forwards the client handshake to dest, whose
     # cert must cover the presented SNI — a hardcoded dest that ignored the SNI
     # builds and passes the config test yet lets no client handshake.
-    ask server_names_raw "$(t mh.reality.ask_sni)" "$MH_REALITY_DEFAULT_SN"
-    local server_name; server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+    local server_name
+    while :; do
+        while :; do
+            ask server_names_raw "$(t mh.reality.ask_sni)" "$MH_REALITY_DEFAULT_SN"
+            server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
+            [[ -n "$server_name" ]] && break
+            log_error "$(t common.reality.sni_empty)"
+        done
+        [[ -n "$server_name" ]] && break
+        log_error "$(t common.reality.sni_empty)"
+    done
     ask dest "$(t mh.reality.ask_dest)" "${server_name}:443"
 
     # P2: advisory validation of the (SNI, dest) pair via the shared openssl-only
@@ -213,10 +240,16 @@ mh_reality_add_node() {
         log_step "$(t common.reality.checking_dest "$dest" "$server_name")"
         if reality_validate_dest "$dest" "$server_name"; then
             [[ -n "$REALITY_DEST_RTT_MS" ]] && log_info "$(t common.reality.dest_ok "$REALITY_DEST_RTT_MS")"
-            break
+            # 共享 CDN 前端：握手一切正常，但会让 Reality 的回落变成通往整个 CDN 的
+            # 免费隧道。告警而非否决 —— 判定可能误伤，风险由使用者自行取舍。
+            # 选择继续时给该节点打开回落限速作为兜底。
+            [[ "$REALITY_DEST_WARN" != shared_frontend:* ]] && break
+            log_warn "$(t common.reality.dest_shared_frontend "${REALITY_DEST_WARN#shared_frontend:}")"
+            ask_yn "$(t common.reality.proceed_anyway)" N && { _dest_shared=1; break; }
+        else
+            log_warn "$(t common.reality.dest_check_failed "${REALITY_DEST_REASON:-unknown}")"
+            ask_yn "$(t common.reality.proceed_anyway)" N && break
         fi
-        log_warn "$(t common.reality.dest_check_failed "${REALITY_DEST_REASON:-unknown}")"
-        ask_yn "$(t common.reality.proceed_anyway)" N && break
         ask server_names_raw "$(t mh.reality.ask_sni)" "$MH_REALITY_DEFAULT_SN"
         server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
         ask dest "$(t mh.reality.ask_dest)" "${server_name}:443"
@@ -297,11 +330,13 @@ mh_reality_add_node() {
         --arg flow        "$flow" \
         --argjson short   "[\"$short_id\"]" \
         --arg listen_addr "$listen_addr" \
+        --argjson limit_fb "$([[ $_dest_shared == 1 ]] && echo true || echo false)" \
         '{
           tag: $tag, port: $port, public_port: $public_port, uuid: $uuid,
           private_key: $priv_key, public_key: $pub_key,
           server_name: $server_name, dest: $dest, flow: $flow,
-          short_ids: $short, listen_addr: $listen_addr
+          short_ids: $short, listen_addr: $listen_addr,
+          limit_fallback: $limit_fb
         }')
 
     local _prev_store; _prev_store=$(_mh_reality_load)

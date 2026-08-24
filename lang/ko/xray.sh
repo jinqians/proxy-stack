@@ -447,7 +447,6 @@ MSG[xray.reality.cert_note]="Reality itself does not need a certificate. This ce
   Without a certificate, camouflage appears as a plain TLS error and is easier to identify."
 MSG[xray.reality.dest_local_https]="Camouflage target set to 127.0.0.1:8443 (local HTTPS site)"
 MSG[xray.reality.no_cert_fallback]="No certificate; local HTTPS camouflage site cannot be created. Falling back to public-domain camouflage."
-MSG[xray.reality.dest_public_fallback]="Camouflage target fell back to %s (public domain)"
 MSG[xray.reality.ask_discover_sni]="Use mapping engine to discover same-network/same-datacenter camouflage domain?"
 MSG[xray.reality.picked_sni]="Using discovered camouflage target: SNI=%s dest=%s"
 MSG[xray.reality.ask_sni]="Camouflage SNI (for example <your-chosen-domain>)"

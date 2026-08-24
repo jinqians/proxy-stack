@@ -447,7 +447,6 @@ MSG[xray.reality.cert_note]="Reality 本身不需要证书。这个证书用于�
   如果没有证书，伪装会表现为普通 TLS 错误，较容易被识别。"
 MSG[xray.reality.dest_local_https]="伪装目标已设置为 127.0.0.1:8443（本机 HTTPS 站点）"
 MSG[xray.reality.no_cert_fallback]="无证书，本机 HTTPS 伪装站点无法建立，已回退为公共域名伪装。"
-MSG[xray.reality.dest_public_fallback]="伪装目标已回退为 %s（公共域名）"
 MSG[xray.reality.ask_discover_sni]="是否用测绘引擎发现同网络/同机房的伪装域名？"
 MSG[xray.reality.picked_sni]="已选用发现的伪装目标：SNI=%s dest=%s"
 MSG[xray.reality.ask_sni]="伪装 SNI（例如 <你挑选的域名>）"

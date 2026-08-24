@@ -276,6 +276,12 @@ _rwd_check_dest() {
         if [[ "$RWD_CHECK_RTT_MS" =~ ^[0-9]+$ ]] && (( RWD_CHECK_RTT_MS > RWD_LATENCY_CEIL_MS )); then
             RWD_CHECK_WARN+="${RWD_CHECK_WARN:+,}slow_${RWD_CHECK_RTT_MS}ms"
         fi
+        # 放在链尾：只对已经通过全部硬性检查的候选跑，避免给坏候选白花握手。
+        # 共享 CDN 前端不是健康问题而是被白嫖的风险，所以走 WARN 而非否决 ——
+        # 它会显示在候选表的 warn 列并落进 rwd 日志，由使用者判断是否换掉。
+        if reality_dest_is_shared_frontend "$host" "$port"; then
+            RWD_CHECK_WARN+="${RWD_CHECK_WARN:+,}shared_frontend_${REALITY_DEST_SHARED_BY}"
+        fi
         rm -f "$out_file" "$cert_file"
         return 0
     fi

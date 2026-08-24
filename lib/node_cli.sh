@@ -350,10 +350,29 @@ _node_cli_defaults() {
             json=$(printf '%s' "$json" | jq -c \
                 --arg uuid "$(uuid_gen)" --arg sid "$(openssl rand -hex 4)" '
                 .uuid //= $uuid |
-                .server_name //= "www.cloudflare.com" |
-                .dest //= "www.cloudflare.com:443" |
                 .flow //= "xtls-rprx-vision" |
                 .short_ids //= [$sid]') || return 1
+            # 不给伪装目标兜底默认值。非交互路径没人可问，而任何写死的知名域名都可能
+            # 是（或变成）多租户 CDN 前端，那会让 Reality 的回落把本机变成通往整个 CDN
+            # 的免费中继。宁可让调用方显式指定，也不静默建出一个有洞的节点。
+            local _sn _dest
+            _sn=$(printf '%s' "$json"   | jq -r '.server_name // empty')
+            _dest=$(printf '%s' "$json" | jq -r '.dest // empty')
+            if [[ -z "$_sn" || -z "$_dest" ]]; then
+                _node_cli_err "Reality camouflage target is required; pass --server-name and --dest (pick a single-tenant site, ideally in your own ASN — a target behind a shared CDN frontend lets anyone use this host as a free relay)"
+                return 1
+            fi
+            # 与交互流程一致：命中共享前端时告警并给该节点打开回落限速兜底。
+            local _dh _dp
+            if [[ "$_dest" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+                _dh="${BASH_REMATCH[1]}"; _dp="${BASH_REMATCH[2]}"
+            else
+                _dh="${_dest%:*}"; _dp="${_dest##*:}"
+            fi
+            if reality_dest_is_shared_frontend "$_dh" "$_dp"; then
+                _node_cli_err "warning: dest ${_dest} is a shared CDN frontend (probe ${REALITY_DEST_SHARED_BY} got a valid certificate on the same IP); enabling REALITY fallback rate limiting for this node"
+                json=$(printf '%s' "$json" | jq -c '.limit_fallback = true') || return 1
+            fi
             if [[ "$core" == "xray" ]]; then
                 json=$(printf '%s' "$json" | jq -c --arg p "$port" '
                   .listen_addr //= "0.0.0.0" |
@@ -390,8 +409,17 @@ _node_cli_defaults() {
             mode=$(printf '%s' "$json" | jq -r '.mode')
             if [[ "$mode" == "reality-layer" ]]; then
                 sid=$(openssl rand -hex 4)
-                json=$(printf '%s' "$json" | jq -c --arg sid "$sid" \
-                    '.server_name //= "www.microsoft.com" | .short_id //= $sid') || return 1
+                json=$(printf '%s' "$json" | jq -c --arg sid "$sid" '.short_id //= $sid') || return 1
+                # 与 reality 同理：reality-layer 的 dest 就是 server_name:443，不给兜底默认值。
+                local _xsn; _xsn=$(printf '%s' "$json" | jq -r '.server_name // empty')
+                if [[ -z "$_xsn" ]]; then
+                    _node_cli_err "XHTTP reality-layer camouflage target is required; pass --server-name (its dest is <server-name>:443 — pick a single-tenant site, ideally in your own ASN)"
+                    return 1
+                fi
+                if reality_dest_is_shared_frontend "$_xsn" 443; then
+                    _node_cli_err "warning: server-name ${_xsn} is a shared CDN frontend (probe ${REALITY_DEST_SHARED_BY} got a valid certificate on the same IP); enabling REALITY fallback rate limiting for this node"
+                    json=$(printf '%s' "$json" | jq -c '.limit_fallback = true') || return 1
+                fi
                 private=$(printf '%s' "$json" | jq -r '.private_key // empty')
                 public=$(printf '%s' "$json" | jq -r '.public_key // empty')
                 if [[ -z "$private" || -z "$public" ]]; then

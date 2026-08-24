@@ -70,6 +70,8 @@ MSG[common.not_configured]="Not configured"
 MSG[common.reality.checking_dest]="Checking camouflage target %s against SNI %s..."
 MSG[common.reality.dest_ok]="Camouflage target reachable and Reality-compatible (%sms)."
 MSG[common.reality.dest_check_failed]="Camouflage target check failed: %s. A mismatched SNI/dest installs but no client can complete the Reality handshake."
+MSG[common.reality.dest_shared_frontend]="Camouflage target sits on a multi-tenant shared CDN frontend (probe %s obtained a valid certificate on the same IP). REALITY relays unauthenticated connections to it verbatim, so an attacker only needs to forge the SNI to turn this host into a free relay into the whole CDN. Prefer a single-tenant site in your own ASN that is not a content-distribution source."
+MSG[common.reality.sni_empty]="Camouflage SNI cannot be empty. Use the mapping engine to discover a target in your own ASN, or enter a domain you have vetted yourself."
 MSG[common.reality.proceed_anyway]="Use this SNI/dest pair anyway?"
 
 # ── manager.sh (update / status overview / main loop) ─────────────────────────

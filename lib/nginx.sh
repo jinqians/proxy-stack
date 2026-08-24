@@ -238,6 +238,18 @@ nginx_uninstall() {
 
 _sni_map_file() { echo "$NGINX_STREAM_D/00-sni-map.conf"; }
 
+# 未知 SNI 的兜底。空值让 ngx_stream_proxy 解析 proxy_pass 失败并直接关闭连接，
+# 不建立任何上游连接 —— 零回源流量。
+#
+# 为什么必须是黑洞而不能兜底到 Reality：Reality 会把「认证未通过」的连接原样转发给
+# dest 以维持伪装（官方语义）。一旦未知 SNI 也被喂给 Reality，任何人只要连上 443 就能
+# 让本机替他跑一趟到 dest 的流量；若 dest 又是 Cloudflare 这类多租户共享前端，攻击者
+# 只需把 ClientHello 的 SNI 填成任意 CF 站点，就能拿到一条通往全 CF 网络的免费隧道。
+#
+# 黑洞化不削弱伪装：拿本机真实 serverName 来探测的连接仍在 ENTRIES 里命中并走完整的
+# Reality 回落；被关掉的只有随机 SNI 扫描，而对未知 SNI 断连正是普通服务器的行为。
+SNI_DEFAULT_BLACKHOLE='default     "";'
+
 # Ensure the stream module is usable. Checks the real .so on disk, installs the
 # distro module package if it's missing, and returns non-zero if stream STILL
 # isn't available afterwards — so callers can warn instead of writing a
@@ -270,18 +282,13 @@ init_stream_sni() {
     mkdir -p "$NGINX_STREAM_D" "$NGINX_HTTP_D" "$NGINX_SSL_DIR"
     _nginx_ensure_stream_module
 
-    local reality_port; reality_port=$(state_get "reality_local_port")
-    reality_port="${reality_port:-1443}"
-    local web_port; web_port=$(state_get "web_local_port")
-    web_port="${web_port:-8443}"
-
     cat > "$(_sni_map_file)" <<EOF
 # PSM-managed SNI map — edit via PSM, not directly
 map \$ssl_preread_server_name \$psm_backend {
     # domain → upstream entries are injected below
     # PSM:ENTRIES:BEGIN
     # PSM:ENTRIES:END
-    default     127.0.0.1:${reality_port};
+    ${SNI_DEFAULT_BLACKHOLE}
 }
 
 server {
@@ -317,6 +324,8 @@ nginx_ensure_stream_sni() {
         # 幂等重放 443/tcp 放行：挂载流程每次经过这里，覆盖建表后才启用防火墙的场景
         source "$LIB_DIR/system.sh"
         firewall_open_port 443 tcp
+        # 老安装的 default 可能仍指向 Reality，收敛成黑洞（幂等）
+        _sni_harden_default
     else
         init_stream_sni
     fi
@@ -341,18 +350,23 @@ nginx_ensure_local_http() {
     nginx_test_reload
 }
 
-_sni_set_default_backend() {
-    local addr="$1"   # e.g. "127.0.0.1:1443"
+# 把 map 的 default 行收敛成黑洞。对已存在的安装是一次性迁移：老版本把 Reality 设成
+# 了未知 SNI 的兜底后端，那正是被当作免费中继白嫖流量的入口（见 SNI_DEFAULT_BLACKHOLE）。
+# 已挂载的节点都各自有显式 ENTRIES 条目，不依赖 default，所以收敛不影响正常连接。
+# 幂等：已是黑洞则不写盘、不 reload。
+_sni_harden_default() {
     local file; file="$(_sni_map_file)"
-    if [[ ! -f "$file" ]]; then
-        log_warn "$(t nginx.sni.map_missing_init)"
-        nginx_ensure_stream_sni || return 1
-    fi
+    [[ -f "$file" ]] || return 0
+
+    local old
+    old=$(awk '$1 == "default" {gsub(/;$/, "", $2); print $2; exit}' "$file")
+    [[ -z "$old" || "$old" == '""' ]] && return 0
+
     local tmp; tmp=$(mktemp)
-    awk -v addr="$addr" '$1 == "default" {$0 = "    default     " addr ";"} {print}' "$file" > "$tmp" \
+    awk -v repl="    ${SNI_DEFAULT_BLACKHOLE}" '$1 == "default" {$0 = repl} {print}' "$file" > "$tmp" \
         && mv "$tmp" "$file"
     nginx_test_reload
-    log_ok "$(t nginx.sni.default_backend "$addr")"
+    log_ok "$(t nginx.sni.default_blackholed "$old")"
 }
 
 _sni_add_entry() {
