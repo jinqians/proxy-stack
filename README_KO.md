@@ -169,6 +169,7 @@ manager.sh --traffic-check         # 트래픽 통계 점검 1회 실행
 manager.sh --tgbot                 # Telegram 봇 데몬 시작
 manager.sh --reality-watchdog      # Reality 위장 대상 생존 점검 1회 실행
 manager.sh --vpngate-watchdog      # VPNGate 가정용 터널 1회 점검, 끊겼으면 노드 자동 교체
+manager.sh --ruleset-update        # 구독형 규칙셋 1회 갱신 (Xray는 내용이 바뀌면 재시작)
 manager.sh --honeypot-alert <ip> <port>  # 허니팟 적중 알림 (fail2ban이 호출)
 manager.sh --health-report         # 일일 점검 리포트 1회 발송
 ```
@@ -194,6 +195,7 @@ bash /opt/psm/uninstall.sh
 - **Reality 위장 도메인 지능형 발견** — Reality / XHTTP 위장 SNI 구성 시 사이버 공간 매핑 엔진(Netlas / Quake / ZoomEye / FOFA, 본인 API 키 사용, 무료 한도로 충분)을 통해 본 서버와 **같은 ASN / 같은 데이터센터**의 실제 TLS 1.3 사이트를 위장 대상으로 자동 발견: 가깝고, 잘 알려지지 않았으며, 튜토리얼에서 남용된 대기업 도메인을 피합니다. 후보는 로컬에서 실제 핸드셰이크 검증(TLS 1.3 / X25519 / 인증서 일치)을 통과해야 채택되며, 위의 생존 후보 풀에 일괄 추가할 수 있습니다. **로컬 포트 스캔은 전혀 하지 않고**(제공업체 abuse 신고 방지) 발견은 매핑 엔진의 데이터셋으로 수행되며, 엔진 미구성 시 수동 입력으로 대체됩니다
 - **Cloudflare WARP 아웃바운드 언락** — 원클릭으로 WARP 계정을 등록해 Xray 아웃바운드에 연결, 분배 규칙과 조합해 Netflix / OpenAI 등 도메인 트래픽을 WARP로 유도
 - **VPNGate 가정용 IP 출구** — VPNGate 공개 목록에서 진짜 가정용 광대역 IP를 선별하고(ip-api 일괄 판정으로 데이터센터와 VPNGate 자체 릴레이 제외), openvpn으로 전용 터널을 올린 뒤 fwmark 아웃바운드로 분배 규칙에 연결합니다. Netflix / ChatGPT처럼 IP 소속으로 판단하는 서비스에는 가정용 출구가 보이고, 서버 자체의 기본 경로와 SSH는 전혀 영향받지 않습니다(터널은 전용 라우팅 테이블만 사용). 터널이 끊기면 해당 트래픽은 데이터센터 IP로 새지 않고 그대로 실패하며, 선택한 **같은 국가 안에서** 자동으로 장애 조치되므로 출구 국가가 몰래 바뀌지 않습니다(국가는 실제 노드가 있는 목록에서 직접 고릅니다). Xray / sing-box / mihomo가 터널 하나를 공유하므로 가정용 IP를 바꿔도 코어 설정은 그대로입니다
+- **구독형 규칙셋** — 커뮤니티 규칙 목록 URL(OpenAI.list 등)을 붙여넣고 출구를 고르면 해당 트래픽이 그 출구로 나갑니다. Xray에는 규칙셋 기능이 없어 규칙이 `config.json`에 인라인으로 전개되며(도메인과 IP는 두 규칙으로 분리 — 한 규칙 안의 필드는 AND라서 합치면 절대 매칭되지 않습니다), 그래서 세 코어 중 유일하게 재시작이 필요합니다. 매일 갱신은 내용이 실제로 바뀐 경우에만 재빌드·재시작합니다
 - **아웃바운드 분배** — 사용자 정의 아웃바운드 노드(VLESS-Reality / TLS / XHTTP, Shadowsocks, Trojan, SOCKS5), 도메인 / GeoIP / GeoSite 규칙으로 지정 아웃바운드로 전달
 
 ### sing-box 코어 (두 번째 코어)
@@ -204,6 +206,7 @@ bash /opt/psm/uninstall.sh
 - **라우팅 분배 관리** — geosite / geoip / 도메인 접미사 / IP CIDR / 인바운드 태그 → 지정 아웃바운드 또는 차단, 원탭 광고 차단·QUIC 차단 프리셋 내장
 - **아웃바운드 노드 관리** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2(Salamander 난독화) / tuic 등 10종 아웃바운드
 - **WARP 아웃바운드** — Xray 측에 등록된 WARP 계정을 재사용해 WireGuard 엔드포인트로 원클릭 연결
+- **구독형 규칙셋** — 커뮤니티 규칙 목록 URL(OpenAI.list 등)을 붙여넣고 출구를 고르면 해당 트래픽이 그 출구로 나갑니다. 네이티브 `rule_set`(로컬 source 파일, 1.10+ 자동 재적재)을 쓰므로 갱신 시 재시작이 없습니다. 적용 전 점검 리포트로 사용 가능 개수와 버려진 클라이언트 전용 유형(PROCESS-NAME 등)을 모두 알려주고, 갱신 시 규칙 수를 비교해 급변은 확인 전까지 거부합니다
 - **VPNGate 가정용 출구** — Xray와 동일한 가정용 터널을 공유하며 아웃바운드는 `direct` + `routing_mark`라 노드를 바꿔도 설정 변경이 없습니다(sing-box 1.12+는 `domain_resolver`로 IPv4 고정)
 - **트랜잭션형 설정 변경** — 변경 전 자동 백업, `sing-box check` 검증 실패 시 설정과 노드 저장소를 자동 롤백해 잘못된 설정이 서비스 기동을 막는 일이 없습니다
 
@@ -213,6 +216,7 @@ bash /opt/psm/uninstall.sh
 - **Clash 방식 라우팅** — `proxies` / `proxy-groups` / `rules`를 직접 관리하며 DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME을 지원하고 `MATCH,DIRECT`를 고정 fallback으로 둡니다
 - **아웃바운드 노드 관리** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard 등 아웃바운드 유형 지원
 - **WARP 아웃바운드 재사용** — Xray 측에 등록된 WARP 계정을 재사용해 mihomo wireguard proxy를 생성합니다
+- **구독형 규칙셋** — mihomo 쪽은 네이티브 `rule-providers`로 생성되어 코어가 interval 마다 스스로 갱신합니다. `IP-ASN`처럼 mihomo만 지원하는 유형도 그대로 살아 있습니다
 - **VPNGate 가정용 출구** — Xray와 동일한 가정용 터널을 공유하며 `type: direct` + `routing-mark` + `ip-version: ipv4` 프록시를 생성합니다. 노드 교체 시 설정 변경 불필요
 - **트랜잭션형 설정 변경** — 변경마다 설정을 재생성하고 `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`을 실행합니다. 검사 실패 시 자동 롤백되어 실행 중인 기존 설정에는 영향을 주지 않습니다
 
@@ -268,6 +272,7 @@ bash /opt/psm/uninstall.sh
 │   ├── singbox/          # sing-box 두 번째 코어 (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 라우팅 분배)
 │   ├── mihomo/           # mihomo 세 번째 코어 (Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 라우팅 분배)
 │   ├── vpngate/          # VPNGate 가정용 출구 (목록 / 판정 / openvpn 터널 / 코어 연결)
+│   ├── ruleset/          # 구독형 규칙셋 (수집 / 해석 / 점검 / sing-box·mihomo 적용)
 │   ├── security/         # SSH 강화 / Fail2ban / 허니팟
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # 데이터 볼륨 백업 등 Docker 확장

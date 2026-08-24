@@ -68,6 +68,26 @@ _route_build_xray_rule() {
         jq -n --argjson ib "$arr" --arg ot "$outtag" \
             '{"type":"field","inboundTag":$ib,"outboundTag":$ot}'
         ;;
+    ruleset)
+        # 订阅式规则集（lib/ruleset/）。Xray 没有规则集机制，只能把规则内联展开进
+        # routing rules，规则内容取自 ruleset 模块解析好的 JSON（按名字定位，避免
+        # 让本文件依赖 ruleset 模块）。
+        #
+        # 必须拆成【两条】规则：Xray 同一条 rule 里的不同字段是 AND 语义——domain
+        # 和 ip 写在一起表示「域名命中 且 IP 命中」，实际永远不会同时成立，规则看着
+        # 加上了却一次都不触发，是最难查的那种失效。返回 JSON 数组，由
+        # _route_apply_to_xray 摊平。
+        local parsed_file="$CFG_DIR/ruleset/parsed/${val}.json"
+        [[ -s "$parsed_file" ]] || return 0
+        jq -c --arg ot "$outtag" '
+            ( [ (.domain[]?         | "full:"    + .),
+                (.domain_suffix[]?  | "domain:"  + .),
+                (.domain_keyword[]? | "keyword:" + .) ] ) as $dm
+            | ( .ip_cidr // [] ) as $ip
+            | ( if ($dm | length) > 0 then [{type:"field", domain:$dm, outboundTag:$ot}] else [] end )
+            + ( if ($ip | length) > 0 then [{type:"field", ip:$ip,     outboundTag:$ot}] else [] end )
+        ' "$parsed_file"
+        ;;
     esac
 }
 
@@ -91,7 +111,7 @@ _route_apply_to_xray() {
 
     # Set domainStrategy if any geosite/domain rules exist
     local needs_dns=0
-    echo "$rules" | jq -e '[.[].rule_type] | any(. == "geosite" or . == "domain")' &>/dev/null \
+    echo "$rules" | jq -e '[.[].rule_type] | any(. == "geosite" or . == "domain" or . == "ruleset")' &>/dev/null \
         && needs_dns=1
     if (( needs_dns )); then
         local tmp2; tmp2=$(mktemp)
@@ -108,7 +128,9 @@ _route_apply_to_xray() {
     for (( i=0; i<count; i++ )); do
         local entry; entry=$(echo "$rules" | jq ".[$i]")
         local xrule; xrule=$(_route_build_xray_rule "$entry")
-        [[ -n "$xrule" ]] && psm_rules=$(echo "$psm_rules" | jq ". += [$xrule]")
+        # ruleset 分支会吐一个数组（域名一条、IP 一条），其余分支吐单个对象。
+        [[ -n "$xrule" ]] && psm_rules=$(echo "$psm_rules" | jq --argjson r "$xrule" \
+            '. += (if ($r | type) == "array" then $r else [$r] end)')
     done
 
     # Insert PSM rules right after the api rule (highest routing priority)
@@ -296,7 +318,8 @@ route_menu() {
             "$(t xray.outbound.menu.delete)" \
             "$(t xray.routing.menu.warp_sep)" \
             "$(t xray.routing.menu.warp)" \
-            "$(t xray.routing.menu.vpngate)"
+            "$(t xray.routing.menu.vpngate)" \
+            "$(t xray.routing.menu.ruleset)"
 
         case "$MENU_CHOICE" in
             1) route_show;      press_enter ;;
@@ -314,6 +337,10 @@ route_menu() {
             10)
                 source "$LIB_DIR/vpngate.sh"
                 vpngate_menu xray
+                ;;
+            11)
+                source "$LIB_DIR/ruleset.sh"
+                ruleset_menu xray
                 ;;
             0) return ;;
         esac

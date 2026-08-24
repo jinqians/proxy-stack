@@ -87,6 +87,11 @@ case "${1:-}" in
         vg_watchdog_run
         exit $?
         ;;
+    --ruleset-update)
+        source "$LIB_DIR/ruleset/apply.sh"
+        rs_update_cli
+        exit $?
+        ;;
     --honeypot-alert)
         source "$LIB_DIR/security/honeypot.sh"
         hp_alert "${2:-}" "${3:-}"

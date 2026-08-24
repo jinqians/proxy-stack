@@ -1,0 +1,61 @@
+# en/ruleset.sh — subscription rule-set strings (assign MSG[...] only).
+MSG[rs.status.title]="== Rule Sets (%s) ========================="
+MSG[rs.status.purpose]="Rules here pick the EXIT. Decide what goes through the proxy at all on the client — that way domestic traffic never reaches this box."
+MSG[rs.list.empty]="No rule sets added yet"
+
+MSG[rs.fetch.fetching]="Fetching rule list: %s"
+MSG[rs.fetch.https_only]="https links only: this content decides which traffic leaves through which exit, and plaintext transport hands that decision to anyone on the path"
+MSG[rs.fetch.fail]="Fetch failed: %s (unreachable, 404, or over the size limit)"
+MSG[rs.fetch.empty]="The fetched list is empty"
+
+MSG[rs.parse.fail]="Could not parse the rule list"
+MSG[rs.parse.nothing]="This list has no rules a server can use (it may be entirely client-only types such as PROCESS-NAME)"
+MSG[rs.parse.too_big]="%s rules exceeds the %s limit; refused"
+MSG[rs.parse.too_big_hint]="A full routing table belongs on the client: by the time traffic reaches this box, the latency and bandwidth are already spent. Keep the server to focused lists (OpenAI / Netflix and the like)"
+
+MSG[rs.report.title]="Rule list check"
+MSG[rs.report.counts]="%s usable rules: domains %s / keywords %s / IP ranges %s"
+MSG[rs.report.dropped]="Dropped: %s"
+MSG[rs.report.dropped_why]="Why: PROCESS-NAME / USER-AGENT and friends are client-side facts a server cannot see; IP-ASN is supported by mihomo only"
+MSG[rs.report.big_warn]="%s rules is above %s: mihomo matches classical rules linearly, which costs CPU under load"
+
+MSG[rs.ask.url]="Rule list URL (https)"
+MSG[rs.ask.name]="Name for this rule set"
+MSG[rs.ask.bad_name]="Names may use lowercase letters, digits, underscore and hyphen, up to 32 characters"
+MSG[rs.ask.confirm]="Use this rule list?"
+MSG[rs.ask.bad_index]="Invalid choice"
+MSG[rs.ask.pick_set]="Rule set number"
+MSG[rs.ask.remove]="Remove rule set %s?"
+
+MSG[rs.preset.title]="Common rule sets (from blackmatrix7, community maintained)"
+MSG[rs.preset.hint]="All focused lists, tens to a couple thousand rules; full routing tables belong on the client"
+MSG[rs.preset.prompt]="Rule set"
+
+MSG[rs.target.title]="Which exit should this rule set use?"
+MSG[rs.target.prompt]="Exit"
+
+MSG[rs.bind.remark]="rule set %s"
+MSG[rs.bind.done]="Rule set %s is now active on %s, exit: %s"
+MSG[rs.apply.write_fail]="Could not write the %s rule-set file"
+MSG[rs.apply.fail]="Applying the %s config failed; rolled back"
+MSG[rs.core.unsupported]="This core does not support rule sets yet: %s"
+MSG[rs.add.reminder]="Note: the list is maintained upstream. On update the rule count is compared first, and a wild swing is refused pending your review"
+
+MSG[rs.update.done]="%s updated: %s -> %s rules"
+MSG[rs.update.suspicious]="%s went from %s to %s rules — too wild a swing, update refused (upstream may have been changed or poisoned; review it and re-add)"
+
+MSG[rs.remove.done]="Rule set %s removed"
+MSG[rs.remove.unbound]="Rule set %s unbound from %s (another core still uses it, local copy kept)"
+
+MSG[rs.menu.title]="Rule Sets (%s)"
+MSG[rs.menu.add_preset]="Add a common rule set"
+MSG[rs.menu.add_custom]="Add a custom URL"
+MSG[rs.menu.update]="Update all rule sets now"
+MSG[rs.menu.remove]="Remove a rule set"
+MSG[rs.menu.timer]="Daily auto-update: on / off"
+MSG[rs.status.timer_on]="Daily auto-update: on"
+MSG[rs.status.timer_off]="Daily auto-update: off (lists will not follow upstream)"
+MSG[rs.timer.enabled]="Daily auto-update enabled (once a day, randomly delayed up to an hour so every install does not hit the same repo at the same second)"
+MSG[rs.timer.disabled]="Daily auto-update disabled"
+MSG[rs.update.auto_on]="Daily auto-update was switched on as well: mihomo refreshes its provider itself, but the sing-box rule-set file and Xray's inlined rules are rewritten by this timer"
+MSG[rs.apply.xray_inline]="Xray has no rule-set mechanism, so the rules were inlined into its config and it was restarted; later content updates restart it once too (mihomo / sing-box do not need this)"

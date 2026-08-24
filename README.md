@@ -171,6 +171,7 @@ manager.sh --traffic-check         # 执行一次流量统计检查
 manager.sh --tgbot                 # 启动 Telegram Bot 守护进程
 manager.sh --reality-watchdog      # 执行一次 Reality 伪装目标测活
 manager.sh --vpngate-watchdog      # 检查一次 VPNGate 免费家宽隧道，掉线时自动换节点
+manager.sh --ruleset-update        # 更新一次订阅式规则集（Xray 侧内容变化时会重启）
 manager.sh --honeypot-alert <ip> <port>  # 蜜罐命中告警（由 fail2ban 调用）
 manager.sh --health-report         # 发送一次每日体检报告
 ```
@@ -212,6 +213,7 @@ bash /opt/psm/uninstall.sh
 - **Reality 伪装域名智能发现** — 配置 Reality / XHTTP 伪装 SNI 时，可通过网络空间测绘引擎（Netlas / Quake / ZoomEye / FOFA，用你自己的 API Key，免费额度即可）自动发现与本机 **同 ASN / 同机房** 的真实 TLS 1.3 站点作为伪装目标：就近、冷门、避开被教程用烂的大厂域名。候选会在本地逐个做真实握手校验（TLS 1.3 / X25519 / 证书匹配）后才采用，并可一键批量加入上面的测活候选池。**全程不做本机端口扫描**（避免触发服务商 abuse），发现由测绘引擎的数据集完成；未配置引擎时回退为手动输入
 - **Cloudflare WARP 出站解锁** — 一键注册 WARP 身份并接入 Xray 出站，配合分流规则把 Netflix / OpenAI 等域名的流量导到 WARP
 - **VPNGate 免费家宽 IP 出口** — 从 VPNGate 公开名单里筛出真正的住宅宽带 IP（ip-api 批量判定归属，剔除机房与 VPNGate 自营中继），用 openvpn 拉一条独立隧道，再以打 fwmark 的出站接进分流规则：Netflix / ChatGPT 这类按 IP 归属判风控的服务看到的是家宽出口，而机器自身的默认出网与 SSH 全程不受影响（隧道只写独立路由表，绝不碰主表）。隧道断开时命中规则的流量直接失败而不是漏回机房 IP，国家由你从名单里挑（列出真正有节点的国家和各自节点数），节点挂掉后自动在**同一个国家内**故障转移，出口国不会悄悄漂走；同一条隧道被 Xray / sing-box / mihomo 共用，换家宽 IP 时三个核心的配置一个字都不用改
+- **规则集分流（订阅式）** — 贴一个社区规则表 URL（如 OpenAI.list）并选一个出口，该表描述的流量就从这个出口走。Xray 没有规则集机制，规则会内联展开进 `config.json`（域名与 IP 拆成两条规则——同一条里是 AND 语义，合并写会让规则永远不触发），也因此是三核里唯一需要重启才能生效的；每日自动更新只在内容真的变了时才重建重启
 - **出站分流** — 自定义出站节点（VLESS-Reality / TLS / XHTTP、Shadowsocks、Trojan、SOCKS5），按域名 / GeoIP / GeoSite 规则转发到指定出站
 
 ### sing-box 内核（第二内核）
@@ -222,6 +224,7 @@ bash /opt/psm/uninstall.sh
 - **路由分流管理** — geosite / geoip / 域名后缀 / IP CIDR / 入站标签 → 指定出站或拦截，内置一键去广告、禁 QUIC 预设
 - **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks / anytls / snell / hysteria2（Salamander 混淆）/ tuic 共 10 种出站类型
 - **WARP 出站** — 复用 Xray 侧注册的 WARP 账户，一键接入 WireGuard endpoint
+- **规则集分流（订阅式）** — 贴一个社区规则表 URL（如 OpenAI.list）并选一个出口，该表描述的流量就从这个出口走。走原生 `rule_set`（本地 source 文件，1.10+ 内核自己重载），刷新不重启、不断连。应用前先出体检报告：可用条数、被丢弃的客户端专用类型（PROCESS-NAME 等）一律明说；更新时比对条数，暴涨暴跌拦下来要人工确认
 - **VPNGate 免费家宽出口** — 与 Xray 共用同一条家宽隧道，出站是 `direct` + `routing_mark`，换节点无需改配置（sing-box 1.12+ 自动改用 `domain_resolver` 锁 IPv4）
 - **443 端口复用** — Reality 与 AnyTLS 节点可挂到 Nginx 443 SNI 分流，与 Xray / mihomo 节点共用公网 443，客户端只需连 443；也可继续直连独占端口
 - **事务化配置变更** — 每次变更前自动备份，`sing-box check` 校验失败自动回滚配置与节点存储，不会留下坏配置导致服务起不来
@@ -232,6 +235,7 @@ bash /opt/psm/uninstall.sh
 - **Clash 规则分流** — 直接管理 `proxies` / `proxy-groups` / `rules`，支持 DOMAIN-SUFFIX / DOMAIN-KEYWORD / GEOSITE / GEOIP / IP-CIDR / IN-NAME，并固定兜底 `MATCH,DIRECT`
 - **出站节点管理** — ss / vless-reality / vless-tls / trojan / socks5 / anytls / snell / hysteria2 / tuic / wireguard 等出站类型
 - **WARP 出站复用** — 复用 Xray 侧注册的 WARP 账户，生成 mihomo wireguard proxy
+- **规则集分流（订阅式）** — 同上，mihomo 侧直接生成原生 `rule-providers`，URL 交给内核自己按 interval 刷新；规则表里的 `IP-ASN` 这类只有 mihomo 支持的类型也能吃到
 - **VPNGate 免费家宽出口** — 与 Xray 共用同一条家宽隧道，生成 `type: direct` + `routing-mark` + `ip-version: ipv4` 的代理，换节点无需改配置
 - **443 端口复用** — Reality 与 AnyTLS 节点可挂到 Nginx 443 SNI 分流，与 Xray / sing-box 节点共用公网 443，客户端只需连 443；也可继续直连独占端口
 - **事务化配置变更** — 每次变更都会重建配置并执行 `mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml`，校验失败自动回滚，不影响正在运行的旧配置
@@ -288,6 +292,7 @@ bash /opt/psm/uninstall.sh
 │   ├── singbox/          # sing-box 第二内核（Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 路由分流）
 │   ├── mihomo/           # mihomo 第三内核（Reality / SS2022 / Hysteria2 / AnyTLS / Snell / 路由分流）
 │   ├── vpngate/          # VPNGate 免费家宽 IP 出口（名单获取 / 家宽判定 / openvpn 隧道 / 三核接入）
+│   ├── ruleset/          # 订阅式规则集（拉取 / 解析 / 体检 / 落地到 sing-box、mihomo）
 │   ├── security/         # SSH 加固 / Fail2ban / 蜜罐
 │   ├── cloudflare/       # Tunnel / Access
 │   ├── docker/           # 数据卷备份等 Docker 扩展

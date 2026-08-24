@@ -1,0 +1,61 @@
+# zh/ruleset.sh — 订阅式规则集中文文案（仅赋值 MSG[...]，勿 declare）。
+MSG[rs.status.title]="══ 规则集分流（%s）══════════════════════"
+MSG[rs.status.purpose]="这里的规则用于「选出口」；「走不走代理」请在客户端配置，那样国内流量根本不会绕到本机"
+MSG[rs.list.empty]="还没有添加任何规则集"
+
+MSG[rs.fetch.fetching]="正在拉取规则表：%s"
+MSG[rs.fetch.https_only]="只接受 https 链接：这份内容会决定哪些流量走哪个出口，明文传输等于把这个决定权交给路上的任何人"
+MSG[rs.fetch.fail]="拉取失败：%s（不可达、404，或超过大小上限）"
+MSG[rs.fetch.empty]="拉到的内容是空的"
+
+MSG[rs.parse.fail]="规则表解析失败"
+MSG[rs.parse.nothing]="这份表里没有任何服务端能用的规则（可能整表都是 PROCESS-NAME 等客户端专用类型）"
+MSG[rs.parse.too_big]="规则条数 %s 超过上限 %s，已拒绝"
+MSG[rs.parse.too_big_hint]="这种全量分流表属于客户端的活：流量已经跨洋到本机才判断直连，钱和延迟都白花了。服务端只放专题表（OpenAI / Netflix 这类）"
+
+MSG[rs.report.title]="规则表体检"
+MSG[rs.report.counts]="可用规则 %s 条：域名 %s / 关键字 %s / IP 段 %s"
+MSG[rs.report.dropped]="已丢弃：%s"
+MSG[rs.report.dropped_why]="丢弃原因：PROCESS-NAME / USER-AGENT 等是客户端才有的信息，服务端看不到；IP-ASN 只有 mihomo 支持"
+MSG[rs.report.big_warn]="共 %s 条，超过 %s：mihomo 的 classical 规则是逐条线性匹配，高并发下会吃 CPU"
+
+MSG[rs.ask.url]="规则表 URL（https）"
+MSG[rs.ask.name]="给这个规则集起个名字"
+MSG[rs.ask.bad_name]="名字只能用小写字母、数字、下划线和短横线，且不超过 32 个字符"
+MSG[rs.ask.confirm]="确认使用这份规则表？"
+MSG[rs.ask.bad_index]="选择无效"
+MSG[rs.ask.pick_set]="选择规则集序号"
+MSG[rs.ask.remove]="确认移除规则集 %s？"
+
+MSG[rs.preset.title]="常用规则集（来自 blackmatrix7，社区维护）"
+MSG[rs.preset.hint]="都是专题表，几十到上千条不等；全量分流表请放在客户端"
+MSG[rs.preset.prompt]="选择规则集"
+
+MSG[rs.target.title]="选择这份规则要走的出口"
+MSG[rs.target.prompt]="选择出口"
+
+MSG[rs.bind.remark]="规则集 %s"
+MSG[rs.bind.done]="规则集 %s 已接入 %s，出口：%s"
+MSG[rs.apply.write_fail]="%s 规则集文件写入失败"
+MSG[rs.apply.fail]="%s 配置应用失败，已回滚"
+MSG[rs.core.unsupported]="该核心暂不支持规则集：%s"
+MSG[rs.add.reminder]="提示：规则集内容由上游仓库维护，更新时本工具会先比对条数，异常暴涨暴跌会拦下来要人工确认"
+
+MSG[rs.update.done]="%s 已更新：%s 条 → %s 条"
+MSG[rs.update.suspicious]="%s 的规则条数从 %s 变成 %s，波动异常，已拒绝本次更新（上游可能被改动或投毒，请人工确认后重新添加）"
+
+MSG[rs.remove.done]="规则集 %s 已移除"
+MSG[rs.remove.unbound]="规则集 %s 已从 %s 解绑（其它核心仍在使用，本地副本保留）"
+
+MSG[rs.menu.title]="规则集分流（%s）"
+MSG[rs.menu.add_preset]="添加常用规则集"
+MSG[rs.menu.add_custom]="添加自定义 URL"
+MSG[rs.menu.update]="立即更新全部规则集"
+MSG[rs.menu.remove]="移除规则集"
+MSG[rs.menu.timer]="每日自动更新：开 / 关"
+MSG[rs.status.timer_on]="每日自动更新：开"
+MSG[rs.status.timer_off]="每日自动更新：关（规则表不会跟上游更新）"
+MSG[rs.timer.enabled]="每日自动更新已开启（每天一次，随机推迟最多 1 小时，避免大家同一秒去拉同一个仓库）"
+MSG[rs.timer.disabled]="每日自动更新已关闭"
+MSG[rs.update.auto_on]="已顺带开启每日自动更新：mihomo 的规则由内核自己刷新，但 sing-box 的规则集文件和 Xray 的内联规则都得靠这个定时任务重写"
+MSG[rs.apply.xray_inline]="Xray 没有规则集机制，规则已内联进配置并重启生效；后续内容更新也会重启一次（mihomo / sing-box 不需要）"

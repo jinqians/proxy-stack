@@ -1,0 +1,61 @@
+# ko/ruleset.sh — 구독형 규칙셋 한국어 문구 (MSG[...] 할당만).
+MSG[rs.status.title]="== 규칙셋 분배 (%s) ======================="
+MSG[rs.status.purpose]="여기 규칙은 '출구 선택'용입니다. '프록시를 거칠지 말지'는 클라이언트에서 정하세요 — 그래야 국내 트래픽이 이 서버까지 오지 않습니다."
+MSG[rs.list.empty]="추가된 규칙셋이 없습니다"
+
+MSG[rs.fetch.fetching]="규칙 목록을 가져오는 중: %s"
+MSG[rs.fetch.https_only]="https 링크만 허용합니다. 이 내용이 어떤 트래픽이 어느 출구로 나갈지를 결정하므로, 평문 전송은 그 결정권을 경로상의 누구에게나 넘기는 셈입니다"
+MSG[rs.fetch.fail]="가져오기 실패: %s (접속 불가, 404 또는 용량 초과)"
+MSG[rs.fetch.empty]="가져온 목록이 비어 있습니다"
+
+MSG[rs.parse.fail]="규칙 목록을 해석하지 못했습니다"
+MSG[rs.parse.nothing]="서버에서 쓸 수 있는 규칙이 없습니다 (전부 PROCESS-NAME 같은 클라이언트 전용 유형일 수 있습니다)"
+MSG[rs.parse.too_big]="규칙 %s개는 상한 %s개를 초과해 거부했습니다"
+MSG[rs.parse.too_big_hint]="전체 분배 테이블은 클라이언트의 몫입니다. 트래픽이 이 서버에 도달한 시점에 이미 지연과 대역폭은 소모됐습니다. 서버에는 OpenAI / Netflix 같은 주제별 목록만 두세요"
+
+MSG[rs.report.title]="규칙 목록 점검"
+MSG[rs.report.counts]="사용 가능한 규칙 %s개: 도메인 %s / 키워드 %s / IP 대역 %s"
+MSG[rs.report.dropped]="버려진 항목: %s"
+MSG[rs.report.dropped_why]="이유: PROCESS-NAME / USER-AGENT 등은 클라이언트에만 있는 정보라 서버가 볼 수 없고, IP-ASN은 mihomo만 지원합니다"
+MSG[rs.report.big_warn]="규칙 %s개는 %s개를 넘습니다. mihomo의 classical 규칙은 순차 매칭이라 부하가 걸리면 CPU를 씁니다"
+
+MSG[rs.ask.url]="규칙 목록 URL (https)"
+MSG[rs.ask.name]="이 규칙셋의 이름"
+MSG[rs.ask.bad_name]="이름은 소문자, 숫자, 밑줄, 하이픈만 사용하며 32자 이하여야 합니다"
+MSG[rs.ask.confirm]="이 규칙 목록을 사용할까요?"
+MSG[rs.ask.bad_index]="잘못된 선택입니다"
+MSG[rs.ask.pick_set]="규칙셋 번호"
+MSG[rs.ask.remove]="규칙셋 %s 을(를) 제거할까요?"
+
+MSG[rs.preset.title]="자주 쓰는 규칙셋 (blackmatrix7, 커뮤니티 관리)"
+MSG[rs.preset.hint]="모두 주제별 목록이며 수십~수천 개 수준입니다. 전체 분배 테이블은 클라이언트에 두세요"
+MSG[rs.preset.prompt]="규칙셋"
+
+MSG[rs.target.title]="이 규칙셋이 사용할 출구를 선택하세요"
+MSG[rs.target.prompt]="출구"
+
+MSG[rs.bind.remark]="규칙셋 %s"
+MSG[rs.bind.done]="규칙셋 %s 을(를) %s 에 적용했습니다. 출구: %s"
+MSG[rs.apply.write_fail]="%s 규칙셋 파일을 쓰지 못했습니다"
+MSG[rs.apply.fail]="%s 설정 적용에 실패해 롤백했습니다"
+MSG[rs.core.unsupported]="이 코어는 아직 규칙셋을 지원하지 않습니다: %s"
+MSG[rs.add.reminder]="참고: 목록은 상위 저장소가 관리합니다. 갱신 시 규칙 수를 먼저 비교하며, 급격한 변동은 확인 전까지 거부됩니다"
+
+MSG[rs.update.done]="%s 갱신 완료: %s개 → %s개"
+MSG[rs.update.suspicious]="%s 의 규칙 수가 %s개에서 %s개로 급변해 이번 갱신을 거부했습니다 (상위 저장소가 변경되었거나 오염되었을 수 있으니 확인 후 다시 추가하세요)"
+
+MSG[rs.remove.done]="규칙셋 %s 을(를) 제거했습니다"
+MSG[rs.remove.unbound]="규칙셋 %s 을(를) %s 에서 해제했습니다 (다른 코어가 계속 사용 중이라 로컬 사본은 유지)"
+
+MSG[rs.menu.title]="규칙셋 분배 (%s)"
+MSG[rs.menu.add_preset]="자주 쓰는 규칙셋 추가"
+MSG[rs.menu.add_custom]="사용자 지정 URL 추가"
+MSG[rs.menu.update]="모든 규칙셋 즉시 갱신"
+MSG[rs.menu.remove]="규칙셋 제거"
+MSG[rs.menu.timer]="매일 자동 갱신: 켜기 / 끄기"
+MSG[rs.status.timer_on]="매일 자동 갱신: 켜짐"
+MSG[rs.status.timer_off]="매일 자동 갱신: 꺼짐 (목록이 상위 저장소를 따라가지 않습니다)"
+MSG[rs.timer.enabled]="매일 자동 갱신을 켰습니다 (하루 한 번, 최대 1시간 무작위 지연으로 모두가 같은 순간에 같은 저장소를 치지 않도록 분산)"
+MSG[rs.timer.disabled]="매일 자동 갱신을 껐습니다"
+MSG[rs.update.auto_on]="매일 자동 갱신도 함께 켰습니다: mihomo는 코어가 스스로 갱신하지만 sing-box 규칙셋 파일과 Xray 인라인 규칙은 이 타이머가 다시 씁니다"
+MSG[rs.apply.xray_inline]="Xray에는 규칙셋 기능이 없어 규칙을 설정에 인라인으로 넣고 재시작했습니다. 이후 내용 갱신 때도 한 번 재시작합니다 (mihomo / sing-box는 불필요)"

@@ -209,6 +209,13 @@ _sb_outb_build_warp() {
 _sb_ruleset_def() {
     local tag="$1" url
     case "$tag" in
+        # 订阅式规则集（lib/ruleset/）：社区表是 Surge 文本，远程 rule_set 只认
+        # sing-box 自己的 .srs/JSON，所以本地转换后按 local 引用。1.10 起本地规则集
+        # 文件改动会自动重载，刷新规则不用重启、不断连。
+        psm-*)
+            jq -n --arg tag "$tag" --arg path "/etc/sing-box/rulesets/${tag}.json" \
+                '{tag:$tag, type:"local", format:"source", path:$path}'
+            return 0 ;;
         geosite-*) url="${SB_GEOSITE_BASE}/${tag}.srs" ;;
         geoip-*)   url="${SB_GEOIP_BASE}/${tag}.srs" ;;
         *) return 1 ;;
@@ -241,6 +248,7 @@ _sb_route_ruleset_tags() {
     geosite)    echo "$val" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d;s/^/geosite-/' | tr '\n' ' ' ;;
     geoip)      echo "$val" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d;s/^/geoip-/'   | tr '\n' ' ' ;;
     preset-ads) echo "geosite-category-ads-all" ;;
+    ruleset)    echo "psm-${val}" ;;
     esac
 }
 
@@ -259,6 +267,10 @@ _sb_route_build_rule() {
     geoip)
         local tags; tags=$(echo "$val" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d;s/^/geoip-/' | jq -R . | jq -sc .)
         jq -nc --argjson rs "$tags" --argjson t "$tgt" '{rule_set:$rs} + $t' ;;
+    ruleset)
+        # 订阅式规则集：条目里只存名字，tag 由 _sb_route_ruleset_tags 统一加前缀。
+        local rstag; rstag=$(jq -nr --arg v "$val" '"psm-" + $v')
+        jq -nc --arg rs "$rstag" --argjson t "$tgt" '{rule_set:[$rs]} + $t' ;;
     domain)
         local arr; arr=$(echo "$val" | tr ',' '\n' | sed 's/^ *//;s/ *$//;/^$/d' | jq -R . | jq -sc .)
         jq -nc --argjson d "$arr" --argjson t "$tgt" '{domain_suffix:$d} + $t' ;;
@@ -783,7 +795,8 @@ sb_route_menu() {
             "$(t sb.route.menu.warp_check)" \
             "$(t sb.route.menu.ads)" \
             "$(t sb.route.menu.quic)" \
-            "$(t sb.route.menu.vpngate)"
+            "$(t sb.route.menu.vpngate)" \
+            "$(t sb.route.menu.ruleset)"
 
         case "$MENU_CHOICE" in
             1) sb_route_show;         press_enter ;;
@@ -799,6 +812,10 @@ sb_route_menu() {
             11)
                 source "$LIB_DIR/vpngate.sh"
                 vpngate_menu singbox
+                ;;
+            12)
+                source "$LIB_DIR/ruleset.sh"
+                ruleset_menu singbox
                 ;;
             0) return ;;
         esac

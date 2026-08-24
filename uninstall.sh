@@ -160,6 +160,7 @@ ask_yn "$(t uninstall.ask_certs "$NGINX_SSL_DIR")" N && {
 rm -f /etc/cron.d/psm-backup /etc/cron.d/psm-ddns
 _systemctl_disable_now psm-reality-watchdog.timer
 _systemctl_disable_now psm-vpngate-watchdog.timer
+_systemctl_disable_now psm-ruleset-update.timer
 _systemctl_disable_now psm-vpngate.service
 _systemctl_disable_now psm-health-report.timer
 _systemctl_disable_now psm-traffic.timer
@@ -168,9 +169,12 @@ _systemctl_disable_now psm-tgbot.service
 _remove_systemd_units \
     psm-reality-watchdog.service psm-reality-watchdog.timer \
     psm-vpngate.service psm-vpngate-watchdog.service psm-vpngate-watchdog.timer \
+    psm-ruleset-update.service psm-ruleset-update.timer \
     psm-health-report.service psm-health-report.timer \
     psm-traffic.service psm-traffic.timer psm-traffic-shutdown.service \
     psm-tgbot.service
+# Remove rule-set files written into the cores' own config directories
+rm -rf /etc/sing-box/rulesets /etc/mihomo/rules
 # Remove the VPNGate residential-exit tunnel: openvpn config plus the policy
 # routing it installed (dedicated table + ip rules; the main table was never touched).
 rm -f /etc/openvpn/psm-vpngate.conf /etc/openvpn/psm-vpngate.auth \

@@ -145,6 +145,7 @@ _mh_rule_build() {
         geoip) printf 'GEOIP,%s,%s%s' "$value" "$target" "$([[ "$no_resolve" == "true" ]] && printf ',no-resolve')" ;;
         ip-cidr) printf 'IP-CIDR,%s,%s%s' "$value" "$target" "$([[ "$no_resolve" == "true" ]] && printf ',no-resolve')" ;;
         in-name) printf 'IN-NAME,%s,%s' "$value" "$target" ;;
+        ruleset) printf 'RULE-SET,psm-%s,%s' "$value" "$target" ;;
         ads) printf 'GEOSITE,category-ads-all,REJECT' ;;
         quic) printf 'AND,((NETWORK,udp),(DST-PORT,443)),REJECT' ;;
     esac
@@ -171,9 +172,23 @@ _mh_route_apply() {
     done
     rules_json=$(echo "$rules_json" | jq '. + ["MATCH,DIRECT"]')
 
+    # 订阅式规则集（lib/ruleset/）→ 原生 rule-providers：URL 交给 mihomo 自己按
+    # interval 刷新，不重启、不断连；behavior 用 classical，因为社区表是
+    # `DOMAIN-SUFFIX,x` 这种带类型前缀的混合格式，domain/ipcidr 两种行为都读不了它。
+    local providers
+    providers=$(echo "$rules" | jq --argjson iv "${MH_RS_INTERVAL:-86400}" '
+        [ .[] | select(.kind == "ruleset") ]
+        | map({ key: ("psm-" + .value),
+                value: { type: "http", behavior: "classical", format: "text",
+                         url: .url, path: ("./rules/psm-" + .value + ".list"),
+                         interval: $iv } })
+        | from_entries')
+
     local tmp; tmp=$(mktemp)
-    jq --argjson proxies "$proxies" --argjson rules "$rules_json" \
-        '.proxies = $proxies | .["proxy-groups"] = [] | .rules = $rules' "$MH_CFG" > "$tmp" \
+    jq --argjson proxies "$proxies" --argjson rules "$rules_json" --argjson prov "$providers" \
+        '.proxies = $proxies | .["proxy-groups"] = [] | .rules = $rules
+         | .["rule-providers"] = $prov
+         | (if ($prov | length) == 0 then del(.["rule-providers"]) else . end)' "$MH_CFG" > "$tmp" \
         || { rm -f "$tmp"; log_error "$(t mh.route.build_fail)"; return 1; }
 
     _mh_cfg_backup
@@ -605,7 +620,8 @@ mh_route_menu() {
             "$(t mh.route.menu.warp_check)" \
             "$(t mh.route.menu.ads)" \
             "$(t mh.route.menu.quic)" \
-            "$(t mh.route.menu.vpngate)"
+            "$(t mh.route.menu.vpngate)" \
+            "$(t mh.route.menu.ruleset)"
 
         case "$MENU_CHOICE" in
             1) mh_route_show; press_enter ;;
@@ -621,6 +637,10 @@ mh_route_menu() {
             11)
                 source "$LIB_DIR/vpngate.sh"
                 vpngate_menu mihomo
+                ;;
+            12)
+                source "$LIB_DIR/ruleset.sh"
+                ruleset_menu mihomo
                 ;;
             0) return ;;
         esac
