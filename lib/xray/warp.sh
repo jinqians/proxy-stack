@@ -212,7 +212,11 @@ warp_setup() {
 
     echo ""
     echo -e "${YELLOW}$(t xray.warp.ready_unlock)${NC}"
-    _warp_add_default_rules
+    # 不再逐个问 netflix/openai/... 要不要走 WARP，改为统一的出口分流选择器。
+    # 那组预设保留为选项 1，但不再是唯一路径。
+    source "$LIB_DIR/exit_routing.sh"
+    exit_routing_choose xray "$WARP_OUTBOUND_TAG" \
+        "netflix,openai,disney,hbo,spotify" "Cloudflare WARP"
     log_ok "$(t xray.warp.setup_done)"
 }
 
@@ -387,7 +391,11 @@ warp_menu() {
             3) warp_switch_family;     press_enter ;;
             4)
                 if _outb_get_by_tag "$WARP_OUTBOUND_TAG" | jq -e '.tag' &>/dev/null; then
-                    _warp_add_default_rules
+                    # 不再逐个问 netflix/openai/... 要不要走 WARP，改为统一的出口分流选择器。
+    # 那组预设保留为选项 1，但不再是唯一路径。
+    source "$LIB_DIR/exit_routing.sh"
+    exit_routing_choose xray "$WARP_OUTBOUND_TAG" \
+        "netflix,openai,disney,hbo,spotify" "Cloudflare WARP"
                 else
                     log_warn "$(t xray.warp.configure_first)"
                 fi

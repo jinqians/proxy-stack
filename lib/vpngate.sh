@@ -124,9 +124,11 @@ vg_quick_setup() {
     vg_bind_core "$core" || return 1
 
     echo ""
-    if ask_yn "$(t vg.ask.preset_rules "$VG_PRESET_GEOSITE")" Y; then
-        vg_add_preset_rules "$core" && log_ok "$(t vg.setup.rules_added)"
-    fi
+    # 不再无条件推那组写死的 geosite 预设，改为显式询问「哪些流量走这个出口」。
+    # 预设仍是选项之一，但和规则集 / 手写规则 / 全部流量并列，由用户选。
+    source "$LIB_DIR/exit_routing.sh"
+    exit_routing_choose "$core" "$(vg_target_of "$core")" \
+        "$VG_PRESET_GEOSITE" "$(t vg.exit_label)"
     # 故障转移不做成可选项：家宽节点是志愿者自己的机器，关机、换 IP、拔网线都
     # 是常态，没有自动切换的话「解锁」随时会变成「不通」。装完直接开，用户不想
     # 要可以在菜单里关掉。
@@ -219,7 +221,9 @@ vpngate_menu() {
             6)  _vg_report_exit;            press_enter ;;
             7)
                 if vg_is_bound "$core"; then
-                    vg_add_preset_rules "$core" && log_ok "$(t vg.setup.rules_added)"
+                    source "$LIB_DIR/exit_routing.sh"
+                    exit_routing_choose "$core" "$(vg_target_of "$core")" \
+                        "$VG_PRESET_GEOSITE" "$(t vg.exit_label)"
                 else
                     log_warn "$(t vg.bind.first)"
                 fi

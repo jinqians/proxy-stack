@@ -496,6 +496,9 @@ _sb_view_all_nodes() {
     source "$(dirname "${BASH_SOURCE[0]}")/hysteria2.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/anytls.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/snell.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"
 
     _sb_reality_sync_from_live || true
     _sb_ss_sync_from_live      || true
@@ -535,6 +538,24 @@ _sb_view_all_nodes() {
                "$i" "$tag" "$port" "$ver"
     done < <(_sb_snell_list 2>/dev/null)
 
+    while IFS=$'\t' read -r tag port sni insec; do
+        i=$((i+1)); _protos+=("trojan"); _tags+=("$tag")
+        printf "  ${CYAN}%%2d.${NC} ${GREEN}[Trojan]${NC}   %%-18s  port=%%-6s  sni=%%s\n" \
+               "$i" "$tag" "$port" "$sni"
+    done < <(_sb_trojan_list 2>/dev/null)
+
+    while IFS=$'\t' read -r tag port sni insec; do
+        i=$((i+1)); _protos+=("vmess"); _tags+=("$tag")
+        printf "  ${CYAN}%%2d.${NC} ${BLUE}[VMess]${NC}    %%-18s  port=%%-6s  sni=%%s\n" \
+               "$i" "$tag" "$port" "$sni"
+    done < <(_sb_vmess_list 2>/dev/null)
+
+    while IFS=$'\t' read -r tag port laddr auth; do
+        i=$((i+1)); _protos+=("socks"); _tags+=("$tag")
+        printf "  ${CYAN}%%2d.${NC} ${YELLOW}[SOCKS5]${NC}   %%-18s  port=%%-6s  listen=%%-15s  auth=%%s\n" \
+               "$i" "$tag" "$port" "$laddr" "$auth"
+    done < <(_sb_socks_list 2>/dev/null)
+
     if (( i == 0 )); then
         log_warn "$(t sb.no_nodes)"
         return
@@ -556,6 +577,9 @@ _sb_view_all_nodes() {
         ss2022)    _sb_ss_uri          "$tag" ;;
         hysteria2) _sb_hy2_uri         "$tag" ;;
         anytls)    _sb_anytls_uri      "$tag" ;;
+        trojan)    _sb_trojan_uri      "$tag" ;;
+        vmess)     _sb_vmess_uri       "$tag" ;;
+        socks)     _sb_socks_uri       "$tag" ;;
         snell)     _sb_snell_share     "$tag" ;;
     esac
 }
@@ -568,7 +592,10 @@ _sb_protocol_menu() {
             "$(t sb.protocol_menu.ss2022)" \
             "$(t sb.protocol_menu.hysteria2)" \
             "$(t sb.protocol_menu.anytls)" \
-            "$(t sb.protocol_menu.snell)"
+            "$(t sb.protocol_menu.snell)" \
+            "$(t sb.protocol_menu.trojan)" \
+            "$(t sb.protocol_menu.vmess)" \
+            "$(t sb.protocol_menu.socks)"
 
         case "$MENU_CHOICE" in
             1) source "$(dirname "${BASH_SOURCE[0]}")/reality.sh";   sb_reality_menu ;;
@@ -576,6 +603,9 @@ _sb_protocol_menu() {
             3) source "$(dirname "${BASH_SOURCE[0]}")/hysteria2.sh"; sb_hy2_menu ;;
             4) source "$(dirname "${BASH_SOURCE[0]}")/anytls.sh";    sb_anytls_menu ;;
             5) source "$(dirname "${BASH_SOURCE[0]}")/snell.sh";     sb_snell_menu ;;
+            6) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"; sb_trojan_menu ;;
+            7) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"; sb_vmess_menu ;;
+            8) source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"; sb_socks_menu ;;
             0) return ;;
         esac
     done

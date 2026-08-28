@@ -817,6 +817,30 @@ _trf_add_wizard() {
                     "$i" "$tag" "$(t traffic.port_label)" "$port"
             done < <(_xss_list 2>/dev/null)
     } || true
+    {
+        source "$LIB_DIR/xray/trojan.sh" 2>/dev/null && \
+            while IFS=$'\t' read -r tag port _; do
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
+                printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${YELLOW}[Trojan / Xray API]${NC}\n" \
+                    "$i" "$tag" "$(t traffic.port_label)" "$port"
+            done < <(_trojan_list 2>/dev/null)
+    } || true
+    {
+        source "$LIB_DIR/xray/vmess.sh" 2>/dev/null && \
+            while IFS=$'\t' read -r tag port _; do
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
+                printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${YELLOW}[VMess / Xray API]${NC}\n" \
+                    "$i" "$tag" "$(t traffic.port_label)" "$port"
+            done < <(_vmess_list 2>/dev/null)
+    } || true
+    {
+        source "$LIB_DIR/xray/socks.sh" 2>/dev/null && \
+            while IFS=$'\t' read -r tag port _; do
+                i=$((i+1)); tags+=("$tag"); ports+=("$port"); sources+=("xray"); cports+=("$port"); ifaces+=("")
+                printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${YELLOW}[SOCKS5 / Xray API]${NC}\n" \
+                    "$i" "$tag" "$(t traffic.port_label)" "$port"
+            done < <(_socks_list 2>/dev/null)
+    } || true
 
     # ── Snell (stats via iptables) ────────────────────────────────────────────
     local snell_conf="/etc/snell/users/snell-main.conf"
@@ -850,7 +874,7 @@ _trf_add_wizard() {
     local pair store_dir core_label proto proto_label store_file tag dport cport laddr ifc
     for pair in "singbox:sing-box" "mihomo:mihomo"; do
         store_dir="$CFG_DIR/${pair%%:*}"; core_label="${pair#*:}"
-        for proto in reality ss2022 hysteria2 anytls snell; do
+        for proto in reality ss2022 hysteria2 anytls snell trojan vmess socks; do
             store_file="$store_dir/$proto.json"
             [[ -f "$store_file" ]] || continue
             case "$proto" in
@@ -859,6 +883,9 @@ _trf_add_wizard() {
                 hysteria2) proto_label="Hysteria2" ;;
                 anytls)    proto_label="AnyTLS" ;;
                 snell)     proto_label="Snell" ;;
+                trojan)    proto_label="Trojan" ;;
+                vmess)     proto_label="VMess" ;;
+                socks)     proto_label="SOCKS5" ;;
             esac
             while IFS=$'\t' read -r tag dport cport laddr; do
                 [[ -n "$tag" && -n "$dport" ]] || continue

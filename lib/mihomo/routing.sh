@@ -170,7 +170,10 @@ _mh_route_apply() {
         local rule; rule=$(_mh_rule_build "$(echo "$rules" | jq ".[$i]")")
         [[ -n "$rule" ]] && rules_json=$(echo "$rules_json" | jq --arg r "$rule" '. += [$r]')
     done
-    rules_json=$(echo "$rules_json" | jq '. + ["MATCH,DIRECT"]')
+    # MATCH 是最后的兜底规则，决定「没命中任何规则的流量走哪」。默认 DIRECT
+    # （保持原行为）；「全部流量走某出口」就是把它指过去。只影响经入站进来的
+    # 客户端流量，本机自身出网不受影响。
+    rules_json=$(echo "$rules_json" | jq --arg m "MATCH,${MH_ROUTE_FINAL:-$(_er_route_final mh_route_final DIRECT)}" '. + [$m]')
 
     # 订阅式规则集（lib/ruleset/）→ 原生 rule-providers：URL 交给 mihomo 自己按
     # interval 刷新，不重启、不断连；behavior 用 classical，因为社区表是

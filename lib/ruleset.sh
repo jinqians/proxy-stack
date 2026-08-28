@@ -104,8 +104,35 @@ _rs_pick_preset() {
     printf '%s' "${RS_PRESETS[$(( sel - 1 ))]}"
 }
 
+# 把一个【已存在】的规则集重新绑定到指定出口。WARP / VPNGate 的配置流程会用它，
+# 让用户从已订阅的表里挑一个，而不是每次都重新贴 URL。
+rs_bind_existing() {
+    local core="$1" target="$2"
+    local names; names=$(rs_set_names)
+    [[ -n "$names" ]] || { log_warn "$(t rs.bind_existing.none)"; return 1; }
+
+    local arr=() i=0 n
+    echo -e "\n  ${BOLD}$(t rs.bind_existing.title)${NC}"
+    while IFS= read -r n; do
+        [[ -n "$n" ]] || continue
+        i=$((i+1)); arr+=("$n")
+        printf "  ${CYAN}%2d.${NC} %s\n" "$i" "$n"
+    done <<< "$names"
+
+    local sel; ask sel "$(t rs.bind_existing.prompt)" "1"
+    [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= i )) \
+        || { log_error "$(t rs.ask.bad_index)"; return 1; }
+    local name="${arr[$((sel-1))]}"
+    local url; url=$(rs_set_get "$name" | jq -r '.url // ""')
+    rs_bind_core "$core" "$name" "$target" "$url" || return 1
+    log_ok "$(t rs.bind_existing.done "$name" "$target")"
+}
+
+# rs_add <core> [from_preset] [preset_target]
+# preset_target 非空时跳过「选出口」那一步，直接绑到调用方指定的出口。给
+# WARP / VPNGate 的配置流程用——那里出口是已知的，再问一遍纯属多余且容易选错。
 rs_add() {
-    local core="$1" from_preset="${2:-0}"
+    local core="$1" from_preset="${2:-0}" preset_target="${3:-}"
     local name="" url=""
 
     if (( from_preset )); then
@@ -132,7 +159,12 @@ rs_add() {
         return 1
     fi
 
-    local target; target=$(_rs_pick_target "$core")
+    local target
+    if [[ -n "$preset_target" ]]; then
+        target="$preset_target"
+    else
+        target=$(_rs_pick_target "$core")
+    fi
     [[ -n "$target" ]] || { log_error "$(t rs.ask.bad_index)"; rs_stage_cleanup; return 1; }
 
     rs_commit "$name" "$url"

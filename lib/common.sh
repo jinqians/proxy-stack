@@ -300,6 +300,14 @@ state_set() {
     chmod 600 "$PSM_STATE" 2>/dev/null || true
 }
 
+# 读一个「兜底出口」状态值，未设置时回落到默认。不能直接写
+# `$(state_get k || echo d)`——state_get 内部有 `|| true`，未设置时是
+# 「退出码 0 + 空串」，那样写会让调用方拿到空字符串而不是默认值。
+_er_route_final() {
+    local v; v=$(state_get "$1")
+    [[ -n "$v" ]] && printf '%s' "$v" || printf '%s' "$2"
+}
+
 state_get() {
     local key="$1"
     # grep returns 1 when key not found — suppress so set -e + pipefail don't kill the script
@@ -311,6 +319,13 @@ rand_port() {
     # rand_port <min> <max>
     shuf -i "${1:-10000}-${2:-60000}" -n 1
 }
+
+# 把任意字符串编码成 URL 组件（RFC 3986）。分享链接把密码放在 userinfo 里，
+# 用户自定义的密码可能含 @ : / ? # & 等字符，不编码会把 URI 截断或改变含义
+# （trojan://p@ss@host 会被解析成主机是 "ss@host"）。
+# 用 jq @uri：jq 本就是项目硬依赖，且 node_cli.sh 里的 _node_cli_urlencode
+# 用的是同一实现，两处行为保持一致。
+url_encode() { jq -nr --arg v "$1" '$v | @uri'; }
 
 rand_str() {
     # rand_str <length>

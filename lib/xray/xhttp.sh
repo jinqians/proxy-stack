@@ -88,58 +88,76 @@ _xhttp_build_inbound() {
     local cert_dir="$NGINX_SSL_DIR/$domain"
     local fallback_enabled; fallback_enabled=$(echo "$n" | jq -r '.fallback_enabled // true')
 
+    # TLS 三件套对所有走 TLS 的模式都一样，抽出来避免四份重复
+    local tls_common
+    tls_common=$(jq -n --arg sn "$domain" \
+        --arg cert "$cert_dir/fullchain.pem" --arg key "$cert_dir/privkey.pem" \
+        '{ "serverName": $sn,
+           "certificates": [{ "certificateFile": $cert, "keyFile": $key }] }')
+
     local stream_json
     case "$mode" in
         xhttp|splithttp)
-            stream_json=$(jq -n \
-                --arg path "$path" --arg sn "$domain" \
-                --arg cert "$cert_dir/fullchain.pem" --arg key "$cert_dir/privkey.pem" \
-                '{
-                  "network": "xhttp",
-                  "security": "tls",
-                  "xhttpSettings": { "path": $path, "mode": "auto" },
-                  "tlsSettings": {
-                    "serverName": $sn,
-                    "certificates": [{ "certificateFile": $cert, "keyFile": $key }],
-                    "alpn": ["h2","http/1.1"]
-                  }
-                }')
+            stream_json=$(jq -n --arg path "$path" --argjson tls "$tls_common" \
+                '{ "network": "xhttp", "security": "tls",
+                   "xhttpSettings": { "path": $path, "mode": "auto" },
+                   "tlsSettings": ($tls + { "alpn": ["h2","http/1.1"] }) }')
             ;;
         upgrade|ws)
-            stream_json=$(jq -n \
-                --arg path "$path" --arg sn "$domain" \
-                --arg cert "$cert_dir/fullchain.pem" --arg key "$cert_dir/privkey.pem" \
-                '{
-                  "network": "websocket",
-                  "security": "tls",
-                  "wsSettings": { "path": $path },
-                  "tlsSettings": {
-                    "serverName": $sn,
-                    "certificates": [{ "certificateFile": $cert, "keyFile": $key }],
-                    "alpn": ["http/1.1"]
-                  }
-                }')
+            # 历史遗留：模式名叫 upgrade，产出的却是 WebSocket。菜单上的标签一直
+            # 写的是 WebSocket，行为与标签一致，所以保持原样——改名会让已存节点
+            # （store 里 mode="upgrade"）在下一次 apply 时找不到分支。
+            # 真正的 HTTPUpgrade 传输是下面独立的 httpupgrade 模式。
+            stream_json=$(jq -n --arg path "$path" --argjson tls "$tls_common" \
+                '{ "network": "websocket", "security": "tls",
+                   "wsSettings": { "path": $path },
+                   "tlsSettings": ($tls + { "alpn": ["http/1.1"] }) }')
             ;;
         grpc)
-            local service_name="${path#/}"
-            stream_json=$(jq -n \
-                --arg service "$service_name" --arg sn "$domain" \
-                --arg cert "$cert_dir/fullchain.pem" --arg key "$cert_dir/privkey.pem" \
-                '{
-                  "network": "grpc",
-                  "security": "tls",
-                  "grpcSettings": { "serviceName": $service },
-                  "tlsSettings": {
-                    "serverName": $sn,
-                    "certificates": [{ "certificateFile": $cert, "keyFile": $key }],
-                    "alpn": ["h2"]
-                  }
-                }')
+            # serviceName 不带前导斜杠，客户端那边也一样，多一个斜杠就对不上
+            stream_json=$(jq -n --arg service "${path#/}" --argjson tls "$tls_common" \
+                '{ "network": "grpc", "security": "tls",
+                   "grpcSettings": { "serviceName": $service },
+                   "tlsSettings": ($tls + { "alpn": ["h2"] }) }')
+            ;;
+        httpupgrade)
+            # HTTPUpgrade：只借用 HTTP Upgrade 握手，之后是裸 TCP，没有 WebSocket
+            # 的帧开销。host 必须填，反代与 CDN 靠它路由。
+            stream_json=$(jq -n --arg path "$path" --arg host "$domain" --argjson tls "$tls_common" \
+                '{ "network": "httpupgrade", "security": "tls",
+                   "httpupgradeSettings": { "path": $path, "host": $host },
+                   "tlsSettings": ($tls + { "alpn": ["http/1.1"] }) }')
+            ;;
+        h2)
+            # HTTP/2：host 是数组（Xray 的 httpSettings 允许多个虚拟主机名）。
+            # alpn 必须只有 h2，混进 http/1.1 会让客户端协商到 1.1 后连不上。
+            stream_json=$(jq -n --arg path "$path" --arg host "$domain" --argjson tls "$tls_common" \
+                '{ "network": "http", "security": "tls",
+                   "httpSettings": { "path": $path, "host": [$host] },
+                   "tlsSettings": ($tls + { "alpn": ["h2"] }) }')
+            ;;
+        mkcp)
+            # mKCP 走 UDP，自带伪装头与 seed 加密，因此不套 TLS，也就不需要域名和
+            # 证书。security 必须显式写 none——省略会让 Xray 按默认走 TLS 分支。
+            local kcp_seed;   kcp_seed=$(echo "$n" | jq -r '.kcp_seed // empty')
+            local kcp_header; kcp_header=$(echo "$n" | jq -r '.kcp_header // "none"')
+            stream_json=$(jq -n --arg seed "$kcp_seed" --arg header "$kcp_header" \
+                '{ "network": "kcp", "security": "none",
+                   "kcpSettings": {
+                     "seed": $seed,
+                     "header": { "type": $header },
+                     "mtu": 1350, "tti": 50,
+                     "uplinkCapacity": 5, "downlinkCapacity": 20,
+                     "congestion": false,
+                     "readBufferSize": 2, "writeBufferSize": 2
+                   } }')
             ;;
         reality-layer)
             local priv_key; priv_key=$(echo "$n" | jq -r '.private_key // empty')
             local sid;      sid=$(echo "$n"      | jq -r '.short_id // empty')
             local sn;       sn=$(echo "$n"       | jq -r '.server_name // empty')
+            # Reality 之上的传输层可选。默认 xhttp（保持与老节点一致）。
+            local rtrans;   rtrans=$(echo "$n"   | jq -r '.reality_transport // "xhttp"')
             # 回落限速：仅在 dest 被判定为共享 CDN 前端时写出（见 common.sh 的取值权衡）。
             # 只影响「认证未通过」的回落连接，已认证客户端的代理流量不受任何影响。
             local limit_fb; limit_fb=$(echo "$n" | jq -r '.limit_fallback // false')
@@ -152,14 +170,24 @@ _xhttp_build_inbound() {
                     '{ "limitFallbackUpload":   { "afterBytes": $after, "bytesPerSec": $rate, "burstBytesPerSec": $burst },
                        "limitFallbackDownload": { "afterBytes": $after, "bytesPerSec": $rate, "burstBytesPerSec": $burst } }')
             fi
+
+            local transport_json
+            case "$rtrans" in
+                ws)   transport_json=$(jq -n --arg path "$path" \
+                        '{ "network": "websocket", "wsSettings": { "path": $path } }') ;;
+                grpc) transport_json=$(jq -n --arg svc "${path#/}" \
+                        '{ "network": "grpc", "grpcSettings": { "serviceName": $svc } }') ;;
+                h2)   transport_json=$(jq -n --arg path "$path" --arg host "$sn" \
+                        '{ "network": "http", "httpSettings": { "path": $path, "host": [$host] } }') ;;
+                *)    transport_json=$(jq -n --arg path "$path" \
+                        '{ "network": "xhttp", "xhttpSettings": { "path": $path, "mode": "auto" } }') ;;
+            esac
+
             stream_json=$(jq -n \
-                --arg path "$path" --arg sn "$sn" \
-                --arg priv "$priv_key" --arg sid "$sid" \
-                --argjson limit "$limit_json" \
-                '{
-                  "network": "xhttp",
+                --arg sn "$sn" --arg priv "$priv_key" --arg sid "$sid" \
+                --argjson limit "$limit_json" --argjson transport "$transport_json" \
+                '$transport + {
                   "security": "reality",
-                  "xhttpSettings": { "path": $path, "mode": "auto" },
                   "realitySettings": ({
                     "show": false,
                     "dest": ($sn + ":443"),
@@ -175,8 +203,8 @@ _xhttp_build_inbound() {
     esac
 
     local fallbacks_json="[]"
-    # reality-layer has no TLS termination in Xray → no fallback needed
-    if [[ "$mode" != "reality-layer" && "$fallback_enabled" == "true" ]]; then
+    # reality-layer 与 mkcp 都不在 Xray 侧终止 TLS → 没有可回落的 HTTP 服务
+    if [[ "$mode" != "reality-layer" && "$mode" != "mkcp" && "$fallback_enabled" == "true" ]]; then
         fallbacks_json='[{"dest": "127.0.0.1:8080", "xver": 0}]'
     fi
 
@@ -233,18 +261,61 @@ xhttp_add_node() {
     echo -e "  $(t xray.xhttp.mode2)"
     echo -e "  $(t xray.xhttp.mode3)"
     echo -e "  $(t xray.xhttp.mode4)"
+    echo -e "  $(t xray.xhttp.mode5)"
+    echo -e "  $(t xray.xhttp.mode6)"
+    echo -e "  $(t xray.xhttp.mode7)"
     read -rp "$(echo -e "${CYAN}$(t xray.xhttp.ask_mode)${NC}")" mc
     case "${mc:-1}" in
         1) mode="xhttp" ;;
         2) mode="upgrade" ;;
         3) mode="grpc" ;;
         4) mode="reality-layer" ;;
+        5) mode="httpupgrade" ;;
+        6) mode="h2" ;;
+        7) mode="mkcp" ;;
         *) mode="xhttp" ;;
     esac
 
-    # ── Domain + cert (modes 1-3 only) ───────────────────────────────────────
+    # Reality 之上的传输层可选
+    local reality_transport="xhttp"
+    if [[ "$mode" == "reality-layer" ]]; then
+        echo ""
+        echo -e "  $(t xray.xhttp.rt1)"
+        echo -e "  $(t xray.xhttp.rt2)"
+        echo -e "  $(t xray.xhttp.rt3)"
+        echo -e "  $(t xray.xhttp.rt4)"
+        local rc; read -rp "$(echo -e "${CYAN}$(t xray.xhttp.ask_reality_transport)${NC}")" rc
+        case "${rc:-1}" in
+            2) reality_transport="ws" ;;
+            3) reality_transport="grpc" ;;
+            4) reality_transport="h2" ;;
+            *) reality_transport="xhttp" ;;
+        esac
+    fi
+
+    # mKCP 不走 TLS，需要 seed 与伪装头类型
+    local kcp_seed="" kcp_header="none"
+    if [[ "$mode" == "mkcp" ]]; then
+        echo ""
+        log_info "$(t xray.xhttp.mkcp_hint)"
+        ask kcp_seed "$(t xray.xhttp.ask_kcp_seed)" "$(rand_str 16)"
+        echo -e "  $(t xray.xhttp.kcp_h1)"
+        echo -e "  $(t xray.xhttp.kcp_h2)"
+        echo -e "  $(t xray.xhttp.kcp_h3)"
+        echo -e "  $(t xray.xhttp.kcp_h4)"
+        local hc; read -rp "$(echo -e "${CYAN}$(t xray.xhttp.ask_kcp_header)${NC}")" hc
+        case "${hc:-1}" in
+            2) kcp_header="srtp" ;;
+            3) kcp_header="utp" ;;
+            4) kcp_header="wechat-video" ;;
+            *) kcp_header="none" ;;
+        esac
+    fi
+
+    # ── Domain + cert：只有走 TLS 的模式需要 ─────────────────────────────────
+    # reality-layer 借伪装站的证书，mkcp 根本不套 TLS，两者都不需要自有域名。
     domain=""
-    if [[ "$mode" != "reality-layer" ]]; then
+    if [[ "$mode" != "reality-layer" && "$mode" != "mkcp" ]]; then
         echo -e "  ${YELLOW}$(t xray.xhttp.mode_need_cert)${NC}"
         ask domain "$(t xray.ask.domain_required)"
         [[ -z "$domain" ]] && { log_error "$(t xray.xhttp.domain_required)"; return 1; }
@@ -258,7 +329,12 @@ xhttp_add_node() {
     # ── Nginx reverse proxy choice ────────────────────────────────────────────
     local listen_addr="" use_nginx=0 public_port fallback_enabled=true
     echo ""
-    if ask_yn "$(t xray.ask.nginx_proxy)" N; then
+    # mKCP 走 UDP，而 443 分流表是 Nginx stream 层按 TLS ClientHello 的 SNI 路由的，
+    # 既没有 TCP 也没有 SNI，挂不上去。直接跳过询问，避免给出一个必然失败的选项。
+    if [[ "$mode" == "mkcp" ]]; then
+        log_info "$(t xray.xhttp.mkcp_no_mount)"
+        listen_addr="0.0.0.0"; public_port="$port"; fallback_enabled=false
+    elif ask_yn "$(t xray.ask.nginx_proxy)" N; then
         use_nginx=1; listen_addr="127.0.0.1"
         if ! is_installed nginx; then
             log_warn "$(t xray.nginx_not_installed)"
@@ -302,7 +378,12 @@ xhttp_add_node() {
         --arg listen_addr "$listen_addr" \
         --argjson public_port "$public_port" \
         --argjson fallback_enabled "$fallback_enabled" \
-        '{tag:$tag, port:$port, public_port:$public_port, uuid:$uuid, domain:$domain, path:$path, mode:$mode, listen_addr:$listen_addr, fallback_enabled:$fallback_enabled}')
+        --arg reality_transport "$reality_transport" \
+        --arg kcp_seed "$kcp_seed" --arg kcp_header "$kcp_header" \
+        '{tag:$tag, port:$port, public_port:$public_port, uuid:$uuid, domain:$domain, path:$path, mode:$mode, listen_addr:$listen_addr, fallback_enabled:$fallback_enabled}
+         # 只在用得上的模式里写出这些字段，避免给每个节点塞一堆恒为默认值的键
+         | (if $mode == "reality-layer" then .reality_transport = $reality_transport else . end)
+         | (if $mode == "mkcp" then .kcp_seed = $kcp_seed | .kcp_header = $kcp_header else . end)')
 
     if [[ "$mode" == "reality-layer" ]]; then
         log_step "$(t xray.xhttp.generating_reality_keys)"
@@ -347,9 +428,11 @@ xhttp_add_node() {
     log_ok "$(t xray.xhttp.added "$tag" "$listen_addr" "$port")"
 
     if (( use_nginx == 0 )); then
-        ask_yn "$(t xray.ask.open_firewall_tcp "$port")" Y && {
+        # mKCP 是 UDP 传输，放行 TCP 端口对它毫无用处
+        local _fw_proto="tcp"; [[ "$mode" == "mkcp" ]] && _fw_proto="udp"
+        ask_yn "$(t xray.ask.open_firewall_proto "$port" "$_fw_proto")" Y && {
             source "$LIB_DIR/system.sh"
-            firewall_open_port "$port" "tcp"
+            firewall_open_port "$port" "$_fw_proto"
         }
     fi
 
@@ -467,7 +550,19 @@ xhttp_show_share() {
         xhttp|splithttp) net="xhttp" ;;
         upgrade|ws)      net="ws" ;;
         grpc)            net="grpc" ;;
-        reality-layer)   net="xhttp" ;;
+        httpupgrade)     net="httpupgrade" ;;
+        h2)              net="http" ;;
+        mkcp)            net="kcp" ;;
+        # Reality 之上的传输层是可选的，链接里的 type 必须跟着走，
+        # 否则客户端会按 xhttp 去握手而服务端在等 ws / grpc / h2。
+        reality-layer)
+            case "$(echo "$node" | jq -r '.reality_transport // "xhttp"')" in
+                ws)   net="ws" ;;
+                grpc) net="grpc" ;;
+                h2)   net="http" ;;
+                *)    net="xhttp" ;;
+            esac
+            ;;
     esac
 
     if [[ "$listen" == "127.0.0.1" && -n "$domain" ]]; then
@@ -476,19 +571,43 @@ xhttp_show_share() {
         host=$(get_ipv4); ref_port="$public_port"
     fi
 
+    # 用 common.sh 的 url_encode（jq @uri）。原先这里调 python3，而项目其余部分
+    # 并不依赖 python3——没装时会静默退回不编码，路径含特殊字符的链接就是坏的。
     local encoded_path
-    encoded_path=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$path" 2>/dev/null || echo "${path}")
+    encoded_path=$(url_encode "$path") || return 1
 
-    local security; [[ "$mode" == "reality-layer" ]] && security="reality" || security="tls"
-    local query="encryption=none&security=${security}&sni=${sn}&type=${net}"
+    local security
+    case "$mode" in
+        reality-layer) security="reality" ;;
+        mkcp)          security="none" ;;   # mKCP 自带伪装与 seed 加密，不套 TLS
+        *)             security="tls" ;;
+    esac
+    local query="encryption=none&security=${security}&type=${net}"
+    # mKCP 没有 TLS 就没有 SNI，带上只会让客户端困惑
+    [[ "$mode" != "mkcp" ]] && query="${query}&sni=${sn}"
     case "$mode" in
         grpc)
             query="${query}&serviceName=${encoded_path}"
             ;;
+        mkcp)
+            local kcp_seed; kcp_seed=$(echo "$node" | jq -r '.kcp_seed // ""')
+            local kcp_header; kcp_header=$(echo "$node" | jq -r '.kcp_header // "none"')
+            query="${query}&headerType=${kcp_header}"
+            [[ -n "$kcp_seed" ]] && query="${query}&seed=$(url_encode "$kcp_seed")"
+            ;;
+        h2|httpupgrade)
+            query="${query}&path=${encoded_path}&host=${sn}"
+            ;;
         reality-layer)
             local pub_key; pub_key=$(echo "$node" | jq -r '.public_key')
             local sid; sid=$(echo "$node" | jq -r '.short_id')
-            query="${query}&path=${encoded_path}&mode=auto&fp=chrome&pbk=${pub_key}&sid=${sid}"
+            local rt; rt=$(echo "$node" | jq -r '.reality_transport // "xhttp"')
+            if [[ "$rt" == "grpc" ]]; then
+                query="${query}&serviceName=${encoded_path}&fp=chrome&pbk=${pub_key}&sid=${sid}"
+            else
+                query="${query}&path=${encoded_path}&fp=chrome&pbk=${pub_key}&sid=${sid}"
+                [[ "$rt" == "xhttp" ]] && query="${query}&mode=auto"
+            fi
             ;;
         xhttp|splithttp)
             query="${query}&path=${encoded_path}&mode=auto"
@@ -507,7 +626,7 @@ xhttp_show_share() {
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 _xhttp_check_deps() {
-    ensure_pkg_deps jq qrencode python3
+    ensure_pkg_deps jq qrencode
     if ! [[ -f "$XRAY_BIN" ]]; then
         log_warn "$(t xray.need_install)"
         ask_yn "$(t xray.ask_install_xray)" Y \

@@ -35,14 +35,20 @@ Usage:
 
 Cores: xray, sing-box (alias: singbox), mihomo
 Protocols:
-  xray:     reality, vision, xhttp, ss2022
-  sing-box: reality, ss2022, hysteria2, anytls, snell
-  mihomo:   reality, ss2022, hysteria2, anytls, snell
+  xray:     reality, vision, xhttp, ss2022, trojan, vmess, socks
+  sing-box: reality, ss2022, hysteria2, anytls, snell, trojan, vmess, socks
+  mihomo:   reality, ss2022, hysteria2, anytls, snell, trojan, vmess, socks
 
 Protocol inputs:
   reality:   --port; UUID/keys/short ID/SNI/dest receive safe defaults
   vision:    --port --domain
-  xhttp:     --port --domain [--mode xhttp|upgrade|ws|grpc]
+  xhttp:     --port --domain [--mode xhttp|upgrade|ws|grpc|httpupgrade|h2]
+             --mode mkcp needs no domain (UDP, no TLS); --kcp-seed / --kcp-header
+             --mode reality-layer takes --reality-transport xhttp|ws|grpc|h2
+  trojan:    --port --domain [--password ...]
+  vmess:     --port --domain [--uuid ...] [--path ...]   (WS+TLS)
+  socks:     --port [--listen-addr 127.0.0.1|0.0.0.0] [--username ...] [--password ...]
+             (alias: socks5; loopback by default, public listeners require credentials)
   ss2022:    --port [--method ...] [--password ...]
   hysteria2: --port --sni --cert-path --key-path [--password ...]
   anytls:    --port --sni --cert-path --key-path [--password ...]
@@ -65,11 +71,14 @@ EOF
 
 _node_cli_pairs() {
     printf '%s\n' \
-        $'xray\treality' $'xray\tvision' $'xray\txhttp' $'xray\tss2022' \
+        $'xray\treality' $'xray\tvision' $'xray\txhttp' $'xray\tss2022' $'xray\ttrojan' \
+        $'xray\tvmess' $'xray\tsocks' \
         $'sing-box\treality' $'sing-box\tss2022' $'sing-box\thysteria2' \
-        $'sing-box\tanytls' $'sing-box\tsnell' \
+        $'sing-box\tanytls' $'sing-box\tsnell' $'sing-box\ttrojan' $'sing-box\tvmess' \
+        $'sing-box\tsocks' \
         $'mihomo\treality' $'mihomo\tss2022' $'mihomo\thysteria2' \
-        $'mihomo\tanytls' $'mihomo\tsnell'
+        $'mihomo\tanytls' $'mihomo\tsnell' $'mihomo\ttrojan' $'mihomo\tvmess' \
+        $'mihomo\tsocks'
 }
 
 _node_cli_norm_core() {
@@ -83,7 +92,8 @@ _node_cli_norm_core() {
 
 _node_cli_norm_protocol() {
     case "${1:-}" in
-        reality|vision|xhttp|anytls|snell) printf '%s' "$1" ;;
+        reality|vision|xhttp|anytls|snell|trojan|vmess|socks) printf '%s' "$1" ;;
+        socks5) printf 'socks' ;;
         ss|ss2022|shadowsocks|shadowsocks2022) printf 'ss2022' ;;
         hy2|hysteria2) printf 'hysteria2' ;;
         *) return 1 ;;
@@ -123,16 +133,25 @@ _node_cli_apply_fn() {
         xray/vision) printf '_vision_apply_all' ;;
         xray/xhttp) printf '_xhttp_apply_all' ;;
         xray/ss2022) printf '_xss_apply_to_xray' ;;
+        xray/trojan) printf '_trojan_apply_all' ;;
+        xray/vmess) printf '_vmess_apply_all' ;;
+        xray/socks) printf '_socks_apply_all' ;;
         sing-box/reality) printf '_sb_reality_apply_all' ;;
         sing-box/ss2022) printf '_sb_ss_apply' ;;
         sing-box/hysteria2) printf '_sb_hy2_apply' ;;
         sing-box/anytls) printf '_sb_anytls_apply' ;;
         sing-box/snell) printf '_sb_snell_apply' ;;
+        sing-box/trojan) printf '_sb_trojan_apply' ;;
+        sing-box/vmess) printf '_sb_vmess_apply' ;;
+        sing-box/socks) printf '_sb_socks_apply' ;;
         mihomo/reality) printf '_mh_reality_apply_all' ;;
         mihomo/ss2022) printf '_mh_ss_apply' ;;
         mihomo/hysteria2) printf '_mh_hy2_apply' ;;
         mihomo/anytls) printf '_mh_anytls_apply' ;;
         mihomo/snell) printf '_mh_snell_apply' ;;
+        mihomo/trojan) printf '_mh_trojan_apply' ;;
+        mihomo/vmess) printf '_mh_vmess_apply' ;;
+        mihomo/socks) printf '_mh_socks_apply' ;;
         *) return 1 ;;
     esac
 }
@@ -279,7 +298,7 @@ _node_cli_field_name() {
 
 _node_cli_is_field_opt() {
     case "$1" in
-        tag|port|uuid|password|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-mode|obfs-host) return 0 ;;
+        tag|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -401,12 +420,66 @@ _node_cli_defaults() {
               .listen_addr //= "0.0.0.0" | .public_port //= ($p | tonumber) |
               .fallback_enabled //= false') || return 1
             ;;
+        trojan)
+            # Trojan 的凭据是密码而非 UUID。Xray 侧走真实域名+证书（回落默认关闭，
+            # 开启回落需要 Nginx 伪装站，那是交互流程才做的事）；sing-box / mihomo
+            # 侧与 anytls 同构，需要 sni + 证书路径，非交互路径不代签证书，
+            # 所以 cert_path / key_path 必须由调用方给出。
+            if [[ "$core" == "xray" ]]; then
+                json=$(printf '%s' "$json" | jq -c --arg pw "$(rand_str 20)" --arg p "$port" '
+                  .password //= $pw |
+                  .listen_addr //= "0.0.0.0" | .public_port //= ($p | tonumber) |
+                  .fallback_enabled //= false') || return 1
+            else
+                local _listen_default="::"
+                [[ "$core" == "mihomo" ]] && _listen_default="0.0.0.0"
+                json=$(printf '%s' "$json" | jq -c --arg pw "$(rand_str 20)" --arg p "$port" \
+                    --arg listen "$_listen_default" '
+                  .password //= $pw | .insecure //= 0 |
+                  .listen_addr //= $listen | .public_port //= ($p | tonumber)') || return 1
+            fi
+            ;;
+        socks)
+            # 默认只监听 127.0.0.1。SOCKS5 明文传输，公网暴露就是一个开放代理，
+            # 非交互路径没人可以确认风险，所以默认值必须是保守的那个；要公网监听
+            # 得显式传 --listen-addr 0.0.0.0，且那种情况下凭据不再可选。
+            json=$(printf '%s' "$json" | jq -c --arg p "$port" '
+              .listen_addr //= "127.0.0.1" | .public_port //= ($p | tonumber) |
+              .username //= "" | .password //= "" | .udp //= true') || return 1
+            if [[ "$(printf '%s' "$json" | jq -r '.listen_addr')" != "127.0.0.1" ]] \
+               && [[ -z "$(printf '%s' "$json" | jq -r '.username')" ]]; then
+                _node_cli_err "a public SOCKS5 listener requires credentials; pass --username and --password (the protocol is plaintext, so this only stops casual scanners)"
+                return 1
+            fi
+            ;;
+        vmess)
+            # VMess 固定 WS+TLS，所以 path 是必填项（没有就随机一个）。
+            # Xray 侧用真实证书域名 domain；sing-box / mihomo 侧与 trojan 同构，
+            # 需要 sni + 证书路径，非交互路径不代签证书。
+            if [[ "$core" == "xray" ]]; then
+                json=$(printf '%s' "$json" | jq -c --arg uuid "$(uuid_gen)" --arg p "$port" \
+                    --arg path "$(rand_path)" '
+                  .uuid //= $uuid | .path //= $path |
+                  .listen_addr //= "0.0.0.0" | .public_port //= ($p | tonumber)') || return 1
+            else
+                local _vm_listen="::"
+                [[ "$core" == "mihomo" ]] && _vm_listen="0.0.0.0"
+                json=$(printf '%s' "$json" | jq -c --arg uuid "$(uuid_gen)" --arg p "$port" \
+                    --arg path "$(rand_path)" --arg listen "$_vm_listen" '
+                  .uuid //= $uuid | .path //= $path | .insecure //= 0 |
+                  .listen_addr //= $listen | .public_port //= ($p | tonumber)') || return 1
+            fi
+            ;;
         xhttp)
             json=$(printf '%s' "$json" | jq -c --arg uuid "$(uuid_gen)" --arg p "$port" --arg path "$(rand_path)" '
               .uuid //= $uuid | .mode //= "xhttp" | .path //= $path |
               .domain //= "" | .listen_addr //= "0.0.0.0" |
               .public_port //= ($p | tonumber) | .fallback_enabled //= false') || return 1
             mode=$(printf '%s' "$json" | jq -r '.mode')
+            if [[ "$mode" == "mkcp" ]]; then
+                json=$(printf '%s' "$json" | jq -c --arg seed "$(rand_str 16)" '
+                  .kcp_seed //= $seed | .kcp_header //= "none"') || return 1
+            fi
             if [[ "$mode" == "reality-layer" ]]; then
                 sid=$(openssl rand -hex 4)
                 json=$(printf '%s' "$json" | jq -c --arg sid "$sid" '.short_id //= $sid') || return 1
@@ -472,7 +545,7 @@ _node_cli_validate() {
         _node_cli_err "node requires a non-empty tag and an integer port in 1..65535"
         return 1
     fi
-    if ! printf '%s' "$json" | jq -e --arg proto "$proto" '
+    if ! printf '%s' "$json" | jq -e --arg proto "$proto" --arg core "$core" '
       if $proto == "reality" then
         ([.uuid,.private_key,.public_key,.server_name,.dest,.flow] | all(type == "string" and length > 0)) and
         (.short_ids | type == "array" and length > 0)
@@ -484,7 +557,33 @@ _node_cli_validate() {
         (.public_port | type == "number") and (.fallback_enabled | type == "boolean") and
         (if .mode == "reality-layer" then
            ([.private_key,.public_key,.short_id,.server_name] | all(type == "string" and length > 0))
+         elif .mode == "mkcp" then
+           # mKCP 不套 TLS，没有域名和证书；seed 是它唯一的加密材料，不能为空
+           (.kcp_seed | type == "string" and length > 0)
          else (.domain | type == "string" and length > 0) end)
+      elif $proto == "socks" then
+        (.listen_addr | type == "string" and length > 0) and
+        (.public_port | type == "number") and
+        ([.username,.password] | all(type == "string")) and
+        # 公网监听必须有凭据；仅本机可以免认证
+        (if .listen_addr == "127.0.0.1" then true
+         else (.username | length > 0) and (.password | length > 0) end)
+      elif $proto == "vmess" then
+        # VMess 固定 WS+TLS：uuid 和 path 两者缺一不可
+        ([.uuid,.path,.listen_addr] | all(type == "string" and length > 0)) and
+        (.public_port | type == "number") and
+        (if $core == "xray" then (.domain | type == "string" and length > 0)
+         else ([.sni,.cert_path,.key_path] | all(type == "string" and length > 0)) end)
+      elif $proto == "trojan" then
+        # Xray 侧强制真实域名+证书，走 Nginx 伪装站回落；sing-box / mihomo 侧
+        # 允许自签名证书（与 anytls 同构），两者的节点字段并不相同。
+        (if $core == "xray" then
+           ([.password,.domain,.listen_addr] | all(type == "string" and length > 0)) and
+           (.public_port | type == "number") and (.fallback_enabled | type == "boolean")
+         else
+           ([.password,.sni,.cert_path,.key_path] | all(type == "string" and length > 0)) and
+           (.insecure | type == "number" or type == "boolean")
+         end)
       elif $proto == "ss2022" then
         ([.method,.password,.listen] | all(type == "string" and length > 0))
       elif $proto == "hysteria2" then
@@ -518,7 +617,7 @@ _node_cli_validate() {
             ;;
         xhttp)
             mode=$(printf '%s' "$json" | jq -r '.mode')
-            case "$mode" in xhttp|upgrade|ws|grpc|reality-layer) ;; *) _node_cli_err "unsupported XHTTP mode: $mode"; return 1 ;; esac
+            case "$mode" in xhttp|upgrade|ws|grpc|reality-layer|httpupgrade|h2|mkcp) ;; *) _node_cli_err "unsupported XHTTP mode: $mode"; return 1 ;; esac
             ;;
     esac
     # Creating a loopback listener also requires transactional Nginx SNI
@@ -582,9 +681,9 @@ _node_cli_transport() {
 # transactional Nginx map/certificate changes, so the CLI refuses them.
 _node_cli_fronted_pair() {
     case "$1/$2" in
-        xray/reality|xray/vision|xray/xhttp) return 0 ;;
-        sing-box/reality|sing-box/anytls)    return 0 ;;
-        mihomo/reality|mihomo/anytls)        return 0 ;;
+        xray/reality|xray/vision|xray/xhttp|xray/trojan|xray/vmess) return 0 ;;
+        sing-box/reality|sing-box/anytls|sing-box/trojan|sing-box/vmess) return 0 ;;
+        mihomo/reality|mihomo/anytls|mihomo/trojan|mihomo/vmess) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -882,6 +981,18 @@ _node_cli_cmd_update() {
     core=$(printf '%s' "$item" | jq -r '.core'); proto=$(printf '%s' "$item" | jq -r '.protocol')
     old_node=$(printf '%s' "$item" | jq -c '.node'); patch=$(printf '%s' "$state" | jq -c '.node | del(.tag)')
     node=$(jq -cn --argjson old "$old_node" --argjson patch "$patch" '$old * $patch') || return 1
+    # 直连节点改端口时 public_port 必须跟着走：分享链接取的是 public_port // port，
+    # 不同步就会导出一条指向旧端口的链接，节点在新端口上监听、客户端连不上。交互式
+    # 的 *_modify_port 一直是这么做的，非交互路径此前漏了这一步。
+    # 两个例外：挂 Nginx 的节点（listen_addr 127.0.0.1）public_port 是公网 443，
+    # 与后端回环端口无关；调用方显式传了 --public-port 时以调用方为准。
+    node=$(jq -cn --argjson old "$old_node" --argjson new "$node" --argjson patch "$patch" '
+        if ($patch | has("public_port")) then $new
+        elif ($new | has("public_port"))
+             and (($new.listen_addr // "") != "127.0.0.1")
+             and ($new.port != $old.port)
+        then $new | .public_port = $new.port
+        else $new end') || return 1
     _node_cli_validate_update_side_effects "$core" "$proto" "$old_node" "$node" || return 2
     _node_cli_validate "$core" "$proto" "$node" update || return 2
     port=$(printf '%s' "$node" | jq -r '.port')
@@ -954,7 +1065,7 @@ _node_cli_ss_userinfo() {
 
 _node_cli_export_uri() {
     local core="$1" proto="$2" n="$3" server="$4"
-    local tag port uuid flow sn pbk sid mode path domain method password sni insecure obfs psk version
+    local tag port uuid flow sn pbk sid mode path domain method password sni insecure obfs psk version username
     tag=$(printf '%s' "$n" | jq -r '.tag'); port=$(printf '%s' "$n" | jq -r '.public_port // .port')
     case "$proto" in
         reality)
@@ -985,6 +1096,50 @@ _node_cli_export_uri() {
                 printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=xhttp&path=%s&mode=auto#%s\n' \
                     "$uuid" "$server" "$port" "$(_node_cli_urlencode "$domain")" "$(_node_cli_urlencode "$path")" "$(_node_cli_urlencode "PSM-$tag")"
             fi
+            ;;
+        socks)
+            # 仅本机的节点没有可分享的地址（127.0.0.1 换台机器就连不上），
+            # 导出一条会误导人的链接不如明确报错。
+            username=$(printf '%s' "$n" | jq -r '.username // ""')
+            password=$(printf '%s' "$n" | jq -r '.password // ""')
+            if [[ "$(printf '%s' "$n" | jq -r '.listen_addr // ""')" == "127.0.0.1" ]]; then
+                _node_cli_err 'a loopback-only SOCKS5 node has no shareable address; it is reachable at 127.0.0.1 on the host itself'
+                return 2
+            fi
+            if [[ -n "$username" ]]; then
+                printf 'socks://%s@%s:%s#%s\n' \
+                    "$(printf '%s:%s' "$username" "$password" | openssl base64 -A)" \
+                    "$server" "$port" "$(_node_cli_urlencode "PSM-$tag")"
+            else
+                printf 'socks://%s:%s#%s\n' "$server" "$port" "$(_node_cli_urlencode "PSM-$tag")"
+            fi
+            ;;
+        vmess)
+            # VMess 没有查询参数式 URI：vmess:// 后跟一段 base64 的 JSON
+            # （v2rayN 事实标准）。字段名是固定三字母缩写，改名客户端解析不出来。
+            uuid=$(printf '%s' "$n" | jq -r '.uuid')
+            path=$(printf '%s' "$n" | jq -r '.path')
+            domain=$(printf '%s' "$n" | jq -r '.domain // .sni // ""')
+            jq -nc --arg ps "PSM-$tag" --arg add "$server" --arg port "$port" \
+                --arg id "$uuid" --arg host "$domain" --arg path "$path" \
+                '{v:"2", ps:$ps, add:$add, port:$port, id:$id, aid:"0", scy:"auto",
+                  net:"ws", type:"none", host:$host, path:$path, tls:"tls", sni:$host}' \
+                | openssl base64 -A | sed 's|^|vmess://|'
+            printf '\n'
+            ;;
+        trojan)
+            password=$(printf '%s' "$n" | jq -r '.password')
+            # Xray 侧字段是 domain（真实证书域名），sing-box / mihomo 侧是 sni
+            # （可能是自签证书的伪装域名）。取到哪个用哪个。
+            domain=$(printf '%s' "$n" | jq -r '.domain // .sni // ""')
+            # alpn 只在服务端真的配了才写进链接。Xray 侧的 tlsSettings 显式声明了
+            # ["h2","http/1.1"]；sing-box / mihomo 侧的 tls 块没有 alpn 字段，此时
+            # 让客户端宣告一组服务端并不限制的协议只会徒增握手不一致的风险。
+            printf 'trojan://%s@%s:%s?security=tls&sni=%s&type=tcp' \
+                "$(_node_cli_urlencode "$password")" "$server" "$port" \
+                "$(_node_cli_urlencode "$domain")"
+            [[ "$core" == "xray" ]] && printf '&alpn=%s' "$(_node_cli_urlencode "h2,http/1.1")"
+            printf '#%s\n' "$(_node_cli_urlencode "PSM-$tag")"
             ;;
         ss2022)
             method=$(printf '%s' "$n" | jq -r '.method'); password=$(printf '%s' "$n" | jq -r '.password')

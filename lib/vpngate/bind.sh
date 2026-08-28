@@ -183,6 +183,15 @@ vg_unbind_core() {
     esac
 }
 
+# 各内核里这条家宽出口叫什么。exit_routing_choose 需要它来下规则。
+vg_target_of() {
+    case "$1" in
+        xray)    printf '%s' "$VG_XRAY_TAG" ;;
+        singbox) printf '%s' "$VG_SB_TAG" ;;
+        mihomo)  printf '%s' "$VG_MH_NAME" ;;
+    esac
+}
+
 vg_add_preset_rules() {
     case "$1" in
         xray)    _vg_rules_xray ;;

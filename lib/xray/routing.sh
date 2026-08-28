@@ -63,6 +63,14 @@ _route_build_xray_rule() {
         jq -n --argjson ip "$arr" --arg ot "$outtag" \
             '{"type":"field","ip":$ip,"outboundTag":$ot}'
         ;;
+    all)
+        # 全部流量走该出口。Xray 没有「catch-all」关键字，靠一条不带任何域名 / IP
+        # 匹配条件、只声明 network 的 field 规则实现——它会命中所有 TCP/UDP 连接。
+        # 这条规则必须排在最后（_route_apply_to_xray 按 id 顺序写出，UI 侧保证）。
+        # 注意作用范围：只影响经由入站进来的客户端流量，不影响本机自身出网。
+        jq -n --arg ot "$outtag" \
+            '{"type":"field","network":"tcp,udp","outboundTag":$ot}'
+        ;;
     inbound)
         local arr; arr=$(echo "$val" | tr ',' '\n' | jq -R . | jq -sc .)
         jq -n --argjson ib "$arr" --arg ot "$outtag" \
@@ -111,7 +119,7 @@ _route_apply_to_xray() {
 
     # Set domainStrategy if any geosite/domain rules exist
     local needs_dns=0
-    echo "$rules" | jq -e '[.[].rule_type] | any(. == "geosite" or . == "domain" or . == "ruleset")' &>/dev/null \
+    echo "$rules" | jq -e '[.[].rule_type] | any(. == "geosite" or . == "domain" or . == "ruleset" or . == "all")' &>/dev/null \
         && needs_dns=1
     if (( needs_dns )); then
         local tmp2; tmp2=$(mktemp)

@@ -338,7 +338,11 @@ _sb_route_apply() {
 
     # 3) 一次性写回 .outbounds / .endpoints / .route / .experimental
     local tmp; tmp=$(mktemp)
+    # route.final 决定「没命中任何规则的流量走哪」。默认 direct（保持原行为）；
+    # 「全部流量走某出口」就是把它指过去——只影响经入站进来的客户端流量，
+    # 本机自身出网不受影响。
     if ! jq \
+        --arg final "${SB_ROUTE_FINAL:-$(_er_route_final sb_route_final direct)}" \
         --argjson obs "$OBS" --argjson eps "$EPS" \
         --argjson rr "$RR" --argjson rs "$RS" --argjson needdns "$NEEDDNS" '
         .outbounds = ( [ .outbounds[]? | select((.tag // "") | (startswith("out-") | not)) ] )
@@ -348,7 +352,7 @@ _sb_route_apply() {
         | .endpoints = ( [ (.endpoints // [])[]? | select((.tag // "") | (startswith("out-") | not)) ] + $eps )
         | (if (.endpoints | length) == 0 then del(.endpoints) else . end)
         | .route.rules = ( [ {action:"sniff"} ] + $rr + [ {ip_is_private:true, action:"reject"} ] )
-        | .route.final = "direct"
+        | .route.final = $final
         | .route.rule_set = $rs
         | (if ($rs | length) == 0 then del(.route.rule_set) else . end)
         | (if ($rs | length) > 0

@@ -420,6 +420,9 @@ _xray_view_all_nodes() {
     source "$(dirname "${BASH_SOURCE[0]}")/vision.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/xhttp.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/ss2022.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"
 
     # 展示前把 config.json 中的手动修改（端口/UUID/密码）同步回各协议的
     # 节点存储，否则这里和后续 show 函数显示的都是旧值。
@@ -427,6 +430,10 @@ _xray_view_all_nodes() {
     _vision_sync_from_live  || true
     _xhttp_sync_from_live   || true
     _xss_sync_from_live     || true
+    _trojan_sync_from_live  || true
+    _vmess_sync_from_live   || true
+    # socks 没有 sync_from_live：它的凭据不在 config.json 里做二次编辑的场景，
+    # 且 noauth 节点根本没有可同步的字段。
 
     local -a _protos _tags
     local i=0
@@ -457,6 +464,24 @@ _xray_view_all_nodes() {
                "$i" "$tag" "$port" "$method"
     done < <(_xss_list 2>/dev/null)
 
+    while IFS=$'\t' read -r tag port listen domain; do
+        i=$((i+1)); _protos+=("trojan"); _tags+=("$tag")
+        printf "  ${CYAN}%2d.${NC} ${GREEN}[Trojan]${NC}   %-18s  port=%-6s  listen=%-15s  domain=%s\n" \
+               "$i" "$tag" "$port" "$listen" "$domain"
+    done < <(_trojan_list 2>/dev/null)
+
+    while IFS=$'\t' read -r tag port listen domain; do
+        i=$((i+1)); _protos+=("vmess"); _tags+=("$tag")
+        printf "  ${CYAN}%2d.${NC} ${BLUE}[VMess]${NC}    %-18s  port=%-6s  listen=%-15s  domain=%s\n" \
+               "$i" "$tag" "$port" "$listen" "$domain"
+    done < <(_vmess_list 2>/dev/null)
+
+    while IFS=$'\t' read -r tag port listen auth; do
+        i=$((i+1)); _protos+=("socks"); _tags+=("$tag")
+        printf "  ${CYAN}%2d.${NC} ${YELLOW}[SOCKS5]${NC}   %-18s  port=%-6s  listen=%-15s  auth=%s\n" \
+               "$i" "$tag" "$port" "$listen" "$auth"
+    done < <(_socks_list 2>/dev/null)
+
     if (( i == 0 )); then
         log_warn "$(t xray.no_nodes)"
         return
@@ -478,6 +503,9 @@ _xray_view_all_nodes() {
         vision)  vision_show_share "$tag" ;;
         xhttp)   xhttp_show_share  "$tag" ;;
         ss2022)  _xss_uri          "$tag" ;;
+        trojan)  trojan_show_share "$tag" ;;
+        vmess)   vmess_show_share  "$tag" ;;
+        socks)   socks_show_share  "$tag" ;;
     esac
 }
 
@@ -488,13 +516,19 @@ _xray_protocol_menu() {
             "$(t xray.protocol_menu.reality)" \
             "$(t xray.protocol_menu.vision)" \
             "$(t xray.protocol_menu.xhttp)" \
-            "$(t xray.protocol_menu.ss2022)"
+            "$(t xray.protocol_menu.ss2022)" \
+            "$(t xray.protocol_menu.trojan)" \
+            "$(t xray.protocol_menu.vmess)" \
+            "$(t xray.protocol_menu.socks)"
 
         case "$MENU_CHOICE" in
             1) source "$(dirname "${BASH_SOURCE[0]}")/reality.sh"; reality_menu ;;
             2) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/vision.sh"; vision_menu ;;
             3) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/xhttp.sh"; xhttp_menu ;;
             4) source "$(dirname "${BASH_SOURCE[0]}")/ss2022.sh"; xss_menu ;;
+            5) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"; trojan_menu ;;
+            6) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"; vmess_menu ;;
+            7) source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"; socks_menu ;;
             0) return ;;
         esac
     done
