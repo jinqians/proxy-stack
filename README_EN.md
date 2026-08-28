@@ -69,7 +69,8 @@ flowchart TD
     B -->|"SNI = b.example.com"| C2["Reality node 2<br/>127.0.0.1:1444"]
     B -->|"SNI = c.example.com"| D["Vision node<br/>127.0.0.1:1445"]
     B -->|"SNI = d.example.com"| E["XHTTP node<br/>127.0.0.1:1446"]
-    B -->|"SNI matches no node"| F["HTTPS decoy site<br/>127.0.0.1:8443"]
+    B -->|"SNI = e.example.com (your own domain)"| F["HTTPS decoy site<br/>127.0.0.1:8443"]
+    B -->|"SNI matches no entry"| X["Connection dropped<br/>no upstream connection opened"]
 
     G(["Client connects on 443/UDP"]) --> H["Hysteria2<br/>independent QUIC listener, no conflict"]
 ```
@@ -77,6 +78,7 @@ flowchart TD
 Benefits:
 
 - **Only one port exposed externally** — the firewall only needs to allow 443, shrinking the scannable attack surface
+- **Unknown SNI is dropped** — the routing table only knows domains that were explicitly mounted, so a scanner putting an arbitrary SNI on the wire is disconnected without any upstream connection being opened. That blackhole also closes the path to using your server as a free relay (see the FAQ entry on CDN-fronted decoy targets)
 - **Multiple identities on one machine** — different protocol nodes, plus the decoy site shown to GFW probing, can all live on 443 at once, distinguished purely by domain name
 - **Multiple tenants per node** — no need to open a separate port/key pair per user; multiple UUIDs under the same SNI share one entry point, with traffic billed independently per user
 - **UDP 443 reuse is independent** — Hysteria2 runs over UDP, a completely separate listening stack from the TCP routing above, so there's no conflict even though the port number is the same
@@ -210,7 +212,7 @@ The uninstaller removes the shortcut command, cron entries, systemd timers/servi
 
 - **Xray** — Reality / Vision / XHTTP / SS2022, multi-node management, automatic key pair generation, VLESS URI export (with QR code) / Clash Meta / sing-box
 - **Reality multi-target liveness switching** — configure multiple candidate SNIs for the decoy target; periodic real TLS 1.3 handshake checks switch away from dead targets automatically while old client links keep working
-- **Smart Reality decoy discovery** — when configuring a Reality / XHTTP decoy SNI, cyberspace mapping engines (Netlas / Quake / ZoomEye / FOFA, using your own API key, free tiers suffice) can discover real TLS 1.3 sites in the **same ASN / same datacenter** as your server: nearby, obscure, and free of the over-used big-brand domains. Candidates are verified locally with real handshakes (TLS 1.3 / X25519 / certificate match) before being adopted, and can be batch-added to the liveness pool above. **No local port scanning at any point** (avoiding provider abuse reports) — discovery relies on the engines' datasets; without an engine configured, it falls back to manual input
+- **Smart Reality decoy discovery** — when configuring a Reality / XHTTP decoy SNI, cyberspace mapping engines (Netlas / Quake / ZoomEye / FOFA, using your own API key, free tiers suffice) can discover real TLS 1.3 sites in the **same ASN / same datacenter** as your server: nearby, obscure, and free of the over-used big-brand domains. A host in your own ASN is also not a CDN edge, which sidesteps the abuse risk covered in the FAQ. Candidates are verified locally with real handshakes (TLS 1.3 / X25519 / certificate match) before being adopted, and can be batch-added to the liveness pool above. **No local port scanning at any point** (avoiding provider abuse reports) — discovery relies on the engines' datasets; without an engine configured, it falls back to manual input
 - **Cloudflare WARP outbound unlock** — register a WARP identity with one click and wire it into Xray outbounds; combined with routing rules, traffic for Netflix / OpenAI etc. is steered through WARP
 - **VPNGate residential-IP exit** — picks genuine home-broadband IPs out of the public VPNGate list (ip-api batch classification drops datacenter nodes and VPNGate's own relays), brings up a dedicated openvpn tunnel, and wires it in as an fwmark outbound: services that judge you by IP ownership (Netflix / ChatGPT ...) see a residential exit, while the box's own default route and SSH stay untouched (the tunnel only ever writes a dedicated routing table). If the tunnel drops, matching traffic fails closed instead of leaking back through the datacenter IP, and failover is automatic **within the country you picked** (chosen from a numbered list of the countries that actually have nodes), so the exit country never drifts. Xray / sing-box / mihomo share the one tunnel, so switching residential IP changes nothing in any core config
 - **Subscribed rule sets** — paste a community rule-list URL (OpenAI.list and friends), pick an exit, and the traffic it describes leaves there. Xray has no rule-set mechanism, so rules are inlined into `config.json` (domains and IPs as two separate rules — fields within one rule are ANDed, and merging them would mean the rule never fires), which also makes it the one core that needs a restart; the daily update only rebuilds and restarts when the content actually changed
@@ -356,6 +358,22 @@ Not under 443 port multiplexing; the warning is expected there. Since v26.3.27 X
 If a node is not mounted behind the Nginx 443 split and instead listens on a public non-443 port directly, the warning is a genuine one: move it to 443 or put it behind port multiplexing.
 
 The same version can emit two other REALITY warnings: one when the camouflage target contains `apple` / `icloud` / `microsoft` or ends in `.cn` / `.ru` / `.ir` (pick a different domain), and one from v26.4.13 about the default minimum client core version (see the Xray kernel section above).
+
+### Can the decoy target (`dest` / SNI) be a site behind Cloudflare?
+
+Not recommended — and PSM warns you about it during configuration.
+
+REALITY's camouflage works by forwarding every connection that **fails authentication** to the decoy target (`dest`) untouched, so a prober sees a genuine website's full TLS response. That forwarding is unconditional: it looks neither at the source nor at what the ClientHello asked for.
+
+The problem starts when `dest` lands on a multi-tenant CDN edge (Cloudflare, Fastly, Akamai, …). Those IPs serve **any tenant** by SNI, so anyone who scans your port 443 only has to put some other hostname on that CDN into the ClientHello to get a tunnel into the entire CDN through your box — **your server becomes a free port forwarder for the CDN**, on your bandwidth and your bill. The Xray documentation warns about exactly this.
+
+PSM handles it in three layers:
+
+1. **No decoy domain ships as a default** — the default camouflage SNI is empty on all three cores, so no crowd of installs shares one factory default (which could move behind a CDN later anyway). Xray's discovery prefers targets in the **same ASN**, and a host in your own datacenter is not a CDN edge; sing-box and mihomo have no discovery path, so they require an explicit target, and the non-interactive CLI fails with a message instead of building a node on a borrowed default
+2. **A probe at configuration time** — after you enter `dest`, PSM connects to the same IP using a set of unrelated probe hostnames as SNI. If a valid certificate comes back for a hostname the target does not own, it is flagged as a shared frontend. This tests the property that actually matters (does this IP serve arbitrary tenants?) rather than tracking CDN IP ranges or ASNs. It **warns rather than blocks** — the verdict can misfire, and the risk is yours to weigh
+3. **Two backstops** — under 443 port reuse, unknown SNI is dropped at the Nginx layer, so a prober must use the node's real camouflage domain to reach REALITY at all, and that SNI forwarded to `dest` only ever returns `dest`'s own site. And if you proceed past the warning, Xray / mihomo nodes get REALITY fallback rate limiting written in automatically (`limitFallback*` / `limit-fallback-*`)
+
+Two known gaps worth knowing: `limitFallback` is **per connection**, so an abuser who reconnects in a loop bypasses it — it is a backstop, not a fix. And sing-box's reality inbound has no equivalent option at all, which makes "sing-box + direct-listen port + CDN-fronted `dest`" the weakest combination; PSM prompts you to switch to 443 port reuse when it sees one. The real fix is always to **pick a decoy target that is not behind a CDN**.
 
 ### Will it overwrite my existing Nginx configuration?
 
