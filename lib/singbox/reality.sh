@@ -202,28 +202,53 @@ sb_reality_add_node() {
     _sb_reality_sync_from_live
     log_step "$(t sb.reality.configuring)"
 
-    local tag port uuid flow server_names_raw dest
+    local tag port uuid flow server_names_raw dest server_name
     local count; count=$(_sb_reality_count)
 
     ask tag "$(t sb.reality.ask_tag)" "sb-reality-$((count+1))"
     [[ "$tag" =~ ^sb-reality ]] || tag="sb-reality-${tag}"
 
+
+    # ── 自有域名 + 本地伪装站 ─────────────────────────────────────────────────
+    # 域名直接解析到本机时，不必去借别人的站点：签一张自己的证书，用 Nginx 在
+    # 127.0.0.1:8443 起一个真的 HTTPS 站，让 Reality 的回落打到它。DNS、证书、
+    # 实际服务三者一致，比借用公共域名更自洽（借来的域名解析到别人的 IP，
+    # 一比对就露馅）。与 Xray 侧 reality.sh 的同名流程保持一致。
+    local own_domain=0 domain=""
+    echo ""
+    if ask_yn "$(t sb.reality.ask_own_domain)" N; then
+        own_domain=1
+        ask domain "$(t sb.reality.ask_domain_sni)"
+        [[ -z "$domain" ]] && { log_error "$(t sb.reality.domain_empty)"; return 1; }
+
+        source "$LIB_DIR/cert.sh"
+        if cert_ensure_domain "$domain" "$(t sb.reality.cert_note)"; then
+            server_names_raw="$domain"
+            server_name="$domain"
+            # dest 收到的是原始 TLS 流，必须指向一个会说 TLS 的后端
+            dest="127.0.0.1:8443"
+            log_info "$(t sb.reality.dest_local_https)"
+        else
+            # 证书签不下来时 Nginx 不会创建 8443 伪装站，此时 dest 还指过去只会拿到
+            # connection refused —— 那比不做伪装更暴露。回退到公共域名伪装。
+            log_warn "$(t sb.reality.no_cert_fallback)"
+            own_domain=0; server_names_raw=""; server_name=""; dest=""
+        fi
+    fi
+
     # P1: ask the SNI first, compute the primary server_name, then default the
     # camouflage dest to it. Reality forwards the client handshake to dest, whose
     # cert must cover the presented SNI — a hardcoded dest that ignored the SNI
     # builds and passes the config test yet lets no client handshake.
-    local server_name
-    while :; do
+    if (( ! own_domain )); then
         while :; do
             ask server_names_raw "$(t sb.reality.ask_sni)" "$SB_REALITY_DEFAULT_SN"
             server_name=$(echo "$server_names_raw" | cut -d',' -f1 | tr -d ' ')
             [[ -n "$server_name" ]] && break
             log_error "$(t common.reality.sni_empty)"
         done
-        [[ -n "$server_name" ]] && break
-        log_error "$(t common.reality.sni_empty)"
-    done
-    ask dest "$(t sb.reality.ask_dest)" "${server_name}:443"
+        ask dest "$(t sb.reality.ask_dest)" "${server_name}:443"
+    fi
 
     # P2: advisory validation of the (SNI, dest) pair via the shared openssl-only
     # validator. Never hard-blocks: on failure the operator can re-enter or
@@ -260,7 +285,13 @@ sb_reality_add_node() {
     # 共享 CDN 前端时，直连模式等于三层防护全空 —— 没有 Nginx 的未知 SNI 黑洞挡在前面，
     # 也没有限速兜底，只剩 dest 选择这一条线。这是所有组合里最容易被当免费中继的一种，
     # 所以在这里显式提示改走挂载模式。
-    ask_yn "$(t sb.front.ask_mount)" N && use_nginx=1
+    # 自有域名模式下 dest 是本机 8443，挂到 443 分流才是完整形态，所以默认 Y；
+    # 借用公共域名时维持原来的默认 N。
+    if (( own_domain )); then
+        ask_yn "$(t sb.front.ask_mount)" Y && use_nginx=1
+    else
+        ask_yn "$(t sb.front.ask_mount)" N && use_nginx=1
+    fi
     if (( use_nginx == 0 )) && [[ "$REALITY_DEST_WARN" == shared_frontend:* ]]; then
         log_warn "$(t sb.reality.direct_shared_frontend)"
         ask_yn "$(t sb.front.ask_mount)" Y && use_nginx=1
@@ -341,6 +372,15 @@ sb_reality_add_node() {
 
     echo ""
     log_ok "$(t sb.reality.added "$tag" "$port")"
+
+    # 自有域名模式的 dest 是 127.0.0.1:8443，那个伪装站必须建起来 —— 不管节点挂不挂
+    # 443 分流。放在 use_nginx 判断之外：否则「选了自有域名但拒绝挂载」会让 dest 指向
+    # 一个从未创建的端口，Reality 回落拿到 connection refused，比不做伪装更暴露。
+    if (( own_domain )); then
+        source "$LIB_DIR/nginx.sh"
+        nginx_setup_camouflage_site "$domain" \
+            || log_warn "$(t sb.reality.camouflage_not_enabled)"
+    fi
 
     if (( use_nginx )); then
         # 路由条目在 sing-box 应用成功后再写，避免失败时留下指向死端口的路由

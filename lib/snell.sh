@@ -47,7 +47,7 @@ snell_show_config() {
     [[ -f "$SNELL_MAIN_CONF" ]] || { log_error "$(t snell.conf_missing "$SNELL_MAIN_CONF")"; return 1; }
 
     local port psk ipv6 dns
-    port=$(grep -E '^listen' "$SNELL_MAIN_CONF" | grep -oP ':\K[0-9]+$' || true)
+    port=$(awk -F: '/^listen/ { gsub(/[^0-9]/,"",$NF); print $NF; exit }' "$SNELL_MAIN_CONF" || true)
     psk=$(grep  -E '^psk'    "$SNELL_MAIN_CONF" | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
     ipv6=$(grep -E '^ipv6'   "$SNELL_MAIN_CONF" | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
     dns=$(grep  -E '^dns'    "$SNELL_MAIN_CONF" | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
@@ -152,7 +152,7 @@ _snell_show_node_list() {
         echo "  $(t common.not_configured)"
         return
     fi
-    local port; port=$(grep -E '^listen' "$SNELL_MAIN_CONF" | grep -oP ':\K[0-9]+$' || true)
+    local port; port=$(awk -F: '/^listen/ { gsub(/[^0-9]/,"",$NF); print $NF; exit }' "$SNELL_MAIN_CONF" || true)
     local psk;  psk=$(grep -E '^psk' "$SNELL_MAIN_CONF" | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
     local ip;   ip=$(get_ipv4 2>/dev/null || echo "?")
     printf "$(t snell.list_line)" "$ip" "$port" "$psk"

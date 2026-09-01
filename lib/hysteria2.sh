@@ -228,7 +228,12 @@ hy2_show_share() {
     local port;     port=$(state_get "hy2_port")
     [[ -z "$port" ]] && port=$(grep "^listen:" "$HY2_CFG" | sed 's/listen: *://;s/ .*//' || true)
     [[ -z "$port" ]] && port=443
-    [[ -z "$password" ]] && password=$(grep "password:" "$HY2_CFG" | head -1 | sed 's/.*password: *"\?//;s/"\?.*//' || true)
+    # 用 awk 而不是 sed：`\?` 是 GNU sed 的扩展，BSD sed 不认，会把整行原样吐回来
+    # （密码里就混进了 "  password: " 前缀）。awk 的写法两边一致，也同时兼容
+    # 带引号和不带引号两种 YAML 写法。
+    [[ -z "$password" ]] && password=$(awk -F'password:' '/password:/ {
+            v=$2; gsub(/^[ \t]+|[ \t]+$/,"",v); gsub(/^"|"$/,"",v); print v; exit }' \
+        "$HY2_CFG" 2>/dev/null || true)
 
     local ip; ip=$(get_ipv4)
     local insecure=0

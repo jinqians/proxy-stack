@@ -410,6 +410,10 @@ _sb_post_install_wizard() {
     echo -e "  3. $(t sb.protocol.hysteria2)"
     echo -e "  4. $(t sb.protocol.anytls)"
     echo -e "  5. $(t sb.protocol.snell)"
+    echo -e "  6. $(t sb.protocol.trojan)"
+    echo -e "  7. $(t sb.protocol.vmess)"
+    echo -e "  8. $(t sb.protocol.socks)"
+    echo -e "  9. $(t sb.protocol.vless)"
     read -rp "$(echo -e "${CYAN}$(t sb.ask_select_default)${NC}")" pc
     echo ""
     case "${pc:-1}" in
@@ -418,6 +422,10 @@ _sb_post_install_wizard() {
         3) source "$(dirname "${BASH_SOURCE[0]}")/hysteria2.sh"; sb_hy2_add_node ;;
         4) source "$(dirname "${BASH_SOURCE[0]}")/anytls.sh";    sb_anytls_add_node ;;
         5) source "$(dirname "${BASH_SOURCE[0]}")/snell.sh";     sb_snell_add_node ;;
+        6) source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"; sb_trojan_add_node ;;
+        7) source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"; sb_vmess_add_node ;;
+        8) source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"; sb_socks_add_node ;;
+        9) source "$(dirname "${BASH_SOURCE[0]}")/vless.sh"; sb_vless_add_node ;;
         *) log_info "$(t sb.protocol_skipped)" ;;
     esac
 }
@@ -499,6 +507,7 @@ _sb_view_all_nodes() {
     source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"
     source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"
+    source "$(dirname "${BASH_SOURCE[0]}")/vless.sh"
 
     _sb_reality_sync_from_live || true
     _sb_ss_sync_from_live      || true
@@ -556,6 +565,12 @@ _sb_view_all_nodes() {
                "$i" "$tag" "$port" "$laddr" "$auth"
     done < <(_sb_socks_list 2>/dev/null)
 
+    while IFS=$'\t' read -r tag port sni tr; do
+        i=$((i+1)); _protos+=("vless"); _tags+=("$tag")
+        printf "  ${CYAN}%2d.${NC} ${BLUE}[VLESS/%-11s]${NC} %-18s  port=%-6s  sni=%s\n" \
+               "$i" "$tr" "$tag" "$port" "$sni"
+    done < <(_sb_vless_list 2>/dev/null)
+
     if (( i == 0 )); then
         log_warn "$(t sb.no_nodes)"
         return
@@ -580,6 +595,7 @@ _sb_view_all_nodes() {
         trojan)    _sb_trojan_uri      "$tag" ;;
         vmess)     _sb_vmess_uri       "$tag" ;;
         socks)     _sb_socks_uri       "$tag" ;;
+        vless)     _sb_vless_uri       "$tag" ;;
         snell)     _sb_snell_share     "$tag" ;;
     esac
 }
@@ -595,7 +611,8 @@ _sb_protocol_menu() {
             "$(t sb.protocol_menu.snell)" \
             "$(t sb.protocol_menu.trojan)" \
             "$(t sb.protocol_menu.vmess)" \
-            "$(t sb.protocol_menu.socks)"
+            "$(t sb.protocol_menu.socks)" \
+            "$(t sb.protocol_menu.vless)"
 
         case "$MENU_CHOICE" in
             1) source "$(dirname "${BASH_SOURCE[0]}")/reality.sh";   sb_reality_menu ;;
@@ -606,6 +623,7 @@ _sb_protocol_menu() {
             6) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"; sb_trojan_menu ;;
             7) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"; sb_vmess_menu ;;
             8) source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"; sb_socks_menu ;;
+            9) source "$LIB_DIR/nginx.sh"; source "$(dirname "${BASH_SOURCE[0]}")/vless.sh"; sb_vless_menu ;;
             0) return ;;
         esac
     done

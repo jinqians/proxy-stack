@@ -240,7 +240,7 @@ _main_menu() {
     printf "  ${C} 8.${N} %s  ${C}19.${N} %s\n"  "$(_mpad "$(t menu.main.nginx)")"      "$(t menu.main.update)"
     printf "  ${C} 9.${N} %s  ${C}20.${N} %s\n"  "$(_mpad "$(t menu.main.website)")"    "$(t menu.main.security)"
     printf "  ${C}10.${N} %s  ${C}21.${N} %s\n"  "$(_mpad "$(t menu.main.cert)")"       "$(t menu.main.language)"
-    printf "  ${C}11.${N} %s\n"  "$(t menu.main.view_nodes)"
+    printf "  ${C}11.${N} %s  ${C}22.${N} %s\n"  "$(_mpad "$(t menu.main.view_nodes)")"  "$(t menu.main.subscribe)"
     echo -e "${B}──────────────────────────────────────────────────────────────${NC}"
     printf "  ${C} 0.${N} %s\n" "$(t menu.main.exit)"
     echo -e "${B}══════════════════════════════════════════════════════════════${NC}"
@@ -266,6 +266,7 @@ _view_all_nodes() {
     source "$LIB_DIR/singbox/trojan.sh"    2>/dev/null; _sb_trojan_show_node_list  2>/dev/null || true
     source "$LIB_DIR/singbox/vmess.sh"       2>/dev/null; _sb_vmess_show_node_list  2>/dev/null || true
     source "$LIB_DIR/singbox/socks.sh"       2>/dev/null; _sb_socks_show_node_list  2>/dev/null || true
+    source "$LIB_DIR/singbox/vless.sh"       2>/dev/null; _sb_vless_show_node_list  2>/dev/null || true
 
     source "$LIB_DIR/mihomo/reality.sh"   2>/dev/null; _mh_reality_show_node_list 2>/dev/null || true
     source "$LIB_DIR/mihomo/ss2022.sh"    2>/dev/null; _mh_ss_show_node_list      2>/dev/null || true
@@ -275,6 +276,7 @@ _view_all_nodes() {
     source "$LIB_DIR/mihomo/trojan.sh"    2>/dev/null; _mh_trojan_show_node_list  2>/dev/null || true
     source "$LIB_DIR/mihomo/vmess.sh"        2>/dev/null; _mh_vmess_show_node_list  2>/dev/null || true
     source "$LIB_DIR/mihomo/socks.sh"        2>/dev/null; _mh_socks_show_node_list  2>/dev/null || true
+    source "$LIB_DIR/mihomo/vless.sh"        2>/dev/null; _mh_vless_show_node_list  2>/dev/null || true
 
     echo -e "\n${BOLD}Hysteria2:${NC}"
     if [[ -f /etc/hysteria/config.yaml ]]; then
@@ -335,6 +337,10 @@ main() {
             10)
                 source "$LIB_DIR/cert.sh"
                 cert_menu
+                ;;
+            22)
+                source "$LIB_DIR/subscribe.sh"
+                sub_menu
                 ;;
             11)
                 _view_all_nodes

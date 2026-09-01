@@ -528,10 +528,20 @@ reality_add_node() {
         # 只写显式条目，绝不把 Reality 设成未知 SNI 的兜底后端 —— 那会让本机成为
         # 任何人都能白嫖的到 dest 的中继（见 nginx.sh 的 SNI_DEFAULT_BLACKHOLE）。
         _sni_add_entry "$_primary_sn" "127.0.0.1:${port}"
-        if (( own_domain )); then
-            nginx_setup_camouflage_site "$domain" \
-                || log_warn "$(t xray.reality.camouflage_not_enabled)"
+    fi
+
+    # 自有域名模式的 dest 是 127.0.0.1:8443，那个伪装站必须建起来 —— 无论节点是挂在
+    # Nginx 443 上还是直连独占端口。以前这段只写在 use_nginx 分支里，选了自有域名却
+    # 拒绝挂载的组合会让 dest 指向一个从未创建的端口：Reality 的回落拿到 connection
+    # refused，比不做伪装更容易暴露（见上面 no_cert_fallback 处的同一条理由）。
+    if (( own_domain )); then
+        source "$LIB_DIR/nginx.sh"
+        if ! is_installed nginx; then
+            log_warn "$(t xray.reality.nginx_not_installed)"
+            ask_yn "$(t xray.ask_install_nginx)" Y && nginx_install || true
         fi
+        nginx_setup_camouflage_site "$domain" \
+            || log_warn "$(t xray.reality.camouflage_not_enabled)"
     fi
 
     # ── Generate keys ─────────────────────────────────────────────────────────

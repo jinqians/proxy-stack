@@ -846,7 +846,8 @@ _trf_add_wizard() {
     local snell_conf="/etc/snell/users/snell-main.conf"
     if [[ -f "$snell_conf" ]]; then
         local snell_port
-        snell_port=$(grep -E '^listen' "$snell_conf" | grep -oP ':\K[0-9]+$' 2>/dev/null || true)
+        # grep -oP 依赖 PCRE（GNU 专有）；awk 写法在任何 POSIX 环境都一致
+        snell_port=$(awk -F: '/^listen/ { gsub(/[^0-9]/,"",$NF); print $NF; exit }' "$snell_conf" 2>/dev/null || true)
         if [[ -n "$snell_port" ]]; then
             i=$((i+1)); tags+=("snell"); ports+=("$snell_port"); sources+=("iptables"); cports+=("$snell_port"); ifaces+=("")
             printf "  ${CYAN}%2d.${NC} %-22s %s %-6s ${GREEN}[Snell / iptables]${NC}\n" \
@@ -874,7 +875,7 @@ _trf_add_wizard() {
     local pair store_dir core_label proto proto_label store_file tag dport cport laddr ifc
     for pair in "singbox:sing-box" "mihomo:mihomo"; do
         store_dir="$CFG_DIR/${pair%%:*}"; core_label="${pair#*:}"
-        for proto in reality ss2022 hysteria2 anytls snell trojan vmess socks; do
+        for proto in reality ss2022 hysteria2 anytls snell trojan vmess socks vless; do
             store_file="$store_dir/$proto.json"
             [[ -f "$store_file" ]] || continue
             case "$proto" in
@@ -886,6 +887,7 @@ _trf_add_wizard() {
                 trojan)    proto_label="Trojan" ;;
                 vmess)     proto_label="VMess" ;;
                 socks)     proto_label="SOCKS5" ;;
+                vless)     proto_label="VLESS" ;;
             esac
             while IFS=$'\t' read -r tag dport cport laddr; do
                 [[ -n "$tag" && -n "$dport" ]] || continue

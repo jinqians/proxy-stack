@@ -36,8 +36,8 @@ Usage:
 Cores: xray, sing-box (alias: singbox), mihomo
 Protocols:
   xray:     reality, vision, xhttp, ss2022, trojan, vmess, socks
-  sing-box: reality, ss2022, hysteria2, anytls, snell, trojan, vmess, socks
-  mihomo:   reality, ss2022, hysteria2, anytls, snell, trojan, vmess, socks
+  sing-box: reality, ss2022, hysteria2, anytls, snell, trojan, vmess, socks, vless
+  mihomo:   reality, ss2022, hysteria2, anytls, snell, trojan, vmess, socks, vless
 
 Protocol inputs:
   reality:   --port; UUID/keys/short ID/SNI/dest receive safe defaults
@@ -47,6 +47,8 @@ Protocol inputs:
              --mode reality-layer takes --reality-transport xhttp|ws|grpc|h2
   trojan:    --port --domain [--password ...]
   vmess:     --port --domain [--uuid ...] [--path ...]   (WS+TLS)
+  vless:     --port --sni --cert-path --key-path [--uuid ...] [--transport ...] [--path ...]
+             transport: sing-box tcp|ws|grpc|http|httpupgrade|quic; mihomo tcp|ws|grpc|xhttp
   socks:     --port [--listen-addr 127.0.0.1|0.0.0.0] [--username ...] [--password ...]
              (alias: socks5; loopback by default, public listeners require credentials)
   ss2022:    --port [--method ...] [--password ...]
@@ -75,10 +77,10 @@ _node_cli_pairs() {
         $'xray\tvmess' $'xray\tsocks' \
         $'sing-box\treality' $'sing-box\tss2022' $'sing-box\thysteria2' \
         $'sing-box\tanytls' $'sing-box\tsnell' $'sing-box\ttrojan' $'sing-box\tvmess' \
-        $'sing-box\tsocks' \
+        $'sing-box\tsocks' $'sing-box\tvless' \
         $'mihomo\treality' $'mihomo\tss2022' $'mihomo\thysteria2' \
         $'mihomo\tanytls' $'mihomo\tsnell' $'mihomo\ttrojan' $'mihomo\tvmess' \
-        $'mihomo\tsocks'
+        $'mihomo\tsocks' $'mihomo\tvless'
 }
 
 _node_cli_norm_core() {
@@ -92,7 +94,7 @@ _node_cli_norm_core() {
 
 _node_cli_norm_protocol() {
     case "${1:-}" in
-        reality|vision|xhttp|anytls|snell|trojan|vmess|socks) printf '%s' "$1" ;;
+        reality|vision|xhttp|anytls|snell|trojan|vmess|socks|vless) printf '%s' "$1" ;;
         socks5) printf 'socks' ;;
         ss|ss2022|shadowsocks|shadowsocks2022) printf 'ss2022' ;;
         hy2|hysteria2) printf 'hysteria2' ;;
@@ -144,6 +146,7 @@ _node_cli_apply_fn() {
         sing-box/trojan) printf '_sb_trojan_apply' ;;
         sing-box/vmess) printf '_sb_vmess_apply' ;;
         sing-box/socks) printf '_sb_socks_apply' ;;
+        sing-box/vless) printf '_sb_vless_apply' ;;
         mihomo/reality) printf '_mh_reality_apply_all' ;;
         mihomo/ss2022) printf '_mh_ss_apply' ;;
         mihomo/hysteria2) printf '_mh_hy2_apply' ;;
@@ -152,6 +155,7 @@ _node_cli_apply_fn() {
         mihomo/trojan) printf '_mh_trojan_apply' ;;
         mihomo/vmess) printf '_mh_vmess_apply' ;;
         mihomo/socks) printf '_mh_socks_apply' ;;
+        mihomo/vless) printf '_mh_vless_apply' ;;
         *) return 1 ;;
     esac
 }
@@ -298,7 +302,7 @@ _node_cli_field_name() {
 
 _node_cli_is_field_opt() {
     case "$1" in
-        tag|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport) return 0 ;;
+        tag|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport|transport) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -439,6 +443,18 @@ _node_cli_defaults() {
                   .listen_addr //= $listen | .public_port //= ($p | tonumber)') || return 1
             fi
             ;;
+        vless)
+            # 传输默认裸 TLS（tcp）。Vision 的 flow 只在 tcp 下有意义，套进
+            # ws/grpc/h2 客户端对不上，所以其它传输一律清空 flow。
+            local _vl_listen="::"
+            [[ "$core" == "mihomo" ]] && _vl_listen="0.0.0.0"
+            json=$(printf '%s' "$json" | jq -c --arg uuid "$(uuid_gen)" --arg p "$port" \
+                --arg path "$(rand_path)" --arg listen "$_vl_listen" '
+              .uuid //= $uuid | .transport //= "tcp" | .path //= $path | .insecure //= 0 |
+              .listen_addr //= $listen | .public_port //= ($p | tonumber) |
+              .flow //= (if .transport == "tcp" then "xtls-rprx-vision" else "" end) |
+              (if .transport != "tcp" then .flow = "" else . end)') || return 1
+            ;;
         socks)
             # 默认只监听 127.0.0.1。SOCKS5 明文传输，公网暴露就是一个开放代理，
             # 非交互路径没人可以确认风险，所以默认值必须是保守的那个；要公网监听
@@ -561,6 +577,17 @@ _node_cli_validate() {
            # mKCP 不套 TLS，没有域名和证书；seed 是它唯一的加密材料，不能为空
            (.kcp_seed | type == "string" and length > 0)
          else (.domain | type == "string" and length > 0) end)
+      elif $proto == "vless" then
+        ([.uuid,.transport,.sni,.cert_path,.key_path,.listen_addr] | all(type == "string" and length > 0)) and
+        (.public_port | type == "number") and
+        # 传输能力按内核区分：sing-box 有 quic 没有 xhttp，mihomo 反过来
+        # 先把 .transport 取出来再进管道：写成 [...] | index(.transport) 时
+        # 管道里的 . 已经是那个数组，.transport 就成了「用字符串索引数组」，
+        # jq 报 Cannot index array with string 并让整条校验失败。
+        (.transport as $tr |
+         if $core == "mihomo"
+         then (["tcp","ws","grpc","xhttp"] | index($tr)) != null
+         else (["tcp","ws","grpc","http","httpupgrade","quic"] | index($tr)) != null end)
       elif $proto == "socks" then
         (.listen_addr | type == "string" and length > 0) and
         (.public_port | type == "number") and
@@ -682,8 +709,8 @@ _node_cli_transport() {
 _node_cli_fronted_pair() {
     case "$1/$2" in
         xray/reality|xray/vision|xray/xhttp|xray/trojan|xray/vmess) return 0 ;;
-        sing-box/reality|sing-box/anytls|sing-box/trojan|sing-box/vmess) return 0 ;;
-        mihomo/reality|mihomo/anytls|mihomo/trojan|mihomo/vmess) return 0 ;;
+        sing-box/reality|sing-box/anytls|sing-box/trojan|sing-box/vmess|sing-box/vless) return 0 ;;
+        mihomo/reality|mihomo/anytls|mihomo/trojan|mihomo/vmess|mihomo/vless) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1096,6 +1123,24 @@ _node_cli_export_uri() {
                 printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=xhttp&path=%s&mode=auto#%s\n' \
                     "$uuid" "$server" "$port" "$(_node_cli_urlencode "$domain")" "$(_node_cli_urlencode "$path")" "$(_node_cli_urlencode "PSM-$tag")"
             fi
+            ;;
+        vless)
+            uuid=$(printf '%s' "$n" | jq -r '.uuid')
+            flow=$(printf '%s' "$n" | jq -r '.flow // ""')
+            path=$(printf '%s' "$n" | jq -r '.path // "/"')
+            sni=$(printf '%s' "$n" | jq -r '.sni')
+            mode=$(printf '%s' "$n" | jq -r '.transport // "tcp"')
+            # 链接里的 type 用客户端认识的名字：sing-box 内部叫 http，客户端叫 h2
+            [[ "$mode" == "http" ]] && mode="h2"
+            printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=%s' \
+                "$uuid" "$server" "$port" "$(_node_cli_urlencode "$sni")" "$mode"
+            [[ -n "$flow" ]] && printf '&flow=%s' "$(_node_cli_urlencode "$flow")"
+            case "$mode" in
+                grpc)          printf '&serviceName=%s' "$(_node_cli_urlencode "${path#/}")" ;;
+                ws|h2|httpupgrade|xhttp)
+                               printf '&path=%s&host=%s' "$(_node_cli_urlencode "$path")" "$(_node_cli_urlencode "$sni")" ;;
+            esac
+            printf '#%s\n' "$(_node_cli_urlencode "PSM-$tag")"
             ;;
         socks)
             # 仅本机的节点没有可分享的地址（127.0.0.1 换台机器就连不上），

@@ -375,6 +375,9 @@ _xray_post_install_wizard() {
     echo -e "  2. $(t xray.protocol.vision)"
     echo -e "  3. $(t xray.protocol.xhttp)"
     echo -e "  4. $(t xray.protocol.ss2022)"
+    echo -e "  5. $(t xray.protocol.trojan)"
+    echo -e "  6. $(t xray.protocol.vmess)"
+    echo -e "  7. $(t xray.protocol.socks)"
     read -rp "$(echo -e "${CYAN}$(t xray.ask_select_default)${NC}")" pc
     echo ""
     case "${pc:-1}" in
@@ -382,6 +385,9 @@ _xray_post_install_wizard() {
         2) source "$(dirname "${BASH_SOURCE[0]}")/vision.sh";  vision_add_node ;;
         3) source "$(dirname "${BASH_SOURCE[0]}")/xhttp.sh";   xhttp_add_node ;;
         4) source "$(dirname "${BASH_SOURCE[0]}")/ss2022.sh";  xss_add_node ;;
+        5) source "$(dirname "${BASH_SOURCE[0]}")/trojan.sh"; trojan_add_node ;;
+        6) source "$(dirname "${BASH_SOURCE[0]}")/vmess.sh"; vmess_add_node ;;
+        7) source "$(dirname "${BASH_SOURCE[0]}")/socks.sh"; socks_add_node ;;
         *) log_info "$(t xray.protocol_skipped)" ;;
     esac
 }
