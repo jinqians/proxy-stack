@@ -24,7 +24,8 @@ sec "every download retries"
 # lines that download (to a file, into a shell, from GitHub releases or its API,
 # an installer or release notes) must carry PSM_DL; vps_test.sh has its own
 missing=$(grep -rnE 'curl [^#]*(-o |\| *sh|/releases|api\.github\.com|_INSTALLER|_RELEASE_NOTES|sha256sum\.txt|--max-filesize)' \
-              lib update.sh | grep -v 'PSM_DL' | grep -v '^lib/vps_test.sh:' | grep -v -- '-o /dev/null' || true)
+              lib update.sh | grep -v 'PSM_DL' | grep -v '^lib/vps_test.sh:' | grep -v -- '-o /dev/null' \
+              | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)   # a comment that names such a command is not one
 chk "no download without PSM_DL" test -z "$missing"
 [[ -z "$missing" ]] || echo "$missing" | sed 's/^/       /'
 chk "bootstrap.sh retries its download" grep -q "curl --retry 5 --connect-timeout 15 -fsSL" bootstrap.sh
