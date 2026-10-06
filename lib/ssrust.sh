@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 SS_BIN="/usr/local/bin/ss-rust"
 SS_CONF="/etc/ss-rust/config.json"
 SS_SERVICE="ss-rust"
-SS_INSTALLER="https://raw.githubusercontent.com/jinqians/ss-2022.sh/main/ss-2022.sh"
+SS_INSTALLER="https://raw.githubusercontent.com/jinqians/ss-2022/main/ss-2022.sh"
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 _ssrust_check_deps() {

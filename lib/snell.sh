@@ -7,7 +7,7 @@ SNELL_BIN="/usr/local/bin/snell-server"
 SNELL_CONF_DIR="/etc/snell"
 SNELL_MAIN_CONF="${SNELL_CONF_DIR}/users/snell-main.conf"
 SNELL_SERVICE="snell"
-SNELL_INSTALLER="https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
+SNELL_INSTALLER="https://raw.githubusercontent.com/jinqians/snell/main/snell.sh"
 # musl (Alpine): the official build cannot start there, so Snell runs in the
 # upstream image, which carries its own glibc runtime (see _snell_docker_install).
 SNELL_IMAGE="jinqians/snell-server:v5"

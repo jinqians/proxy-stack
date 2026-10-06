@@ -119,7 +119,8 @@ chk "Xray: per-user counters switched on"       jq -e '.policy.levels."0".statsU
 chk "sing-box: bob only on u-sr"                jq -e '[.inbounds[] | select(any(.users[]?; .name == "psmu-bob")) | .tag] == ["u-sr"]' $S
 chk "mihomo: bob only on u-mt"                  jq -e '[.listeners[] | select((.users | type) == "array" and any(.users[]; .username == "psmu-bob")) | .name] == ["u-mt"]' $M
 chk "SS2022 stays single-key"                   jq -e '.inbounds[] | select(.tag == "u-sss") | tostring | contains("psmu-") | not' $S
-for c in xray sing-box mihomo; do chk "$c active" bash -c "source lib/common.sh; svc_is_active $c"; done
+# The accounts restart each core; on OpenRC the restart can still be under way here, so wait for it
+for c in xray sing-box mihomo; do chk "$c active" bash -c "source lib/common.sh; for i in \$(seq 30); do svc_is_active $c && exit 0; sleep 1; done; exit 1"; done
 
 sec "links and traffic"
 psm user links alice --server 127.0.0.1 > /root/alice.txt 2>/dev/null
