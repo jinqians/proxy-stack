@@ -246,21 +246,127 @@ snell_show_config() {
 }
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
+# On systemd the upstream snell.sh installs Snell, and what it may have added
+# goes too, as its own uninstall does: the binary of each channel (v4 / v5 /
+# v6) and their backups, its per-user services (snell-<port>), the ShadowTLS
+# in front of them, its rule-based routing (sing-box as snell-router, with its
+# interception rules) and its egress control (a network namespace). The ports
+# the Snell services listened on are closed in the firewall.
+
+# snell.sh's rule-based routing: stopped, its interception rules taken down (by
+# its own script, and by hand for a half-removed install), removed with the
+# drop-ins that made root-run Snell services run as the snell user
+_snell_remove_router() {
+    local unit=/etc/systemd/system/snell-router.service net=/usr/local/bin/snell-router-net d
+    if [[ -f "$unit" ]]; then
+        systemctl stop snell-router 2>/dev/null || true
+        systemctl disable snell-router 2>/dev/null || true
+    fi
+    [[ -x "$net" ]] && { "$net" down >/dev/null 2>&1 || true; }
+    if command -v nft &>/dev/null; then nft delete table inet snell_router 2>/dev/null || true; fi
+    if command -v ip &>/dev/null; then
+        ip rule del fwmark 0x736e lookup 7391 pref 7391 2>/dev/null || true
+        ip -6 rule del fwmark 0x736e lookup 7391 pref 7391 2>/dev/null || true
+        ip route flush table 7391 2>/dev/null || true
+        ip -6 route flush table 7391 2>/dev/null || true
+    fi
+    for d in /etc/systemd/system/snell*.service.d; do
+        [[ -f "$d/snell-router.conf" ]] || continue
+        rm -f "$d/snell-router.conf"
+        rmdir "$d" 2>/dev/null || true
+    done
+    rm -f "$unit" "$net" /usr/local/bin/snell-router
+    rm -rf /etc/snell-router
+}
+
+# snell.sh's egress control: the namespace, its veth pair, NAT and FORWARD rules
+_snell_remove_egress() {
+    local setup=/usr/local/bin/snell-netns-setup.sh ns="snell-egress" n rule
+    if [[ -f "$setup" ]]; then
+        n=$(sed -n 's/^ip netns add \([A-Za-z0-9_.-]\{1,\}\).*/\1/p' "$setup" | head -n 1)
+        [[ -n "$n" ]] && ns="$n"
+    fi
+    if command -v ip &>/dev/null; then
+        ip netns del "$ns" 2>/dev/null || true
+        ip link del veth-host 2>/dev/null || true
+    fi
+    rm -rf "/etc/netns/${ns}" "$setup"
+    if command -v nft &>/dev/null; then
+        nft delete table ip snell_nat 2>/dev/null || true
+        nft delete table inet snell_filter 2>/dev/null || true
+    fi
+    if command -v iptables &>/dev/null; then
+        while rule=$(iptables -S FORWARD 2>/dev/null | grep -- '-A FORWARD.*veth-host' | head -n 1) && [[ -n "$rule" ]]; do
+            # shellcheck disable=SC2086 # the rule's own words
+            iptables ${rule/-A /-D } 2>/dev/null || break
+        done
+    fi
+}
+
+# a port Snell took, closed: in the enforcing firewall, and the iptables ACCEPT
+# rules snell.sh adds even where iptables enforces nothing (they would let the
+# port in once it did, and they are saved for the next boot)
+_snell_iptables_dropped=0
+_snell_close_port() {   # <port> <tcp|udp>
+    local t
+    firewall_close_port "$1" "$2" >/dev/null 2>&1 || true
+    for t in iptables ip6tables; do
+        command -v "$t" &>/dev/null || continue
+        while "$t" -D INPUT -p "$2" --dport "$1" -j ACCEPT 2>/dev/null; do _snell_iptables_dropped=1; done
+    done
+}
+
 snell_uninstall() {
     ask_yn "$(t snell.ask_uninstall)" N || return 0
-    systemctl stop snell snell.socket snell-netns 2>/dev/null || true
-    systemctl disable snell snell.socket snell-netns 2>/dev/null || true
+    _snell_iptables_dropped=0
+    declare -f firewall_close_port &>/dev/null || source "$LIB_DIR/system.sh"
+    _snell_remove_router
+
+    # every Snell service (the main one, snell.sh's snell-<port>) and the ShadowTLS
+    # in front of them, with the ports they took (read before the configs go)
+    local f name port units=(snell snell.socket snell-netns) tcp_ports=() both_ports=()
+    for f in "$SNELL_CONF_DIR"/users/*.conf "$SNELL_CONF_DIR"/snell-server.conf; do
+        [[ -f "$f" ]] || continue
+        port=$(sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$f" | head -n 1)
+        [[ -n "$port" ]] && both_ports+=("$port")
+    done
+    for f in /etc/systemd/system/snell-*.service /etc/systemd/system/shadowtls-snell-*.service; do
+        [[ -f "$f" ]] || continue
+        name=$(basename "$f" .service)
+        if [[ "$name" == shadowtls-snell-* ]]; then
+            port=$(sed -n 's/.*--listen [^ ]*:\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
+            [[ -n "$port" ]] && tcp_ports+=("$port")
+        elif [[ ! "$name" =~ ^snell-[0-9]+$ ]]; then
+            continue   # snell-netns, snell-router: not a per-user service
+        fi
+        units+=("$name")
+    done
+    systemctl stop "${units[@]}" 2>/dev/null || true
+    systemctl disable "${units[@]}" 2>/dev/null || true
     psm_remove_openrc_service "$SNELL_SERVICE"
     if command -v docker &>/dev/null; then
         docker rm -f "$SNELL_CONTAINER" &>/dev/null || true
         docker rmi "$SNELL_IMAGE" &>/dev/null || true
     fi
-    rm -f /usr/local/bin/snell-server /usr/local/bin/snell
-    rm -f /etc/systemd/system/snell.service \
-          /etc/systemd/system/snell.socket \
-          /etc/systemd/system/snell-netns.service
+    _snell_remove_egress
+
+    rm -f /usr/local/bin/snell-server /usr/local/bin/snell \
+          /usr/local/bin/snell-server-v4 /usr/local/bin/snell-server-v5 /usr/local/bin/snell-server-v6 \
+          /usr/local/bin/snell-server-v[456].bak.*
+    for name in "${units[@]}"; do
+        if [[ "$name" == *.socket ]]; then rm -f "/etc/systemd/system/${name}"; else rm -f "/etc/systemd/system/${name}.service"; fi
+    done
+    rm -f /lib/systemd/system/snell.service /usr/lib/systemd/system-preset/90-snell.preset
+    # the ShadowTLS binary, once no ShadowTLS service is left
+    compgen -G '/etc/systemd/system/shadowtls-*.service' >/dev/null || rm -f /usr/local/bin/shadow-tls
     rm -rf "$SNELL_CONF_DIR"
     svc_daemon_reload
+    for port in "${both_ports[@]}"; do
+        _snell_close_port "$port" tcp
+        _snell_close_port "$port" udp
+    done
+    for port in "${tcp_ports[@]}"; do _snell_close_port "$port" tcp; done
+    (( _snell_iptables_dropped )) && psm_iptables_persist
     # Clean up traffic monitoring state (port is stored in state.json, no need to read config first)
     if [[ -f "${CFG_DIR}/traffic/state.json" ]]; then
         source "$LIB_DIR/traffic.sh"; _trf_init; _trf_cleanup_node "snell"
