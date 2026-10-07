@@ -237,6 +237,12 @@ assert_snapshot singbox-hy2-bbr        singbox_hy2_bbr        _sb_hy2_build_inbo
 assert_snapshot mihomo-hy2-bbr         mihomo_hy2_bbr         _mh_hy2_build_listener
 assert_snapshot xray-hy2-bbr           xray_hy2_bbr           _xhy2_build_inbound
 assert_snapshot xray-hy2-bbr-plain     xray_hy2_bbr_plain     _xhy2_build_inbound
+# 关闭 QUIC 路径 MTU 探测（#7）：sing-box 1.14 的 disable_path_mtu_discovery、Xray 的
+# finalmask.quicParams.disablePathMTUDiscovery（与 bbrProfile、混淆并存；只有它时
+# finalmask 里只有 quicParams）。mihomo 没有这个选项。
+assert_snapshot singbox-hy2-pmtud      singbox_hy2_pmtud      _sb_hy2_build_inbound
+assert_snapshot xray-hy2-pmtud         xray_hy2_pmtud         _xhy2_build_inbound
+assert_snapshot xray-hy2-pmtud-plain   xray_hy2_pmtud_plain   _xhy2_build_inbound
 
 # VLESS Encryption（后量子）：decryption 串原样写进入站；Vision / XHTTP 启用后
 # fallbacks 必须清空——Xray 规定两者互斥（两张夹具都故意开着 fallback_enabled）。

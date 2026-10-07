@@ -1,0 +1,31 @@
+{
+  "bbr_profile": "aggressive",
+  "disable_path_mtu_discovery": true,
+  "listen": "::",
+  "listen_port": 8443,
+  "masquerade": {
+    "rewrite_host": true,
+    "type": "proxy",
+    "url": "https://www.bing.com"
+  },
+  "obfs": {
+    "password": "obfs-test-pass",
+    "type": "salamander"
+  },
+  "tag": "sb-hy2-t4",
+  "tls": {
+    "alpn": [
+      "h3"
+    ],
+    "certificate_path": "/etc/psm/certs/sb-hy2-t1.crt",
+    "enabled": true,
+    "key_path": "/etc/psm/certs/sb-hy2-t1.key",
+    "server_name": "www.bing.com"
+  },
+  "type": "hysteria2",
+  "users": [
+    {
+      "password": "hy2-test-pass"
+    }
+  ]
+}

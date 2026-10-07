@@ -1,0 +1,45 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8443,
+  "protocol": "hysteria",
+  "settings": {
+    "clients": [
+      {
+        "auth": "hy2-test-pass"
+      }
+    ],
+    "version": 2
+  },
+  "sniffing": {
+    "destOverride": [
+      "http",
+      "tls",
+      "quic"
+    ],
+    "enabled": true
+  },
+  "streamSettings": {
+    "finalmask": {
+      "quicParams": {
+        "disablePathMTUDiscovery": true
+      }
+    },
+    "hysteriaSettings": {
+      "version": 2
+    },
+    "network": "hysteria",
+    "security": "tls",
+    "tlsSettings": {
+      "alpn": [
+        "h3"
+      ],
+      "certificates": [
+        {
+          "certificateFile": "/etc/psm/certs/xhy2-t1.crt",
+          "keyFile": "/etc/psm/certs/xhy2-t1.key"
+        }
+      ]
+    }
+  },
+  "tag": "xhy2-t6"
+}

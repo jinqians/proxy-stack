@@ -67,12 +67,14 @@ _sb_hy2_build_inbound_base() {
     local otype; otype=$(echo "$node_json" | jq -r '.obfs_type // "salamander"')
     # BBR 配置档（sing-box 1.14+）：conservative / standard / aggressive；未设置不写
     local bbr;   bbr=$(echo "$node_json"   | jq -r '.bbr_profile // ""')
+    # 关闭 QUIC 路径 MTU 探测（sing-box 1.14+ 的 QUIC 字段）
+    local pmtud; pmtud=$(echo "$node_json" | jq -r 'if .disable_pmtud == true then "true" else "false" end')
 
     jq -n \
         --arg tag "$tag" --argjson p "$port" --arg pass "$pass" \
         --arg sni "$sni" --arg cert "$cert" --arg key "$key" \
         --argjson up "$up" --argjson down "$down" --arg masq "$masq" --arg obfs "$obfs" \
-        --arg otype "$otype" --arg bbr "$bbr" \
+        --arg otype "$otype" --arg bbr "$bbr" --argjson pmtud "$pmtud" \
     '{
         type: "hysteria2",
         tag: $tag,
@@ -84,6 +86,7 @@ _sb_hy2_build_inbound_base() {
     + (if $down > 0 then { down_mbps: $down } else {} end)
     + (if $obfs != "" then { obfs: { type: $otype, password: $obfs } } else {} end)
     + (if $bbr  != "" then { bbr_profile: $bbr } else {} end)
+    + (if $pmtud then { disable_path_mtu_discovery: true } else {} end)
     + (if $masq != ""
        then { masquerade: { type: "proxy", url: $masq, rewrite_host: true } }
        else {} end)
@@ -239,6 +242,8 @@ sb_hy2_add_node() {
     if (( up == 0 && down == 0 )) && _sb_version_ge "$(_sb_installed_version)" "1.14.0"; then
         ask_hy2_bbr_profile bbr_profile
     fi
+    local pmtud=""
+    _sb_version_ge "$(_sb_installed_version)" "1.14.0" && ask_hy2_pmtud pmtud
 
     local hop_ports=""
     source "$LIB_DIR/hop.sh"; ask_hy2_hop_ports hop_ports "$port" "$tag"
@@ -249,12 +254,13 @@ sb_hy2_add_node() {
         --arg domain "$domain" --arg sni "$sni" \
         --arg cert "$cert_path" --arg key "$key_path" --argjson insec "$insecure" \
         --argjson up "$up" --argjson down "$down" --arg masq "$masq" --arg obfs "$obfs_pass" \
-        --arg otype "$obfs_type" --arg bbr "$bbr_profile" \
+        --arg otype "$obfs_type" --arg bbr "$bbr_profile" --arg pmtud "$pmtud" \
         '{tag:$tag, port:$port, password:$pass, domain:$domain, sni:$sni,
           cert_path:$cert, key_path:$key, insecure:$insec, up:$up, down:$down,
           masquerade:$masq, obfs_pass:$obfs}
          | (if $obfs != "" then .obfs_type = $otype else . end)
          | (if $bbr != "" then .bbr_profile = $bbr else . end)
+         | (if $pmtud == "true" then .disable_pmtud = true else . end)
          | (if $hop != "" then .hop_ports = $hop else . end)')
 
     local _prev_store; _prev_store=$(_sb_hy2_load)

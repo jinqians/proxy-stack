@@ -127,12 +127,21 @@ chk "mihomo unit loads psm.env" grep -q "EnvironmentFile=-/etc/mihomo/psm.env" /
 chk "mihomo -t on live config" /usr/local/bin/mihomo -t -d /etc/mihomo -f /etc/mihomo/config.yaml
 export_all mihomo
 
+sec "Hysteria2: path MTU discovery off on existing nodes (#7)"
+chk "update s-hy2 --disable-pmtud true" psm node update sing-box hysteria2 s-hy2 --disable-pmtud true
+chk "… the live sing-box inbound has disable_path_mtu_discovery; sing-box active" bash -c "jq -e '.inbounds[] | select(.tag == \"s-hy2\") | .disable_path_mtu_discovery == true' /etc/sing-box/config.json && systemctl is-active --quiet sing-box"
+chk "update x-hy2 --disable-pmtud true" psm node update xray hysteria2 x-hy2 --disable-pmtud true
+chk "… Xray: quicParams.disablePathMTUDiscovery beside the gecko mask; xray active" bash -c "jq -e '.inbounds[] | select(.tag == \"x-hy2\") | .streamSettings.finalmask | (.quicParams.disablePathMTUDiscovery == true) and (.udp[0].type == \"salamander\")' /usr/local/etc/xray/config.json && systemctl is-active --quiet xray"
+chk "update s-hy2 --disable-pmtud false: the key is gone" bash -c "bash manager.sh node update sing-box hysteria2 s-hy2 --disable-pmtud false && jq -e '.inbounds[] | select(.tag == \"s-hy2\") | has(\"disable_path_mtu_discovery\") | not' /etc/sing-box/config.json"
+
 sec "guards (must be refused)"
 for a in "sing-box vless g1 --port 24001 ${C[*]} --vless-enc x25519" \
          "mihomo snell g2 --port 24002 --obfs-mode http --shadow-tls-sni www.microsoft.com" \
          "sing-box ss2022 g3 --port 24003 --shadow-tls-sni www.microsoft.com" \
          "sing-box hysteria2 g4 --port 24004 ${C[*]} --obfs-pass p --obfs-type nope" \
-         "xray hysteria2 g5 --port 24005 ${C[*]} --obfs-pass abc"; do
+         "xray hysteria2 g5 --port 24005 ${C[*]} --obfs-pass abc" \
+         "mihomo hysteria2 g6 --port 24006 ${C[*]} --disable-pmtud true" \
+         "sing-box hysteria2 g7 --port 24007 ${C[*]} --disable-pmtud maybe"; do
     read -r c p t rest <<<"$a"
     out=$(psm node add $c $p --tag $t $rest --json 2>&1)
     grep -qE '"status": ?"created"' <<<"$out" && bad "guard $c/$p $t accepted" || ok "guard $c/$p $t refused"
@@ -169,6 +178,34 @@ chk "no logo on a narrow terminal (50 columns)" bash -c "$(declare -f menu_at); 
 # right-hand column drifts on servers without a UTF-8 locale.
 menu_rows() { printf '0\n' | LANG="$1" PSM_LANG=zh bash manager.sh 2>&1 | tr -d '\033' | grep -aE 'm(1[2-9]|2[0-2])\.\['; }
 chk "main menu columns are the same in the C and UTF-8 locales" bash -c "$(declare -f menu_rows); a=\$(menu_rows C); b=\$(menu_rows C.UTF-8); [[ \$(wc -l <<<\"\$a\") -eq 11 && \"\$a\" == \"\$b\" ]]"
+
+sec "official Hysteria2: path MTU discovery off (#7)"
+hy2() { bash -c "source lib/common.sh; source lib/hysteria2.sh; $*"; }
+# the wizard: port, password, no domain (self-signed), MTU discovery off, no firewall question
+chk "install + wizard: port 24443, self-signed, MTU discovery off" bash -c "$(declare -f hy2); printf '24443\nhy2-test-pass\nn\ny\nn\n' | hy2 hy2_install"
+chk "config: quic.disablePathMTUDiscovery: true; hysteria-server active" bash -c "grep -A6 '^quic:' /etc/hysteria/config.yaml | grep -q '^  disablePathMTUDiscovery: true' && sleep 2 && systemctl is-active --quiet hysteria-server"
+hy2_client() {   # sing-box (installed above) as a Hysteria2 client: HTTP 204 through the official server
+    local sb; sb=$(bash -c 'source lib/common.sh; echo "$SINGBOX_BIN"')
+    jq -n '{log: {level: "warn"}, inbounds: [{type: "mixed", listen: "127.0.0.1", listen_port: 24480}],
+            outbounds: [{type: "hysteria2", server: "127.0.0.1", server_port: 24443, password: "hy2-test-pass",
+                         tls: {enabled: true, insecure: true, server_name: "Hysteria2"}}]}' > /tmp/hy2c.json
+    "$sb" run -c /tmp/hy2c.json > /tmp/hy2c.log 2>&1 & local pid=$!
+    sleep 2; local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -x http://127.0.0.1:24480 https://www.gstatic.com/generate_204)
+    kill $pid; [[ $code == 204 ]] || { echo "HTTP $code"; tail -3 /tmp/hy2c.log; return 1; }
+}
+chk "a client through it (sing-box): HTTP 204" hy2_client
+chk "menu 10: discovery back on (the line is gone), still active" bash -c "$(declare -f hy2); hy2 hy2_toggle_pmtud && ! grep -q disablePathMTUDiscovery /etc/hysteria/config.yaml && sleep 2 && systemctl is-active --quiet hysteria-server"
+chk "menu 10 again: off, under quic:" bash -c "$(declare -f hy2); hy2 hy2_toggle_pmtud && grep -A1 '^quic:' /etc/hysteria/config.yaml | grep -q '^  disablePathMTUDiscovery: true' && sleep 2 && systemctl is-active --quiet hysteria-server"
+chk "… a client through it" hy2_client
+chk "uninstall the official Hysteria2" bash -c "$(declare -f hy2); printf 'y\n' | hy2 hy2_uninstall && ! systemctl is-active --quiet hysteria-server"
+
+# A terminal left non-blocking before PSM starts (O_NONBLOCK sits on the open file
+# shared with the login shell): every read failed with "Resource temporarily
+# unavailable" and set -e ended PSM at its first prompt (#5). The answer comes
+# 3 s after the start, so the menu's read finds the terminal empty.
+nb_menu() { (sleep 3; printf '0\n') | TERM=xterm script -qfc "perl -MFcntl -e 'fcntl(STDIN, F_SETFL, fcntl(STDIN, F_GETFL, 0) | O_NONBLOCK) or die'; bash manager.sh" /dev/null 2>&1; }
+chk "a terminal left non-blocking: the menu still reads (0 exits normally)" bash -c "$(declare -f nb_menu); out=\$(nb_menu); ! grep -q 'Resource temporarily unavailable' <<<\"\$out\" && grep -qE 'Exited|已退出' <<<\"\$out\""
 
 sec "test suites"
 chk "tests/run.sh"       bash tests/run.sh

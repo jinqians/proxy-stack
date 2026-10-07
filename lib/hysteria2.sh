@@ -77,7 +77,7 @@ _hy2_setup_wizard() {
     local password; password=$(rand_str 24)
     ask password "$(t hysteria2.ask_password)" "$password"
 
-    local domain="" cert_block="" masquerade_block=""
+    local domain="" cert_block="" masquerade_block="" pmtud="" pmtud_line=""
 
     echo ""
     if ask_yn "$(t hysteria2.ask_has_domain)" Y; then
@@ -113,6 +113,10 @@ _hy2_setup_wizard() {
         log_warn "$(t hysteria2.self_cert_warn)"
     fi
 
+    ask_hy2_pmtud pmtud
+    [[ "$pmtud" == true ]] && pmtud_line="
+  disablePathMTUDiscovery: true"
+
     cat > "$HY2_CFG" <<EOF
 listen: :${port}
 
@@ -132,7 +136,7 @@ quic:
   initStreamReceiveWindow: 26843545
   maxStreamReceiveWindow: 26843545
   initConnReceiveWindow: 67108864
-  maxConnReceiveWindow: 67108864
+  maxConnReceiveWindow: 67108864${pmtud_line}
 
 sniff:
   enable: true
@@ -207,6 +211,27 @@ hy2_modify_bandwidth() {
     sed -i "s/  down:.*/  down: $down/" "$HY2_CFG"
     svc_restart hysteria-server
     log_ok "$(t hysteria2.bandwidth_updated "$up" "$down")"
+}
+
+# Path MTU discovery on or off (#7): quic.disablePathMTUDiscovery in the config
+hy2_toggle_pmtud() {
+    [[ -f "$HY2_CFG" ]] || { log_error "$(t hysteria2.conf_missing)"; return 1; }
+    if grep -q '^  disablePathMTUDiscovery: true' "$HY2_CFG"; then
+        sed -i '/^  disablePathMTUDiscovery:/d' "$HY2_CFG"
+        svc_restart hysteria-server
+        log_ok "$(t hysteria2.pmtud_on)"
+        return 0
+    fi
+    sed -i '/^  disablePathMTUDiscovery:/d' "$HY2_CFG"
+    if grep -q '^quic:' "$HY2_CFG"; then
+        # written back in place: the file keeps its owner and mode
+        awk '{ print } /^quic:/ { print "  disablePathMTUDiscovery: true" }' "$HY2_CFG" > "$HY2_CFG.tmp" \
+            && cat "$HY2_CFG.tmp" > "$HY2_CFG"; rm -f "$HY2_CFG.tmp"
+    else
+        printf '\nquic:\n  disablePathMTUDiscovery: true\n' >> "$HY2_CFG"
+    fi
+    svc_restart hysteria-server
+    log_ok "$(t hysteria2.pmtud_off)"
 }
 
 hy2_modify_cert() {
@@ -308,7 +333,8 @@ hysteria2_menu() {
             "$(t hysteria2.menu.share)" \
             "$(t hysteria2.menu.status)" \
             "$(t hysteria2.menu.logs)" \
-            "$(t hysteria2.menu.restart)"
+            "$(t hysteria2.menu.restart)" \
+            "$(t hysteria2.menu.pmtud)"
 
         case "$MENU_CHOICE" in
             1) hy2_install ;;
@@ -320,6 +346,7 @@ hysteria2_menu() {
             7) svc_status hysteria-server ;;
             8) hy2_logs ;;
             9) svc_restart hysteria-server ;;
+            10) hy2_toggle_pmtud ;;
             0) return ;;
         esac
         press_enter

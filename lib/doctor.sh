@@ -455,6 +455,21 @@ _doctor_check_kcp() {
 # Relays (psm relay): each rule's port has to be listening, or its engine is
 # down (a realm or gost that did not come back, a binary gone). The store is
 # the truth; --fix installs a missing engine and applies its rules again.
+# nginx.conf as an older PSM wrote it: no map_hash_bucket_size for stream {} (in
+# nginx.conf or a stream.d file it includes), so a domain longer than 32 bytes in
+# the SNI map stops nginx ("could not build map_hash", #6). --fix writes the
+# current one and reloads.
+_doctor_check_nginx_main() {
+    local conf="/etc/nginx/nginx.conf"
+    [[ -r "$conf" ]] && grep -q 'PSM-managed nginx.conf' "$conf" || return 0
+    if grep -q '^stream {' "$conf" && ! grep -qsE '^[[:space:]]*map_hash_bucket_size[[:space:]]' "$conf" /etc/nginx/stream.d/*.conf; then
+        _doctor_add "nginx.main" "configuration" "warning" "$(t doctor.msg.nginx_main_old)" \
+            "$(_doctor_details file "$conf")" "_doctor_fix_nginx_main"
+    else
+        _doctor_add "nginx.main" "configuration" "ok" "$(t doctor.msg.nginx_main_ok)" "$(_doctor_details file "$conf")"
+    fi
+}
+
 _doctor_check_relays() {
     local store="$CFG_DIR/realm/rules.json" n down=0 dead="" rule tag port proto
     [[ -s "$store" ]] || return 0
@@ -521,6 +536,8 @@ _doctor_fix_boot() { svc_enable "$1" && svc_is_enabled "$1"; }
 _doctor_fix_hop() { source "$LIB_DIR/hop.sh" && psm_hop_sync; }
 
 _doctor_fix_kcp() { source "$LIB_DIR/xray/xhttp.sh" && _xhttp_apply_all; }
+
+_doctor_fix_nginx_main() { source "$LIB_DIR/nginx.sh" && _write_nginx_main && nginx_test_reload >/dev/null 2>&1; }
 
 _doctor_fix_relays() {
     source "$LIB_DIR/relay_cli.sh" || return 1
@@ -613,6 +630,7 @@ _doctor_collect() {
     _doctor_check_certificates
     _doctor_check_hop
     _doctor_check_kcp
+    _doctor_check_nginx_main
     _doctor_check_relays
     _doctor_check_tun
 }

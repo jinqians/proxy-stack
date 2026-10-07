@@ -194,6 +194,14 @@ esac
 # ── Interactive mode ──────────────────────────────────────────────────────────
 require_root
 
+# A terminal left non-blocking by an earlier program (O_NONBLOCK sits on the
+# open file the login shell shares with what it starts) makes every read fail at
+# once with "Resource temporarily unavailable", and set -e ended PSM at its first
+# prompt (#5). A fresh open of the terminal does not carry the flag.
+if [[ -t 0 ]] && ( : </dev/tty ) 2>/dev/null; then
+    exec 0</dev/tty
+fi
+
 # ── Auto self-update via git pull ─────────────────────────────────────────────
 _auto_update() {
     [[ -d "$PSM_ROOT/.git" ]] || return 0

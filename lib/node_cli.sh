@@ -66,6 +66,9 @@ Protocol inputs:
              [--bbr-profile conservative|standard|aggressive]  how hard the server's
              BBR pushes (unset: the core's default, standard); sing-box 1.14+ /
              mihomo 1.19.24+ / Xray v26.4.13+
+             [--disable-pmtud true|false]  switch off QUIC path MTU discovery: keep
+             to small packets on paths that drop large ones; sing-box 1.14+ / Xray
+             (mihomo has no such option)
              gecko needs sing-box 1.14+ / mihomo 1.19.26+ / Xray v26.3.27+
   anytls:    --port [--sni ...] [--cert-path ... --key-path ...] [--password ...]
   tuic:      --port [--sni ...] [--cert-path ... --key-path ...] [--uuid ...] [--password ...]
@@ -361,6 +364,7 @@ _node_cli_field_name() {
         congestion-control) printf 'congestion_control' ;;
         hop-ports) printf 'hop_ports' ;;
         bbr-profile) printf 'bbr_profile' ;;
+        disable-pmtud) printf 'disable_pmtud' ;;
         peer-count) printf 'peer_count' ;;
         exit-sites) printf 'exit_sites' ;; exit-country) printf 'exit_country' ;;
         *) printf '%s' "$1" ;;
@@ -369,7 +373,7 @@ _node_cli_field_name() {
 
 _node_cli_is_field_opt() {
     case "$1" in
-        tag|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-type|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport|transport|vless-enc|shadow-tls-sni|shadow-tls-password|congestion-control|hop-ports|bbr-profile|peer-count|ech|exit|exit-sites|exit-country) return 0 ;;
+        tag|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-type|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport|transport|vless-enc|shadow-tls-sni|shadow-tls-password|congestion-control|hop-ports|bbr-profile|disable-pmtud|peer-count|ech|exit|exit-sites|exit-country) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -383,7 +387,7 @@ _node_cli_set_value() {
     jq -c --arg k "$key" --arg v "$value" '
       def typed:
         if ($k | test("^(port|public_port|version|up|down|insecure)$")) then ($v | tonumber)
-        elif ($k | test("^(fallback_enabled)$")) then
+        elif ($k | test("^(fallback_enabled|disable_pmtud)$")) then
           if $v == "true" or $v == "1" or $v == "yes" then true
           elif $v == "false" or $v == "0" or $v == "no" then false
           else error("invalid boolean") end
@@ -757,7 +761,9 @@ _node_cli_validate() {
         # QUIC 混淆类型：未设置 = salamander（老节点）；gecko 需 sing-box 1.14+ / mihomo 1.19.26+
         ((.obfs_type // "salamander") as $o | ["salamander","gecko"] | index($o)) != null and
         # BBR 配置档：未设置 = 内核默认（standard）
-        ((.bbr_profile // "") as $b | ["","conservative","standard","aggressive"] | index($b)) != null
+        ((.bbr_profile // "") as $b | ["","conservative","standard","aggressive"] | index($b)) != null and
+        # 关闭路径 MTU 探测：未设置 = 内核默认（探测）
+        ((.disable_pmtud // false) | type == "boolean")
       elif $proto == "anytls" then
         ([.password,.sni,.cert_path,.key_path] | all(type == "string" and length > 0)) and
         (.insecure | type == "number" or type == "boolean")
@@ -1012,6 +1018,28 @@ _node_cli_bbr_check() {   # <core> <proto> <node json>
     [[ "$(printf '%s\n%s\n' "$min" "$cur" | sort -V | head -1)" == "$min" ]] && return 0
     _node_cli_err "--bbr-profile needs $core $min or newer (installed: $cur); upgrade the core first"
     return 1
+}
+
+# Hysteria2 --disable-pmtud (#7): sing-box has the QUIC field from 1.14 (an older
+# one refuses the whole config), every Xray with Hysteria2 has quicParams'
+# disablePathMTUDiscovery, and mihomo has no such option at all.
+_node_cli_pmtud_check() {   # <core> <proto> <node json>
+    local cur=""
+    [[ "$2" == hysteria2 ]] || return 0
+    [[ "$(printf '%s' "$3" | jq -r '.disable_pmtud // false')" == true ]] || return 0
+    case "$1" in
+        mihomo)
+            _node_cli_err "--disable-pmtud: mihomo's Hysteria2 has no such option; use sing-box (1.14+) or Xray"
+            return 1 ;;
+        sing-box)
+            [[ -x "$SINGBOX_BIN" ]] && cur=$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR==1 {print $3}')
+            cur=${cur%%-*}
+            [[ "$cur" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+            [[ "$(printf '%s\n%s\n' 1.14.0 "$cur" | sort -V | head -1)" == 1.14.0 ]] && return 0
+            _node_cli_err "--disable-pmtud needs sing-box 1.14.0 or newer (installed: $cur); upgrade the core first"
+            return 1 ;;
+    esac
+    return 0
 }
 
 # Xray's TLS protocols with a domain (Vision, XHTTP over TLS, Trojan, VMess)
@@ -1430,6 +1458,7 @@ _node_cli_cmd_add() {
     if [[ "$store_only" != "true" ]]; then
         _node_cli_xray_cert_check "$core" "$proto" "$node" || { _node_cli_lock_release; return 2; }
         _node_cli_bbr_check "$core" "$proto" "$node" || { _node_cli_lock_release; return 2; }
+        _node_cli_pmtud_check "$core" "$proto" "$node" || { _node_cli_lock_release; return 2; }
     fi
     tag=$(printf '%s' "$node" | jq -r '.tag'); port=$(printf '%s' "$node" | jq -r '.port')
     if [[ "$store_only" != "true" ]]; then
@@ -1551,6 +1580,7 @@ _node_cli_cmd_update() {
     if [[ "$(printf '%s' "$state" | jq -r '.store_only')" != "true" ]]; then
         _node_cli_xray_cert_check "$core" "$proto" "$node" || return 2
         _node_cli_bbr_check "$core" "$proto" "$node" || return 2
+        _node_cli_pmtud_check "$core" "$proto" "$node" || return 2
     fi
     port=$(printf '%s' "$node" | jq -r '.port')
     local upd_store_only mount_key="" old_mount_key="" old_port

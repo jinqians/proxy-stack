@@ -106,6 +106,29 @@ chk "its SNI route is gone" bash -c "! grep -q 'dl.google.com' $MAP"
 chk "other routes untouched" grep -q 'learn.microsoft.com' $MAP
 chk "nginx -t after update/delete" nginx -t
 
+sec "a long domain in the SNI map (#6: a REALITY node on the user's own domain)"
+LONG=psm-issue-6-a-rather-long-subdomain-name-for-the-sni-map.of-a-reality-node.example.com
+# no real host has this name, so the REALITY target probe is skipped: the nginx side is what is under test
+add xray reality n-long --port 21050 --server-name "$LONG" --dest www.bing.com:443 --skip-dest-probe --mount-443
+chk "SNI map has the ${#LONG}-byte domain" grep -qF "$LONG" $MAP
+chk "nginx -t with it" nginx -t
+chk "nginx still active" lib "svc_is_active nginx"
+# nginx.conf as an older PSM wrote it: the reported failure, then doctor's repair
+sed -i '/map_hash_/d;/server_names_hash_bucket_size/d' /etc/nginx/nginx.conf
+chk "the old nginx.conf fails on it (could not build map_hash)" bash -c "nginx -t 2>&1 | grep -q 'could not build map_hash'"
+chk "doctor: nginx.main is a fixable warning" bash -c "psm doctor --json 2>/dev/null | jq -e '.checks[] | select(.id == \"nginx.main\") | .status == \"warning\" and .fixable'"
+chk "doctor --fix writes the current nginx.conf; nginx -t passes" bash -c "psm doctor --fix --json >/dev/null 2>&1; nginx -t && grep -q 'map_hash_bucket_size 256;' /etc/nginx/nginx.conf"
+chk "doctor: nginx.main ok" bash -c "psm doctor --json 2>/dev/null | jq -e '.checks[] | select(.id == \"nginx.main\") | .status == \"ok\"'"
+chk "nginx active after the fix" lib "svc_is_active nginx"
+# the workaround from #6 already in stream.d: nginx.conf must not set the same
+# directives again, or nginx stops on "is duplicate"
+printf 'map_hash_bucket_size 256;\nmap_hash_max_size 4096;\n' > /etc/nginx/stream.d/00-map-hash.conf
+chk "with the workaround in stream.d, nginx.conf leaves the two to it; nginx -t passes" lib "_write_nginx_main && ! grep -q map_hash_ /etc/nginx/nginx.conf && nginx_test_reload"
+chk "… doctor: nginx.main ok (set in stream.d)" bash -c "psm doctor --json 2>/dev/null | jq -e '.checks[] | select(.id == \"nginx.main\") | .status == \"ok\"'"
+rm -f /etc/nginx/stream.d/00-map-hash.conf
+chk "workaround removed: nginx.conf sets them again; nginx -t passes" lib "_write_nginx_main && grep -q 'map_hash_bucket_size 256;' /etc/nginx/nginx.conf && nginx_test_reload"
+chk "delete n-long" psm node delete xray reality n-long --yes
+
 sec "Xray Vision / Trojan with a domain: fallback to the nginx camouflage site"
 mkdir -p /etc/nginx/ssl/x.example.com
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj /CN=x.example.com \

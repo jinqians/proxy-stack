@@ -86,6 +86,10 @@ _xhy2_build_inbound() {
       ($n.obfs_pass // "") as $obfs
       | ($n.obfs_type // "salamander") as $otype
       | ($n.bbr_profile // "") as $bbr
+      # quicParams: the BBR profile the server sends with (Xray v26.4.13+) and
+      # switching off path MTU discovery (every Xray with Hysteria2)
+      | ({} + (if $bbr == "" then {} else { bbrProfile: $bbr } end)
+            + (if $n.disable_pmtud == true then { disablePathMTUDiscovery: true } else {} end)) as $qp
       | {
           tag: $n.tag,
           listen: ($n.listen_addr // "0.0.0.0"),
@@ -100,13 +104,12 @@ _xhy2_build_inbound() {
               alpn: ["h3"],
               certificates: [ { certificateFile: $n.cert_path, keyFile: $n.key_path } ]
             }
-          } + (if $obfs == "" and $bbr == "" then {} else
+          } + (if $obfs == "" and ($qp | length) == 0 then {} else
                  { finalmask: ((if $obfs == "" then {} else
                      { udp: [ { type: "salamander",
                        settings: ({ password: $obfs }
                                   + (if $otype == "gecko" then { packetSize: $gecko } else {} end)) } ] } end)
-                   # the BBR profile the server sends with (Xray v26.4.13+)
-                   + (if $bbr == "" then {} else { quicParams: { bbrProfile: $bbr } } end)) }
+                   + (if ($qp | length) == 0 then {} else { quicParams: $qp } end)) }
                end)),
           sniffing: { enabled: true, destOverride: ["http", "tls", "quic"] }
         }'
@@ -182,6 +185,8 @@ xhy2_add_node() {
     # BBR 配置档（finalmask quicParams.bbrProfile，Xray v26.4.13+）
     local bbr_profile=""
     _xhy2_core_ok "$XHY2_BBR_MIN_CORE" && ask_hy2_bbr_profile bbr_profile
+    local pmtud=""
+    ask_hy2_pmtud pmtud
 
     local hop_ports=""
     source "$LIB_DIR/hop.sh"; ask_hy2_hop_ports hop_ports "$port" "$tag"
@@ -190,10 +195,12 @@ xhy2_add_node() {
     node=$(jq -n --arg hop "$hop_ports" --arg tag "$tag" --argjson port "$port" --arg pass "$password" \
         --arg domain "$domain" --arg sni "$sni" --arg cert "$cert" --arg key "$key" \
         --argjson insec "$insecure" --arg obfs "$obfs_pass" --arg otype "$obfs_type" --arg bbr "$bbr_profile" \
+        --arg pmtud "$pmtud" \
         '{tag:$tag, port:$port, password:$pass, domain:$domain, sni:$sni,
           cert_path:$cert, key_path:$key, insecure:$insec, listen_addr:"0.0.0.0", obfs_pass:$obfs}
          | (if $obfs != "" then .obfs_type = $otype else . end)
          | (if $bbr != "" then .bbr_profile = $bbr else . end)
+         | (if $pmtud == "true" then .disable_pmtud = true else . end)
          | (if $hop != "" then .hop_ports = $hop else . end)')
     local prev; prev=$(_xhy2_load)
     _xhy2_upsert "$node"

@@ -643,6 +643,21 @@ ask_hy2_bbr_profile() {
     esac
 }
 
+# ask_hy2_pmtud <var_name>: switch off QUIC path MTU discovery (3x-ui's "Disable
+# Path MTU Discovery", #7). The server stops probing for larger packets and keeps
+# to small ones, which helps on paths that drop large packets. "true" or empty.
+# sing-box 1.14+, Xray (every release with Hysteria2), the official server;
+# mihomo has no such option.
+ask_hy2_pmtud() {
+    local _pm_var="$1"
+    echo -e "  $(t common.hy2.pmtud_title)"
+    if ask_yn "$(t common.hy2.ask_pmtud)" N; then
+        printf -v "$_pm_var" '%s' true
+    else
+        printf -v "$_pm_var" '%s' ''
+    fi
+}
+
 ask_yn() {
     # ask_yn <prompt> [Y|N]  → returns 0=yes 1=no
     local prompt="$1" default="${2:-Y}" _ask_ans=""

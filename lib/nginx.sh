@@ -182,6 +182,16 @@ _nginx_neutralize_toplevel_confd() {
     done
 }
 
+# The hash sizes nginx.conf sets (#6), each left out when a file nginx.conf
+# includes already sets it: the same directive twice in one block stops nginx
+# ("is duplicate"), e.g. the workaround from #6 in stream.d/00-map-hash.conf, or
+# a server_names_hash_bucket_size someone put in a site file.
+_nginx_hash_directive() {   # <directive> <value> <included file glob…>
+    local d="$1" v="$2"; shift 2
+    grep -qsE "^[[:space:]]*$d[[:space:]]" "$@" && return 0
+    printf '    %s %s;\n' "$d" "$v"
+}
+
 _write_nginx_main() {
     local nginx_user stream_load
     # Make sure the stream module is installed BEFORE we compute the load
@@ -194,6 +204,11 @@ _write_nginx_main() {
     # here leaves rc-service/systemd unable to see or stop the running nginx.
     local pid_path
     pid_path=$(nginx -V 2>&1 | tr ' ' '\n' | sed -n 's/^--pid-path=//p' | head -1 || true)
+
+    local http_hash stream_hash
+    http_hash=$(_nginx_hash_directive server_names_hash_bucket_size 128 /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*)
+    stream_hash=$(_nginx_hash_directive map_hash_bucket_size 256 "$NGINX_STREAM_D"/*.conf
+                  _nginx_hash_directive map_hash_max_size 4096 "$NGINX_STREAM_D"/*.conf)
 
     if [[ -f "$NGINX_MAIN" ]] && ! grep -q "PSM-managed nginx.conf" "$NGINX_MAIN"; then
         cp -a "$NGINX_MAIN" "${NGINX_MAIN}.psm.bak.$(date +%Y%m%d%H%M%S)"
@@ -218,6 +233,9 @@ http {
     tcp_nodelay on;
     keepalive_timeout 65;
     types_hash_max_size 2048;
+    # a long server_name does not fit the default bucket (64 bytes), and nginx
+    # refuses the whole configuration
+${http_hash}
     server_tokens off;
 
     include /etc/nginx/mime.types;
@@ -239,6 +257,11 @@ http {
 }
 
 stream {
+    # The SNI map's keys are domains: one longer than the default bucket
+    # (32 bytes), such as a REALITY node on the user's own domain, stopped nginx
+    # with "could not build map_hash" (#6)
+${stream_hash}
+
     log_format stream '\$remote_addr [\$time_local] '
                       '\$protocol \$status \$bytes_sent \$bytes_received '
                       '\$session_time "\$upstream_addr"';

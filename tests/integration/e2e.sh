@@ -61,10 +61,10 @@ add xray trojan      e-xt   --port 31007 --domain x.example.com
 add xray vmess       e-xvm  --port 31008 --domain x.example.com
 add xray ss2022      e-xss  --port 31009
 add xray socks       e-xs5  --port 31010 "${AUTH[@]}"
-add xray hysteria2   e-xhy  --port 31011 "${C[@]}" --obfs-pass e2e-obfs
+add xray hysteria2   e-xhy  --port 31011 "${C[@]}" --obfs-pass e2e-obfs --disable-pmtud true
 add sing-box reality   e-sr   --port 32001 "${RD[@]}"
 add sing-box ss2022    e-sss  --port 32002
-add sing-box hysteria2 e-shy  --port 32003 "${C[@]}" --obfs-pass e2e-obfs
+add sing-box hysteria2 e-shy  --port 32003 "${C[@]}" --obfs-pass e2e-obfs --disable-pmtud true
 add sing-box anytls    e-sat  --port 32004 "${C[@]}"
 add sing-box trojan    e-st   --port 32005 "${C[@]}"
 add sing-box vmess     e-svm  --port 32006 "${C[@]}"
@@ -76,6 +76,9 @@ add sing-box tuic      e-stu  --port 32011 "${C[@]}"
 add mihomo reality     e-mr   --port 33001 "${RD[@]}"
 add mihomo ss2022      e-mss  --port 33002
 add mihomo hysteria2   e-mhy  --port 33003 "${C[@]}" --obfs-pass e2e-obfs
+# e-xhy and e-shy run with path MTU discovery off (#7); every node is then reached through its link below
+chk "e-shy: disable_path_mtu_discovery in the live sing-box inbound" bash -c "jq -e '.inbounds[] | select(.tag == \"e-shy\") | .disable_path_mtu_discovery == true' /etc/sing-box/config.json"
+chk "e-xhy: quicParams.disablePathMTUDiscovery beside the Salamander mask" bash -c "jq -e '.inbounds[] | select(.tag == \"e-xhy\") | .streamSettings.finalmask | (.quicParams.disablePathMTUDiscovery == true) and (.udp[0].type == \"salamander\")' /usr/local/etc/xray/config.json"
 add mihomo anytls      e-mat  --port 33004 "${C[@]}"
 add mihomo trojan      e-mt   --port 33005 "${C[@]}"
 add mihomo vmess       e-mvm  --port 33006 "${C[@]}"
