@@ -188,7 +188,7 @@ _nginx_neutralize_toplevel_confd() {
 # a server_names_hash_bucket_size someone put in a site file.
 _nginx_hash_directive() {   # <directive> <value> <included file glob…>
     local d="$1" v="$2"; shift 2
-    grep -qsE "^[[:space:]]*$d[[:space:]]" "$@" && return 0
+    grep -qsE "^[[:space:]]*${d}[[:space:]]" "$@" && return 0
     printf '    %s %s;\n' "$d" "$v"
 }
 
