@@ -567,7 +567,7 @@ MSG[mh.protocol.snell]="Snell             (Surge 생태계, TCP)"
 MSG[mh.protocol.trojan]="Trojan             (TCP + TLS, self-signed or real certificate)"
 MSG[mh.protocol.vmess]="VMess + WS + TLS   (requires domain and certificate)"
 MSG[mh.protocol.socks]="SOCKS5             (unencrypted, loopback-only by default)"
-MSG[mh.protocol.vless]="VLESS + TLS        (multi-transport, needs a certificate or self-signed)"
+MSG[mh.protocol.vless]="VLESS + TLS        (Vision / WS / gRPC and more transports; needs a certificate or self-signed)"
 MSG[mh.protocol_menu.snell]="Snell     (Surge 생태계 인바운드)"
 
 # ── snell (inbound) ───────────────────────────────────────────────────────────

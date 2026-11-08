@@ -603,7 +603,7 @@ MSG[sb.protocol.snell]="Snell             (экосистема Surge, TCP, тр
 MSG[sb.protocol.trojan]="Trojan             (TCP + TLS, self-signed or real certificate)"
 MSG[sb.protocol.vmess]="VMess + WS + TLS   (requires domain and certificate)"
 MSG[sb.protocol.socks]="SOCKS5             (unencrypted, loopback-only by default)"
-MSG[sb.protocol.vless]="VLESS + TLS        (multi-transport, needs a certificate or self-signed)"
+MSG[sb.protocol.vless]="VLESS + TLS        (Vision / WS / gRPC and more transports; needs a certificate or self-signed)"
 MSG[sb.protocol_menu.snell]="Snell     (inbound экосистемы Surge, требуется sing-box 1.14+)"
 
 # ── snell (inbound) ───────────────────────────────────────────────────────────

@@ -206,10 +206,23 @@ hr_build_report() {
     printf "$(t tgbot.hr.report)" "$now" "$body"
 }
 
+# Sends the report to every admin and says how it went. Returns 1 when no
+# admin got it: no bot token, no admin IDs (the bot's "everyone is an admin"
+# mode leaves a pushed message without a recipient), or Telegram refused it.
 hr_send_report() {
     source "$(dirname "${BASH_SOURCE[0]}")/notify.sh" 2>/dev/null || return 0
     declare -f tg_notify_admins &>/dev/null || return 0
+    _tg_load_token || { log_error "$(t tgbot.hr.no_bot)"; return 1; }
+    [[ -n "$(tg_admin_ids)" ]] || { log_error "$(t tgbot.hr.no_admin)"; return 1; }
     tg_notify_admins "$(hr_build_report)"
+    local e
+    for e in "${TG_NOTIFY_ERRORS[@]}"; do
+        log_error "$(t tgbot.hr.send_failed "$e")"
+        [[ "$e" == *"chat not found"* || "$e" == *"initiate conversation"* ]] \
+            && log_warn "$(t tgbot.hr.hint_start)"
+    done
+    (( TG_NOTIFY_SENT > 0 )) || return 1
+    log_ok "$(t tgbot.hr.sent "$TG_NOTIFY_SENT")"
 }
 
 # ── Systemd timer ───────────────────────────────────────────────────────────
@@ -273,6 +286,11 @@ hr_setup_wizard() {
         log_error "$(t tgbot.hr.invalid_hour)"; return 1
     fi
     HR_HOUR="$hour"
+    source "$(dirname "${BASH_SOURCE[0]}")/notify.sh" 2>/dev/null || true
+    if [[ -z "$(tg_admin_ids)" ]]; then
+        log_warn "$(t tgbot.hr.no_admin)"
+        ask_yn "$(t tgbot.hr.ask_enable_anyway)" N || return 1
+    fi
     HR_ENABLED="true"
     _hr_save_cfg
     _hr_install_timer
@@ -292,6 +310,8 @@ hr_status() {
     else
         echo -e "  ${YELLOW}$(t tgbot.hr.status_disabled)${NC}"
     fi
+    source "$(dirname "${BASH_SOURCE[0]}")/notify.sh" 2>/dev/null || true
+    [[ -n "$(tg_admin_ids)" ]] || echo -e "  ${YELLOW}$(t tgbot.hr.status_no_admin)${NC}"
     echo -e "${BOLD}${BLUE}════════════════════════════════════════════${NC}"
 }
 
@@ -305,7 +325,7 @@ hr_menu() {
 
         case "$MENU_CHOICE" in
             1) hr_setup_wizard; press_enter ;;
-            2) log_step "$(t tgbot.hr.sending)"; hr_send_report; log_ok "$(t tgbot.hr.sent)"; press_enter ;;
+            2) log_step "$(t tgbot.hr.sending)"; hr_send_report || true; press_enter ;;
             3) hr_disable; press_enter ;;
             0) return ;;
         esac

@@ -411,7 +411,7 @@ xhttp_add_node() {
     if [[ "$mode" == "mkcp" ]]; then
         log_info "$(t xray.xhttp.mkcp_no_mount)"
         listen_addr="0.0.0.0"; public_port="$port"; fallback_enabled=false
-    elif ask_yn "$(t xray.ask.nginx_proxy)" N; then
+    elif { [[ -z "${domain:-}" ]] || cert_name_shares_443 "$domain"; } && ask_yn "$(t xray.ask.nginx_proxy)" N; then
         use_nginx=1; listen_addr="127.0.0.1"
         if ! is_installed nginx; then
             log_warn "$(t xray.nginx_not_installed)"

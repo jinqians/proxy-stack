@@ -22,30 +22,70 @@ _tg_load_token() {
     [[ -n "$_TG_NOTIFY_TOKEN" ]]
 }
 
-# Send a Markdown message to a Telegram chat_id.
-# Returns 0 even on failure so callers never abort on a notification error.
-tg_send() {
-    local chat_id="$1" text="$2"
-    _tg_load_token || return 0
-    curl -fsSL --max-time 10 \
-        "https://api.telegram.org/bot${_TG_NOTIFY_TOKEN}/sendMessage" \
-        -d "chat_id=${chat_id}" \
-        -d "parse_mode=Markdown" \
-        -d "disable_web_page_preview=true" \
-        --data-urlencode "text=${text}" >/dev/null 2>&1 || true
+# Why the last tg_send did not get through (Telegram's own description, or
+# curl's when Telegram did not answer); empty when it did.
+TG_SEND_ERROR=""
+
+_tg_post() {   # <chat_id> <text> [parse_mode] → Telegram's answer (or curl's error)
+    local args=(-sS --max-time 10 "https://api.telegram.org/bot${_TG_NOTIFY_TOKEN}/sendMessage"
+        -d "chat_id=$1" -d "disable_web_page_preview=true" --data-urlencode "text=$2")
+    [[ -n "${3:-}" ]] && args+=(-d "parse_mode=$3")
+    curl "${args[@]}" 2>&1 || true
+}
+# not `jq -e`: jq 1.6 (Debian 12, Ubuntu 22.04) exits 0 on an empty answer
+_tg_ok() { [[ "$(jq -r '.ok' 2>/dev/null <<<"$1")" == true ]]; }
+_tg_desc() {
+    local d; d=$(jq -r '.description // empty' 2>/dev/null <<<"$1") || d=""
+    [[ -n "$d" ]] || d=$(head -n1 <<<"$1")
+    printf '%s' "${d:-no answer from api.telegram.org}"
 }
 
-# Broadcast a Markdown message to every configured admin (TG_ADMIN_IDS).
-# Silently does nothing if no admins are configured — never aborts the caller.
-tg_notify_admins() {
-    local text="$1"
+# Send a Markdown message to a Telegram chat_id; the outcome is in TG_SEND_ERROR.
+# Returns 0 even on failure so callers never abort on a notification error.
+tg_send() {
+    local chat_id="$1" text="$2" resp
+    TG_SEND_ERROR=""
+    _tg_load_token || { TG_SEND_ERROR="no bot token in $_TG_NOTIFY_CFG"; return 0; }
+    resp=$(_tg_post "$chat_id" "$text" Markdown)
+    # An unpaired _ or * in a name (a node tag, a hostname) makes Telegram
+    # refuse the whole Markdown message; as plain text it still gets there.
+    if ! _tg_ok "$resp" && [[ "$(_tg_desc "$resp")" == *"can't parse entities"* ]]; then
+        resp=$(_tg_post "$chat_id" "$text")
+    fi
+    _tg_ok "$resp" || TG_SEND_ERROR=$(_tg_desc "$resp")
+    return 0
+}
+
+# The admins' Telegram IDs (TG_ADMIN_IDS, comma-separated). Empty when the bot
+# runs with "everyone is an admin": then pushed messages have no recipient.
+tg_admin_ids() {
     [[ -n "$_TG_NOTIFY_ADMIN_IDS" ]] || \
         _TG_NOTIFY_ADMIN_IDS=$(. "$_TG_NOTIFY_CFG" 2>/dev/null && echo "${TG_ADMIN_IDS:-${TG_ALLOWED_IDS:-}}")
-    local aid
-    IFS=',' read -ra _aids <<< "$_TG_NOTIFY_ADMIN_IDS"
+    local ids="${_TG_NOTIFY_ADMIN_IDS// /}"
+    [[ -n "${ids//,/}" ]] && printf '%s' "$ids"
+    return 0
+}
+
+# How the last tg_notify_admins went: how many admins got the message, and
+# "ID: reason" for each one who did not.
+TG_NOTIFY_SENT=0
+TG_NOTIFY_ERRORS=()
+
+# Broadcast a Markdown message to every configured admin (TG_ADMIN_IDS).
+# Does nothing if no admins are configured — never aborts the caller.
+tg_notify_admins() {
+    local text="$1" aid
+    TG_NOTIFY_SENT=0
+    TG_NOTIFY_ERRORS=()
+    IFS=',' read -ra _aids <<< "$(tg_admin_ids)"
     for aid in "${_aids[@]}"; do
-        aid="${aid// /}"
-        [[ -n "$aid" ]] && tg_send "$aid" "$text"
+        [[ -n "$aid" ]] || continue
+        tg_send "$aid" "$text"
+        if [[ -z "$TG_SEND_ERROR" ]]; then
+            TG_NOTIFY_SENT=$(( TG_NOTIFY_SENT + 1 ))
+        else
+            TG_NOTIFY_ERRORS+=("$aid: $TG_SEND_ERROR")
+        fi
     done
 }
 

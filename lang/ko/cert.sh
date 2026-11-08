@@ -1,7 +1,8 @@
 # ko/cert.sh — SSL certificate module Korean messages (assign MSG[...] only; do not declare).
 
 MSG[cert.acme.already_installed]="acme.sh가 이미 설치되어 있습니다."
-MSG[cert.acme.ask_email]="인증서 등록 이메일"
+MSG[cert.acme.ask_email]="인증서 등록 이메일 (비워 둘 수 있음)"
+MSG[cert.acme.email_dropped]="acme.sh 계정 이메일이 유효하지 않아(이전 PSM이 호스트 이름으로 만든 점 없는 도메인, Let's Encrypt가 거부) 제거했습니다. 인증서 발급에는 이메일이 필요 없습니다"
 MSG[cert.acme.install_failed]="acme.sh 설치 실패. 실행 파일을 찾을 수 없습니다: %s"
 MSG[cert.acme.installed]="acme.sh 설치 완료, 자동 갱신 cron 작업이 설정되었습니다."
 MSG[cert.ca.menu]="  CA:
@@ -46,6 +47,13 @@ MSG[cert.http.dns_failed_cf]="DNS-01도 실패했습니다. Cloudflare Token 권
 
 MSG[cert.ask_domain]="도메인"
 MSG[cert.invalid_domain]="잘못된 도메인"
+MSG[cert.ask_domain_or_ip]="도메인 또는 IPv4 주소 (IP를 입력하면 IP 인증서를 발급 / 가져오기)"
+MSG[cert.ip.issuing]="%s 은(는) IP 주소입니다: Let's Encrypt에 단기 IP 인증서를 요청합니다 (약 6일 유효, acme.sh가 3일마다 자동 갱신)"
+MSG[cert.ip.acme_too_old]="이 acme.sh는 너무 오래되어 인증서 프로필을 지원하지 않으므로 IP 인증서를 발급할 수 없습니다. %s --upgrade 를 실행한 뒤 다시 시도하세요"
+MSG[cert.ip.no_dns]="IP 인증서는 HTTP-01로만 발급할 수 있습니다 (IP에는 DNS가 없음). HTTP-01을 선택하고 80 포트가 인터넷에서 접근 가능한지 확인하세요"
+MSG[cert.ip.not_covered]="이 인증서에는 IP %s 이(가) 포함되어 있지 않습니다 (SAN에 해당 주소 없음). 이 IP로 접속하는 클라이언트는 인증서를 거부합니다"
+MSG[cert.ip.ask_import_anyway]="그래도 가져올까요?"
+MSG[cert.ip.no_443]="IP 인증서 노드는 공유 443에 올릴 수 없습니다 (IP로 접속하는 클라이언트는 SNI를 보내지 않아 Nginx가 라우팅할 수 없음). 노드는 자체 포트를 사용합니다"
 MSG[cert.ask_domain_wildcard]="도메인(와일드카드 지원, 예: *.example.com)"
 MSG[cert.dns_api.menu5]="
   DNS API:

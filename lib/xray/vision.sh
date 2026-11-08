@@ -182,7 +182,7 @@ vision_add_node() {
     # ── Nginx reverse proxy choice ────────────────────────────────────────────
     local listen_addr="" use_nginx=0 public_port fallback_enabled=true
     echo ""
-    if ask_yn "$(t xray.ask.nginx_proxy)" N; then
+    if cert_name_shares_443 "$domain" && ask_yn "$(t xray.ask.nginx_proxy)" N; then
         use_nginx=1; listen_addr="127.0.0.1"
         if ! is_installed nginx; then
             log_warn "$(t xray.nginx_not_installed)"
@@ -260,6 +260,9 @@ vision_modify_domain() {
     local new_domain; ask new_domain "$(t xray.ask.new_domain)"
     source "$LIB_DIR/cert.sh"
     cert_ensure_domain "$new_domain" || { log_warn "$(t xray.cancel_no_cert)"; return 1; }
+    # on the shared 443, a node is found by its name: an IP certificate's has none
+    [[ "$(echo "$node" | jq -r '.listen_addr // "127.0.0.1"')" != "127.0.0.1" ]] \
+        || cert_name_shares_443 "$new_domain" || return 1
     _sni_remove_entry "$old_domain" 2>/dev/null || true
     node=$(echo "$node" | jq --arg v "$new_domain" '.domain=$v')
     _vision_upsert "$node"

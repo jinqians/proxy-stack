@@ -603,7 +603,7 @@ MSG[sb.protocol.snell]="Snell             (Surge 生态，TCP，需 sing-box 1.1
 MSG[sb.protocol.trojan]="Trojan             (TCP + TLS，自签或真实证书均可)"
 MSG[sb.protocol.vmess]="VMess + WS + TLS   (需要域名和证书)"
 MSG[sb.protocol.socks]="SOCKS5             (无加密，默认仅本机监听)"
-MSG[sb.protocol.vless]="VLESS + TLS        (多传输，需要证书或自签)"
+MSG[sb.protocol.vless]="VLESS + TLS        (Vision / WS / gRPC 等多种传输，需要证书或自签)"
 MSG[sb.protocol_menu.snell]="Snell     (Surge 生态入站，需 sing-box 1.14+)"
 
 # ── snell（入站）──────────────────────────────────────────────────────────────

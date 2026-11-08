@@ -567,7 +567,7 @@ MSG[mh.protocol.snell]="Snell             (Surge 生态，TCP)"
 MSG[mh.protocol.trojan]="Trojan             (TCP + TLS，自签或真实证书均可)"
 MSG[mh.protocol.vmess]="VMess + WS + TLS   (需要域名和证书)"
 MSG[mh.protocol.socks]="SOCKS5             (无加密，默认仅本机监听)"
-MSG[mh.protocol.vless]="VLESS + TLS        (多传输，需要证书或自签)"
+MSG[mh.protocol.vless]="VLESS + TLS        (Vision / WS / gRPC 等多种传输，需要证书或自签)"
 MSG[mh.protocol_menu.snell]="Snell     (Surge 生态入站)"
 
 # ── snell（入站）──────────────────────────────────────────────────────────────

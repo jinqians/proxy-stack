@@ -24,8 +24,11 @@ acme_install() {
         log_info "$(t cert.acme.already_installed)"
         return 0
     fi
-    local email; ask email "$(t cert.acme.ask_email)" ""
-    [[ -z "$email" ]] && email="admin@$(hostname -f 2>/dev/null || echo 'example.com')"
+    # No email given, none made up: an account needs none, and admin@<hostname>
+    # (what PSM used to put there) is refused by Let's Encrypt when the
+    # hostname has no dot ("invalidContact"), which stopped every issue.
+    local email mail=(); ask email "$(t cert.acme.ask_email)" ""
+    [[ -n "$email" ]] && mail=(-m "$email")
 
     # acme.sh 用 crontab 做自动续期——RHEL 系最小安装没有 cronie，装好 acme.sh
     # 也不会续期（安装器只是打印一行警告），这里先保证 cron 可用。
@@ -41,7 +44,7 @@ acme_install() {
         rm -rf "$tmp"; log_error "$(t cert.acme.checksum_bad "$ACME_VERSION" "$sum")"; return 1
     fi
     tar -xzf "$tmp/acme.tgz" -C "$tmp" \
-        && ( cd "$tmp/acme.sh-${ACME_VERSION}" && ./acme.sh --install --home "$ACME_HOME" -m "$email" ) >&2 \
+        && ( cd "$tmp/acme.sh-${ACME_VERSION}" && ./acme.sh --install --home "$ACME_HOME" "${mail[@]}" ) >&2 \
         || { rm -rf "$tmp"; log_error "$(t cert.acme.install_failed "$ACME_HOME/acme.sh")"; return 1; }
     rm -rf "$tmp"
 
@@ -55,13 +58,54 @@ acme_install() {
 
 _acme() {
     export PATH="$ACME_HOME:$PATH"
+    case "${1:-}" in --issue|--register-account) _cert_drop_bad_email ;; esac
     "$ACME_HOME/acme.sh" "$@"
 }
 
-# A certificate's name as the menus take it: a domain, or *.domain for a
-# wildcard. What leaves this check can name a directory under SSL_DIR and
-# nothing else ("../conf.d" was a way to rm -rf /etc/nginx/conf.d).
-_cert_valid_name() { is_domain "${1#\*.}"; }
+# acme.sh keeps the account email in account.conf and, once it has tried a
+# CA, in that CA's ca.conf too (read first). An address whose domain has no
+# dot, the admin@<hostname> an earlier PSM made up, can never register, so
+# it is taken out of both before an issue: the account goes without one.
+_cert_drop_bad_email() {
+    local f bad="^(ACCOUNT|CA)_EMAIL='[^'@]*@[^'.]*'$"
+    for f in "$ACME_HOME/account.conf" "$ACME_HOME"/ca/*/ca.conf "$ACME_HOME"/ca/*/*/ca.conf; do
+        [[ -f "$f" ]] && grep -qE "$bad" "$f" || continue
+        { grep -vE "$bad" "$f" || true; } > "$f.psm-new" && cat "$f.psm-new" > "$f"   # cat: the file keeps its mode
+        rm -f "$f.psm-new"
+        log_warn "$(t cert.acme.email_dropped)"
+    done
+    return 0
+}
+
+# A certificate's name as the menus take it: a domain, *.domain for a
+# wildcard, or an IPv4 address for an IP certificate. What leaves this check
+# can name a directory under SSL_DIR and nothing else ("../conf.d" was a way
+# to rm -rf /etc/nginx/conf.d).
+_cert_valid_name() { is_domain "${1#\*.}" || is_ipv4 "$1"; }
+
+# IP certificates (#9) come from Let's Encrypt, which issues them only through
+# HTTP-01 and only short-lived (about 160 hours, the "shortlived" profile):
+# acme.sh renews them every 3 days instead of every 60.
+_CERT_IP_ARGS=(--server letsencrypt --cert-profile shortlived --days 3)
+
+# acme.sh learnt certificate profiles in 3.1.1; an older copy (installed by an
+# earlier PSM) would ask for a certificate Let's Encrypt refuses for an IP.
+_cert_acme_has_profiles() { _acme --help 2>/dev/null | grep -q -- '--cert-profile'; }
+
+# Whether a node on certificate <name> can sit behind the shared 443. Nginx
+# routes there by the name in the TLS handshake, and a client connecting to
+# an IP address sends none, so the node of an IP certificate keeps its port.
+cert_name_shares_443() {
+    is_ipv4 "$1" || return 0
+    log_info "$(t cert.ip.no_443)"
+    return 1
+}
+
+# An imported IP certificate must name the address: a certificate for a
+# domain would be refused by every client connecting to the IP.
+_cert_covers_ip() {   # <cert file> <IPv4>
+    openssl x509 -noout -in "$1" -checkip "$2" 2>/dev/null | grep -q ' does match '
+}
 
 # acme.sh returns non-zero when it skips renewal ("Domains not changed"),
 # even though the cert already exists in its cache.  Check for that case.
@@ -118,6 +162,8 @@ _cert_ratelimit_handle() {
     local retry
     retry=$(grep -oiE 'retry after[^,"]*' <<<"$output" | head -1)
     [[ -n "$retry" ]] && log_warn "$(t cert.rate.retry_time "$retry")"
+    # the ZeroSSL retry is for domains: an IP certificate is Let's Encrypt's
+    is_ipv4 "$domain" && return 1
     echo -e "$(t cert.rate.options)"
     if ask_yn "$(t cert.rate.ask_zerossl)" N; then
         _acme --set-default-ca --server zerossl \
@@ -152,6 +198,12 @@ _cert_http01_issue() {
     local issued=0
     local acme_out=""       # 捕获 acme.sh 输出，用于识别限流
     local issue_args=()     # 记录本次签发参数，供限流后换 CA 重试复用
+    local ip_args=()
+    if is_ipv4 "$domain"; then
+        _cert_acme_has_profiles || { log_error "$(t cert.ip.acme_too_old "$ACME_HOME/acme.sh")"; return 1; }
+        ip_args=("${_CERT_IP_ARGS[@]}")
+        log_info "$(t cert.ip.issuing "$domain")"
+    fi
 
     if is_installed nginx && svc_is_active nginx; then
         # Nginx is running → use webroot (no need to touch port 80)
@@ -165,7 +217,7 @@ server {
 }
 NGINXEOF
         nginx -s reload 2>/dev/null || true
-        issue_args=(-d "$domain" --webroot "$webroot")
+        issue_args=(-d "$domain" --webroot "$webroot" "${ip_args[@]}")
         local rc=0
         acme_out=$(set -o pipefail; _acme --issue "${issue_args[@]}" 2>&1 | tee /dev/stderr) || rc=$?
         (( rc == 0 )) && issued=1
@@ -184,7 +236,7 @@ NGINXEOF
         # an interrupted issue (Ctrl-C) closes port 80 again all the same
         [[ -n "$fw_tag" ]] && trap '_fw_close80 '"$fw_tag"'; trap - INT TERM; kill -INT $$' INT TERM
 
-        issue_args=(-d "$domain" --standalone)
+        issue_args=(-d "$domain" --standalone "${ip_args[@]}")
         local rc=0
         acme_out=$(set -o pipefail; _acme --issue "${issue_args[@]}" 2>&1 | tee /dev/stderr) || rc=$?
         (( rc == 0 )) && issued=1
@@ -221,6 +273,8 @@ NGINXEOF
     log_warn "$(t cert.http.conn_refused_hint)"
     log_warn "$(t cert.http.iptables_cannot_fix)"
     echo -e "$(t cert.http.solution_open80)"
+    # an IP has no DNS: HTTP-01 is the only way to its certificate
+    is_ipv4 "$domain" && return 1
     echo -e "$(t cert.http.solution_dns01)"
 
     # Auto-fallback: if Cloudflare token already configured, offer DNS-01 immediately
@@ -245,8 +299,8 @@ NGINXEOF
 cert_issue_http() {
     [[ -f "$ACME_HOME/acme.sh" ]] || acme_install
     _select_ca
-    local domain; ask domain "$(t cert.ask_domain)"
-    is_domain "$domain" || { log_error "$(t cert.invalid_domain)"; return 1; }
+    local domain; ask domain "$(t cert.ask_domain_or_ip)"
+    is_domain "$domain" || is_ipv4 "$domain" || { log_error "$(t cert.invalid_domain)"; return 1; }
     _cert_http01_issue "$domain"
 }
 
@@ -256,6 +310,7 @@ cert_issue_dns() {
     _select_ca
 
     local domain; ask domain "$(t cert.ask_domain_wildcard)"
+    is_ipv4 "$domain" && { log_error "$(t cert.ip.no_dns)"; return 1; }
     is_domain "${domain#\*.}" || { log_error "$(t cert.invalid_domain)"; return 1; }
 
     echo -e "$(t cert.dns_api.menu5)"
@@ -312,7 +367,7 @@ cert_issue_dns() {
 
 # ── Manual import ─────────────────────────────────────────────────────────────
 cert_import_manual() {
-    local domain; ask domain "$(t cert.ask_domain)"
+    local domain; ask domain "$(t cert.ask_domain_or_ip)"
     _cert_valid_name "$domain" || { log_error "$(t cert.invalid_domain)"; return 1; }
     domain="${domain#\*.}"
     local cert_file key_file ca_file
@@ -323,6 +378,10 @@ cert_import_manual() {
 
     [[ -f "$cert_file" ]] || { log_error "$(t cert.import.cert_not_found)"; return 1; }
     [[ -f "$key_file"  ]] || { log_error "$(t cert.import.key_not_found)";  return 1; }
+    if is_ipv4 "$domain" && ! _cert_covers_ip "$cert_file" "$domain"; then
+        log_warn "$(t cert.ip.not_covered "$domain")"
+        ask_yn "$(t cert.ip.ask_import_anyway)" N || return 1
+    fi
 
     local dest="$SSL_DIR/$domain"
     mkdir -p "$dest"
@@ -466,6 +525,7 @@ cert_ensure_domain() {
             _cert_http01_issue "$domain" || return 1
             ;;
         2)
+            is_ipv4 "$domain" && { log_error "$(t cert.ip.no_dns)"; return 1; }
             [[ -f "$ACME_HOME/acme.sh" ]] || acme_install
             _select_ca
             echo -e "$(t cert.dns_api.menu4)"
@@ -503,6 +563,10 @@ cert_ensure_domain() {
             ask key_file  "$(t cert.import.ask_key_file)"
             [[ -f "$cert_file" ]] || { log_error "$(t cert.import.cert_not_found_path "$cert_file")"; return 1; }
             [[ -f "$key_file"  ]] || { log_error "$(t cert.import.key_not_found_path "$key_file")";   return 1; }
+            if is_ipv4 "$domain" && ! _cert_covers_ip "$cert_file" "$domain"; then
+                log_warn "$(t cert.ip.not_covered "$domain")"
+                ask_yn "$(t cert.ip.ask_import_anyway)" N || return 1
+            fi
             mkdir -p "$cert_dir"
             cp "$cert_file" "$cert_dir/fullchain.pem"
             cp "$key_file"  "$cert_dir/privkey.pem"

@@ -1,7 +1,8 @@
 # en/cert.sh — SSL certificate module English messages (assign MSG[...] only; do not declare).
 
 MSG[cert.acme.already_installed]="acme.sh is already installed."
-MSG[cert.acme.ask_email]="Certificate registration email"
+MSG[cert.acme.ask_email]="Certificate registration email (may be left empty)"
+MSG[cert.acme.email_dropped]="The acme.sh account email was invalid (made from the hostname by an older PSM, a domain without a dot, which Let's Encrypt refuses) and has been removed; issuing needs no email"
 MSG[cert.acme.install_failed]="acme.sh installation failed; executable not found: %s"
 MSG[cert.acme.installed]="acme.sh installed, and the automatic renewal cron job is set."
 MSG[cert.ca.menu]="  CA:
@@ -46,6 +47,13 @@ MSG[cert.http.dns_failed_cf]="DNS-01 also failed. Check Cloudflare Token permiss
 
 MSG[cert.ask_domain]="Domain"
 MSG[cert.invalid_domain]="Invalid domain"
+MSG[cert.ask_domain_or_ip]="Domain or IPv4 address (an IP issues / imports an IP certificate)"
+MSG[cert.ip.issuing]="%s is an IP address: asking Let's Encrypt for a short-lived IP certificate (valid about 6 days; acme.sh renews it every 3 days)"
+MSG[cert.ip.acme_too_old]="This acme.sh is too old for certificate profiles, which an IP certificate needs. Run %s --upgrade, then try again"
+MSG[cert.ip.no_dns]="An IP certificate can only be issued with HTTP-01 (an IP has no DNS): choose HTTP-01 and make sure port 80 is reachable from the internet"
+MSG[cert.ip.not_covered]="This certificate does not cover IP %s (the address is not among its SANs); clients connecting to that IP would refuse it"
+MSG[cert.ip.ask_import_anyway]="Import it anyway?"
+MSG[cert.ip.no_443]="A node on an IP certificate cannot sit behind the shared 443 (a client connecting to an IP sends no SNI, so Nginx cannot route it); the node keeps its own port"
 MSG[cert.ask_domain_wildcard]="Domain (wildcard supported, e.g. *.example.com)"
 MSG[cert.dns_api.menu5]="
   DNS API:

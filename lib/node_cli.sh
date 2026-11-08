@@ -1140,6 +1140,10 @@ _node_cli_is_mounted() {   # <core> <proto> <node-json>
 # still points there until the change is applied, and that is not a conflict.
 _node_cli_mount_precheck() {   # <key> <port> [own-port]
     local key="$1" port="$2" own="${3:-}" cur
+    if is_ipv4 "$key"; then
+        _node_cli_err "$key is an IP address: a client connecting to an IP sends no SNI, so Nginx cannot route it on the shared 443; leave out --mount-443"
+        return 1
+    fi
     # shellcheck source=/dev/null
     source "$LIB_DIR/nginx.sh" || return 1
     if ! is_installed nginx || [[ ! -f "$(_sni_map_file)" ]]; then

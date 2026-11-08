@@ -361,6 +361,17 @@ _doctor_check_disk() {
     fi
 }
 
+# How long before its end a certificate counts as expiring: 14 days, or a
+# third of its lifetime when that is shorter. An IP certificate lives about
+# 6 days and acme.sh renews it after 3, so 14 days would flag it always.
+_doctor_cert_margin() {   # <cert> → seconds
+    local nb na life
+    nb=$(openssl x509 -in "$1" -noout -startdate 2>/dev/null | cut -d= -f2-)
+    na=$(openssl x509 -in "$1" -noout -enddate 2>/dev/null | cut -d= -f2-)
+    life=$(( $(date -d "$na" +%s 2>/dev/null || echo 0) - $(date -d "$nb" +%s 2>/dev/null || echo 0) ))
+    if (( life > 0 && life / 3 < 1209600 )); then echo $(( life / 3 )); else echo 1209600; fi
+}
+
 _doctor_check_certificates() {
     local total=0 expiring=0 expired=0 invalid=0 cert
     if [[ ! -d "$NGINX_SSL_DIR" ]]; then
@@ -375,7 +386,7 @@ _doctor_check_certificates() {
             invalid=$(( invalid + 1 ))
         elif ! openssl x509 -in "$cert" -noout -checkend 0 &>/dev/null; then
             expired=$(( expired + 1 ))
-        elif ! openssl x509 -in "$cert" -noout -checkend 1209600 &>/dev/null; then
+        elif ! openssl x509 -in "$cert" -noout -checkend "$(_doctor_cert_margin "$cert")" &>/dev/null; then
             expiring=$(( expiring + 1 ))
         fi
     # certificates by any of their usual names (cert.pem, fullchain.pem, *.crt…), keys left out

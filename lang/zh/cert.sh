@@ -1,7 +1,8 @@
 # zh/cert.sh — SSL 证书模块中文文案（仅赋值 MSG[...]，勿 declare）。
 
 MSG[cert.acme.already_installed]="acme.sh 已安装。"
-MSG[cert.acme.ask_email]="证书注册邮箱"
+MSG[cert.acme.ask_email]="证书注册邮箱（可留空）"
+MSG[cert.acme.email_dropped]="acme.sh 里的账号邮箱无效（旧版 PSM 用主机名生成的，域名里没有点，Let's Encrypt 拒绝注册），已经去掉；签发证书不需要邮箱"
 MSG[cert.acme.install_failed]="acme.sh 安装失败——未找到可执行文件：%s"
 MSG[cert.acme.installed]="acme.sh 已安装，自动续期定时任务已设置。"
 MSG[cert.ca.menu]="  CA:
@@ -46,6 +47,13 @@ MSG[cert.http.dns_failed_cf]="DNS-01 签发同样失败，请检查 Cloudflare T
 
 MSG[cert.ask_domain]="域名"
 MSG[cert.invalid_domain]="无效的域名"
+MSG[cert.ask_domain_or_ip]="域名或 IPv4 地址（填 IP 即签发 / 导入 IP 证书）"
+MSG[cert.ip.issuing]="%s 是 IP 地址：向 Let's Encrypt 申请短效 IP 证书（约 6 天有效，acme.sh 每 3 天自动续期）"
+MSG[cert.ip.acme_too_old]="本机的 acme.sh 太旧，不支持证书配置档，签不了 IP 证书。先运行 %s --upgrade，再试一次"
+MSG[cert.ip.no_dns]="IP 证书只能用 HTTP-01 签发（IP 没有 DNS）：请选择 HTTP-01，并确保 80 端口可以从公网访问"
+MSG[cert.ip.not_covered]="这张证书不包含 IP %s（证书的 SAN 里没有这个地址），客户端连接这个 IP 时会拒绝它"
+MSG[cert.ip.ask_import_anyway]="仍然导入？"
+MSG[cert.ip.no_443]="IP 证书的节点不能挂到共用的 443（客户端连接 IP 时不发送 SNI，Nginx 无法分流），节点使用自己的端口"
 MSG[cert.ask_domain_wildcard]="域名（支持通配符 *.example.com）"
 MSG[cert.dns_api.menu5]="
   DNS API:

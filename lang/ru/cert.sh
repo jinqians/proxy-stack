@@ -1,7 +1,8 @@
 # ru/cert.sh — SSL certificate module Russian messages (assign MSG[...] only; do not declare).
 
 MSG[cert.acme.already_installed]="acme.sh уже установлен."
-MSG[cert.acme.ask_email]="Email для регистрации сертификата"
+MSG[cert.acme.ask_email]="Email для регистрации сертификата (можно оставить пустым)"
+MSG[cert.acme.email_dropped]="Email учётной записи acme.sh был недопустим (создан старой версией PSM из имени хоста, домен без точки — Let's Encrypt его отклоняет) и удалён; для выпуска сертификата email не нужен"
 MSG[cert.acme.install_failed]="Установка acme.sh не удалась; исполняемый файл не найден: %s"
 MSG[cert.acme.installed]="acme.sh установлен, cron-задача автоматического продления настроена."
 MSG[cert.ca.menu]="  CA:
@@ -46,6 +47,13 @@ MSG[cert.http.dns_failed_cf]="DNS-01 тоже не удался. Проверь�
 
 MSG[cert.ask_domain]="Домен"
 MSG[cert.invalid_domain]="Недопустимый домен"
+MSG[cert.ask_domain_or_ip]="Домен или IPv4-адрес (для IP выпускается / импортируется IP-сертификат)"
+MSG[cert.ip.issuing]="%s — это IP-адрес: запрашиваем у Let's Encrypt краткосрочный IP-сертификат (действует около 6 дней, acme.sh продлевает его каждые 3 дня)"
+MSG[cert.ip.acme_too_old]="Этот acme.sh слишком старый и не поддерживает профили сертификатов, нужные для IP-сертификата. Выполните %s --upgrade и повторите попытку"
+MSG[cert.ip.no_dns]="IP-сертификат можно выпустить только через HTTP-01 (у IP нет DNS): выберите HTTP-01 и убедитесь, что порт 80 доступен из интернета"
+MSG[cert.ip.not_covered]="Этот сертификат не включает IP %s (адреса нет среди SAN); клиенты, подключающиеся к этому IP, его отклонят"
+MSG[cert.ip.ask_import_anyway]="Всё равно импортировать?"
+MSG[cert.ip.no_443]="Узел с IP-сертификатом нельзя разместить за общим портом 443 (клиент, подключающийся к IP, не отправляет SNI, и Nginx не может его маршрутизировать); узел использует собственный порт"
 MSG[cert.ask_domain_wildcard]="Домен (поддерживается wildcard, например *.example.com)"
 MSG[cert.dns_api.menu5]="
   DNS API:
