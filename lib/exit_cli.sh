@@ -304,6 +304,7 @@ exit_menu_node() {   # <core>
 # <core> <proto> → the fields worth offering, as "option<TAB>label" lines.
 _node_menu_fields() {
     local core="$1" proto="$2"
+    printf 'display-name\t%s\n' "$(t nme.f.display_name)"
     printf 'port\t%s\n' "$(t nme.f.port)"
     case "$proto" in
         reality)
@@ -332,11 +333,11 @@ node_menu_edit() {   # <core>
     (( count == 0 )) && { log_warn "$(t nme.none)"; return 0; }
 
     echo -e "\n${BOLD}${BLUE}══ $(t nme.title) ════════════════${NC}"
-    local p tg po
-    while IFS=$'\t' read -r p tg po; do
+    local p tg po dn
+    while IFS=$'\t' read -r p tg po dn; do
         i=$((i+1)); _tags+=("$tg"); _protos+=("$p")
-        printf "  ${CYAN}%2d.${NC} %-12s %-22s port=%s\n" "$i" "[$p]" "$tg" "$po"
-    done < <(printf '%s' "$nodes" | jq -r '.[] | [.protocol, .tag, (.port // "-")] | @tsv')
+        printf "  ${CYAN}%2d.${NC} %-12s %-22s port=%s%s\n" "$i" "[$p]" "$tg" "$po" "${dn:+  $dn}"
+    done < <(printf '%s' "$nodes" | jq -r '.[] | [.protocol, .tag, (.port // "-"), (.node.display_name // "")] | @tsv')
     echo -e "${BOLD}${BLUE}════════════════════════════════════════${NC}"
 
     read -rp "$(echo -e "${CYAN}$(t nme.ask_node): ${NC}")" sel
@@ -359,10 +360,12 @@ node_menu_edit() {   # <core>
 
     echo ""
     echo -e "  $(t nme.blank_hint)"
+    [[ "$opt" == display-name ]] && echo -e "  $(t nme.dn_hint "$(psm_node_label "$tag")")"
     ask value "$(t nme.ask_value "$opt")" ""
     # Nothing typed: leave the node alone. An empty value would be written as an
     # empty field — a node with no password — rather than meaning "keep it".
     [[ -n "$value" ]] || { log_info "$(t nme.unchanged)"; return 0; }
+    [[ "$opt" == display-name && "$value" == "-" ]] && value=""   # back to the flag and tag
     # Positional core/protocol/tag: _node_cli_cmd_update reads its target that
     # way, and takes the tag from $1 only when it is not an option.
     if _node_cli_cmd_update "$core" "$proto" "$tag" "--$opt" "$value"; then

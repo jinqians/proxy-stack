@@ -180,7 +180,7 @@ _xss_uri() {
 
     local ip; ip=$(get_ipv4)
     local userinfo; userinfo=$(printf '%s:%s' "$method" "$pass" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
-    local uri="ss://${userinfo}@${ip}:${port}#${tag}"
+    local uri; uri="ss://${userinfo}@${ip}:${port}#$(psm_link_label "$tag" "$node")"
 
     echo -e "\n${BOLD}${GREEN}$(t xray.ss2022.title "$tag")${NC}"
     printf "  %-12s %s\n" "$(t xray.server_label)"   "$ip"

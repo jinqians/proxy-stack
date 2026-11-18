@@ -100,6 +100,32 @@ printf '%s' "$trojan_pinned" | jq -e '
 
 psm_node_cli node delete xray trojan ci-trojan --yes --store-only --json >/dev/null
 
+# the name in clients (#10): the server's flag and the tag, or --display-name as it is
+export PSM_SERVER_COUNTRY=JP
+fail() { echo "FAIL: $*" >&2; exit 1; }
+psm_node_cli node add xray ss2022 --tag ci-a --port 31090 \
+    --method 2022-blake3-aes-128-gcm --password ci-test-secret --store-only --json >/dev/null
+uri="$(psm_node_cli node export xray ss2022 ci-a --server 203.0.113.10)"
+[[ "$uri" == *"#%F0%9F%87%AF%F0%9F%87%B5%20ci-a" ]] || fail "flag and tag: $uri"
+psm_node_cli node add xray ss2022 --tag ci-b --port 31091 --display-name '东京 B ⚡' \
+    --method 2022-blake3-aes-128-gcm --password ci-test-secret --store-only --json \
+    | jq -e '.item.node.display_name == "东京 B ⚡"' >/dev/null || fail "--display-name on add"
+uri="$(psm_node_cli node export xray ss2022 ci-b --server 203.0.113.10)"
+[[ "$uri" == *"#$(url_encode '东京 B ⚡')" ]] || fail "display name: $uri"
+long=$(printf 'x%.0s' {1..65})
+for bad in 'a=b' 'a,b' $'a\nb' $'a\tb' ' a' 'a ' "$long" $'\xf0\x9f\x87\xaf\xf0\x9f\x87\xb5 ci-a' ci-a; do
+    if psm_node_cli node update xray ss2022 ci-b --display-name "$bad" --store-only --json >/dev/null 2>&1; then
+        fail "--display-name '$bad' was taken"
+    fi
+done
+psm_node_cli node show xray ss2022 ci-b --json | jq -e '.item.node.display_name == "东京 B ⚡"' >/dev/null \
+    || fail "a refused --display-name changed the node"
+psm_node_cli node update xray ss2022 ci-b --display-name '' --store-only --json >/dev/null
+uri="$(psm_node_cli node export xray ss2022 ci-b --server 203.0.113.10)"
+[[ "$uri" == *"#%F0%9F%87%AF%F0%9F%87%B5%20ci-b" ]] || fail "--display-name '' did not go back to the flag: $uri"
+psm_node_cli node delete xray ss2022 ci-a --yes --store-only --json >/dev/null
+psm_node_cli node delete xray ss2022 ci-b --yes --store-only --json >/dev/null
+
 set +e
 bash "$PSM_ROOT/manager.sh" node list --core not-a-core --json >/dev/null 2>&1
 rc=$?
@@ -109,4 +135,4 @@ set -e
     exit 1
 }
 
-echo "ok: node JSON contract, store-only CRUD, redaction, and usage exit code"
+echo "ok: node JSON contract, store-only CRUD, redaction, display names, and usage exit code"

@@ -693,7 +693,7 @@ _xhttp_share_uri() {
             query="${query}&path=${encoded_path}"
             ;;
     esac
-    printf 'vless://%s@%s:%s?%s#PSM-%s\n' "$uuid" "$host" "$ref_port" "$query" "$tag"
+    printf 'vless://%s@%s:%s?%s#%s\n' "$uuid" "$host" "$ref_port" "$query" "$(psm_link_label "$tag" "$node")"
 }
 
 xhttp_show_share() {

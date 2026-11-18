@@ -274,7 +274,7 @@ hy2_show_share() {
     selfsigned=$(jq -cn --argjson i "$insecure" --arg c "$HY2_SELF_SIGNED_CERT" '{insecure: $i, cert_path: $c}')
     pin=$(psm_pin_q "$selfsigned" pinSHA256)
     pin_yaml=$(psm_pin_yaml "$selfsigned"); [[ -n "$pin_yaml" ]] && pin_yaml=$'\n'"$pin_yaml"
-    local uri="hysteria2://${password}@${ip}:${port}?insecure=${insecure}&sni=${sni}${pin}#PSM-Hysteria2"
+    local uri; uri="hysteria2://${password}@${ip}:${port}?insecure=${insecure}&sni=${sni}${pin}#$(psm_link_label Hysteria2)"
 
     echo -e "\n${BOLD}${GREEN}── $(t hysteria2.share_title) ──${NC}"
     [[ $insecure -eq 1 ]] && echo -e "  ${YELLOW}$(t hysteria2.share_self_cert)${NC}"
@@ -285,7 +285,7 @@ hy2_show_share() {
     echo -e "\n${BOLD}$(t hysteria2.clash_title)${NC}"
     cat <<EOF
 proxies:
-  - name: PSM-Hysteria2
+  - name: $(psm_yaml_str "$(psm_node_label Hysteria2)")
     type: hysteria2
     server: ${ip}
     port: ${port}

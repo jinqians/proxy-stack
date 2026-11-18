@@ -187,11 +187,11 @@ _mh_ss_uri() {
         echo -e "\n${BOLD}${GREEN}── mihomo SS2022 + ShadowTLS v3: ${tag} ──${NC}"
         echo -e "  ${YELLOW}$(t mh.stls.no_uri)${NC}\n"
         echo -e "${BOLD}$(t mh.stls.surge_label):${NC}"
-        echo "  PSM-${tag} = ss, ${ip}, ${port}, encrypt-method=${method}, password=${pass}, shadow-tls-password=${spw}, shadow-tls-sni=${ssni}, shadow-tls-version=3"
+        echo "  $(psm_node_label "$tag" "$node") = ss, ${ip}, ${port}, encrypt-method=${method}, password=${pass}, shadow-tls-password=${spw}, shadow-tls-sni=${ssni}, shadow-tls-version=3"
         echo -e "\n${BOLD}$(t mh.stls.clash_label):${NC}"
         cat <<EOF
 proxies:
-  - name: PSM-${tag}
+  - name: $(psm_yaml_str "$(psm_node_label "$tag" "$node")")
     type: ss
     server: ${ip}
     port: ${port}
@@ -208,7 +208,7 @@ EOF
     fi
 
     local userinfo; userinfo=$(printf '%s:%s' "$method" "$pass" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
-    local uri="ss://${userinfo}@${ip}:${port}#${tag}"
+    local uri; uri="ss://${userinfo}@${ip}:${port}#$(psm_link_label "$tag" "$node")"
 
     echo -e "\n${BOLD}${GREEN}── mihomo SS2022: ${tag} ──${NC}"
     printf "  %-12s %s\n" "$(t mh.ss.label_server):" "$ip"

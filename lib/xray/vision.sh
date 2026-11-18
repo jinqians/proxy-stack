@@ -347,7 +347,7 @@ vision_show_share() {
     fi
 
     local venc; venc=$(url_encode "$(echo "$node" | jq -r '.vless_encryption // "none"')") || return 1
-    local uri="vless://${uuid}@${host}:${ref_port}?encryption=${venc}&flow=${flow}&security=tls&sni=${domain}&type=tcp#PSM-${tag}"
+    local uri; uri="vless://${uuid}@${host}:${ref_port}?encryption=${venc}&flow=${flow}&security=tls&sni=${domain}&type=tcp#$(psm_link_label "$tag" "$node")"
     echo -e "\n${BOLD}${GREEN}$(t xray.vision.share_title)${NC}"
     echo "  $uri"
     echo ""

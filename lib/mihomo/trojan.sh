@@ -129,7 +129,7 @@ _mh_trojan_uri() {
 
     local enc_pass uri
     enc_pass=$(url_encode "$pass") || return 1
-    uri="trojan://${enc_pass}@${host}:${port}?security=tls&sni=${sni}&type=tcp&allowInsecure=${insec}$(psm_pin_q "$node" pcs)#PSM-${tag}"
+    uri="trojan://${enc_pass}@${host}:${port}?security=tls&sni=${sni}&type=tcp&allowInsecure=${insec}$(psm_pin_q "$node" pcs)#$(psm_link_label "$tag" "$node")"
 
     echo -e "\n${BOLD}${GREEN}── mihomo Trojan: ${tag} ──${NC}"
     [[ "$insec" == "1" ]] && echo -e "  ${YELLOW}$(t mh.trojan.self_cert_hint)${NC}"

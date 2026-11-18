@@ -273,9 +273,9 @@ socks_show_share() {
 
     local uri
     if [[ -n "$user" ]]; then
-        uri="socks://$(printf '%s:%s' "$user" "$pass" | openssl base64 -A)@${host}:${port}#PSM-${tag}"
+        uri="socks://$(printf '%s:%s' "$user" "$pass" | openssl base64 -A)@${host}:${port}#$(psm_link_label "$tag" "$node")"
     else
-        uri="socks://${host}:${port}#PSM-${tag}"
+        uri="socks://${host}:${port}#$(psm_link_label "$tag" "$node")"
     fi
     echo ""
     echo -e "${BOLD}$(t xray.socks.link_label):${NC}"

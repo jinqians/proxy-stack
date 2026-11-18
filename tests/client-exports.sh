@@ -11,6 +11,8 @@ PSM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PSM_ROOT/lib/common.sh"
 source "$PSM_ROOT/lib/subscribe.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
+PSM_SERVER_COUNTRY=HK   # no lookup: the names are "🇭🇰 <tag>"
+hk=$'\xf0\x9f\x87\xad\xf0\x9f\x87\xb0'
 
 reality='{"tag":"r1","port":31001,"uuid":"11111111-2222-3333-4444-555555555555","flow":"xtls-rprx-vision",
           "server_name":"learn.microsoft.com","dest":"learn.microsoft.com:443","public_key":"PUB","short_ids":["1847e055"]}'
@@ -52,12 +54,33 @@ done
 # the links: mihomo's importer reads support-x25519mlkem768 (Xray's REALITY only)
 source "$PSM_ROOT/lib/node_cli.sh"
 link=$(_node_cli_export_uri xray reality "$reality" 203.0.113.5)
-[[ "$link" == *"&sid=1847e055&support-x25519mlkem768=true&type=tcp#PSM-r1" ]] || fail "Xray REALITY link: $link"
+[[ "$link" == *"&sid=1847e055&support-x25519mlkem768=true&type=tcp#%F0%9F%87%AD%F0%9F%87%B0%20r1" ]] || fail "Xray REALITY link: $link"
 link=$(_node_cli_export_uri sing-box reality "$reality" 203.0.113.5)
-[[ "$link" != *support-x25519mlkem768* && "$link" == *"&sid=1847e055&type=tcp#PSM-r1" ]] || fail "sing-box REALITY link: $link"
+[[ "$link" != *support-x25519mlkem768* && "$link" == *"&sid=1847e055&type=tcp#%F0%9F%87%AD%F0%9F%87%B0%20r1" ]] || fail "sing-box REALITY link: $link"
 source "$PSM_ROOT/lib/xray/xhttp.sh"
 link=$(_xhttp_share_uri "$layer" 203.0.113.5 31008)
 [[ "$link" == *"&support-x25519mlkem768=true"* ]] || fail "REALITY-layer link: $link"
+
+# the names clients show (#10): the flag of the server's country and the tag,
+# or the node's display name as it is, in every export
+[[ "$(psm_country_flag jp)" == $'\xf0\x9f\x87\xaf\xf0\x9f\x87\xb5' ]] || fail "the flag of jp"
+for cc in XX T1 "" HKG 1A; do [[ -z "$(psm_country_flag "$cc")" ]] || fail "a flag for '$cc'"; done
+[[ "$(psm_node_label r1 "$reality")" == "$hk r1" ]] || fail "label: $(psm_node_label r1 "$reality")"
+[[ "$(PSM_SERVER_COUNTRY="" psm_node_label r1 "$reality")" == r1 ]] || fail "label with no country"
+dn='香港 01 ⚡ "IPLC" #a: b'
+named=$(jq -c --arg d "$dn" '.display_name = $d' <<<"$reality")
+[[ "$(psm_node_label r1 "$named")" == "$dn" ]] || fail "display name: $(psm_node_label r1 "$named")"
+[[ "$(psm_node_label r1 "$(jq -c '.display_name = ""' <<<"$reality")")" == "$hk r1" ]] || fail "an empty display name"
+link=$(_node_cli_export_uri mihomo reality "$named" 203.0.113.5)
+[[ "${link##*#}" == "$(url_encode "$dn")" ]] || fail "the display name in a link: $link"
+link=$(_node_cli_export_uri xray vmess '{"tag":"m1","port":31003,"uuid":"u","network":"tcp"}' 203.0.113.5)
+jq -e --arg n "$hk m1" '.ps == $n' <<<"$(printf '%s' "${link#vmess://}" | openssl base64 -d -A)" >/dev/null || fail "VMess ps: $link"
+_sub_mh_proxy mihomo reality "$named" 203.0.113.5 r1 | jq -e --arg n "$dn" '.name == $n' >/dev/null || fail "Clash name"
+_sub_mh_proxy mihomo reality "$reality" 203.0.113.5 r1 | jq -e --arg n "$hk r1" '.name == $n' >/dev/null || fail "Clash name"
+_sub_sb_outbound mihomo reality "$named" 203.0.113.5 r1 | jq -e --arg n "$dn" '.tag == $n' >/dev/null || fail "sing-box tag"
+[[ "$(psm_yaml_str "$dn" | jq -r .)" == "$dn" ]] || fail "YAML string: $(psm_yaml_str "$dn")"
+[[ "$(jq -rn --arg flag "$hk" "$PSM_LABEL_JQ"' [{tag:"a"}, {tag:"b", display_name:"B"}] | map(psm_label($flag)) | join("|")')" == "$hk a|B" ]] \
+    || fail "psm_label in jq"
 
 vmess='{"tag":"m1","port":31011,"uuid":"11111111-2222-3333-4444-555555555555","domain":"x.example.com","path":"/w"}'
 ob=$(_sub_sb_outbound_plain xray vmess "$vmess" 203.0.113.5 m1)

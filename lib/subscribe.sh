@@ -91,9 +91,10 @@ _sub_standalone_uris() {
         sni="${d:-$server}"
         # the certificate the server presents (tls.cert), pinned when self-signed
         local hy2_crt; hy2_crt=$(awk '/^[ \t]+cert:/ {print $2; exit}' "$hy2_cfg" 2>/dev/null)
-        [[ -n "$pw" ]] && printf 'hysteria2://%s@%s:%s?insecure=%s&sni=%s%s#PSM-Hysteria2\n' \
+        [[ -n "$pw" ]] && printf 'hysteria2://%s@%s:%s?insecure=%s&sni=%s%s#%s\n' \
             "$(url_encode "$pw")" "$server" "$port" "$insecure" "$sni" \
-            "$(psm_pin_q "$(jq -cn --argjson i "$insecure" --arg c "$hy2_crt" '{insecure: $i, cert_path: $c}')" pinSHA256)"
+            "$(psm_pin_q "$(jq -cn --argjson i "$insecure" --arg c "$hy2_crt" '{insecure: $i, cert_path: $c}')" pinSHA256)" \
+            "$(psm_link_label Hysteria2)"
     fi
 
     # 独立 ss-rust
@@ -104,9 +105,9 @@ _sub_standalone_uris() {
         method=$(jq -r '.method // empty'    "$ss_cfg" 2>/dev/null)
         pw=$(jq -r '.password // empty'      "$ss_cfg" 2>/dev/null)
         if [[ -n "$port" && -n "$method" && -n "$pw" ]]; then
-            printf 'ss://%s@%s:%s#PSM-ss-rust\n' \
+            printf 'ss://%s@%s:%s#%s\n' \
                 "$(printf '%s:%s' "$method" "$pw" | openssl base64 -A | tr '+/' '-_' | tr -d '=')" \
-                "$server" "$port"
+                "$server" "$port" "$(psm_link_label ss-rust)"
         fi
     fi
 
@@ -118,8 +119,8 @@ _sub_standalone_uris() {
         psk=$(grep -E '^psk'     "$snell_cfg" 2>/dev/null | awk -F'= ' '{print $2}' | tr -d '[:space:]')
         ver=$(grep -E '^version' "$snell_cfg" 2>/dev/null | awk -F'= ' '{print $2}' | tr -d '[:space:]')
         [[ -n "$port" && -n "$psk" ]] && \
-            printf '# Surge: PSM-Snell = snell, %s, %s, psk=%s, version=%s\n' \
-                "$server" "$port" "$psk" "${ver:-4}"
+            printf '# Surge: %s = snell, %s, %s, psk=%s, version=%s\n' \
+                "$(psm_node_label Snell)" "$server" "$port" "$psk" "${ver:-4}"
     fi
 }
 
@@ -153,7 +154,7 @@ _sub_build_singbox_client() {
         [[ -n "$ech" ]] && ob=$(printf '%s' "$ob" | jq -c --arg pem "$(psm_ech_config_pem "$ech")" \
             'if has("tls") then .tls.ech = { enabled: true, config: ($pem | split("\n") | map(select(length > 0))) } else . end')
         obs=$(printf '%s' "$obs"   | jq -c --argjson o "$ob" '. += [$o]')
-        tags=$(printf '%s' "$tags" | jq -c --arg t "PSM-$tag" '. += [$t]')
+        tags=$(printf '%s' "$tags" | jq -c --arg t "$(psm_node_label "$tag" "$node")" '. += [$t]')
     done < <(printf '%s' "$all" | jq -c '.[]')
 
     jq -n --argjson obs "$obs" --argjson tags "$tags" '{
@@ -207,7 +208,7 @@ _sub_sb_outbound_plain() {
     [[ "$proto" == vless && "$(printf '%s' "$n" | jq -r '.transport // "tcp"')" == xhttp ]] && return 0
     case "$proto" in
         reality)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg u "$(printf '%s' "$n" | jq -r '.uuid')" \
                   --arg f "$(printf '%s' "$n" | jq -r '.flow // ""')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.server_name')" \
@@ -218,7 +219,7 @@ _sub_sb_outbound_plain() {
                         reality:{ enabled:true, public_key:$pbk, short_id:$sid } } }
                 + (if $f == "" then {} else {flow:$f} end)' ;;
         vless)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg u "$(printf '%s' "$n" | jq -r '.uuid')" \
                   --arg f "$(printf '%s' "$n" | jq -r '.flow // ""')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.sni // .domain')" \
@@ -233,7 +234,7 @@ _sub_sb_outbound_plain() {
                    elif $tr == "quic" then {transport:{type:"quic"}}
                    else {transport:{type:$tr, path:$path}} end)' ;;
         trojan)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg pw "$(printf '%s' "$n" | jq -r '.password')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.sni // .domain')" \
                   --argjson ins "$(printf '%s' "$n" | jq '(.insecure // 0) | tostring | test("^(1|true)$")')" '
@@ -244,7 +245,7 @@ _sub_sb_outbound_plain() {
             # Xray v26.11.9 answers with nothing (as it does "none"); with
             # aes-128-gcm or chacha20-poly1305 the same node carries traffic.
             # ChaCha20 is the one that is fast without AES hardware too.
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg u "$(printf '%s' "$n" | jq -r '.uuid')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.sni // .domain')" \
                   --arg path "$(printf '%s' "$n" | jq -r '.path // "/"')" \
@@ -253,12 +254,12 @@ _sub_sb_outbound_plain() {
                   tls:{ enabled:true, server_name:$sn, insecure:$ins },
                   transport:{ type:"ws", path:$path } }' ;;
         ss2022)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg m "$(printf '%s' "$n" | jq -r '.method')" \
                   --arg pw "$(printf '%s' "$n" | jq -r '.password')" '
                 { type:"shadowsocks", tag:$t, server:$s, server_port:$p, method:$m, password:$pw }' ;;
         hysteria2)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg pw "$(printf '%s' "$n" | jq -r '.password')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.sni')" \
                   --argjson ins "$(printf '%s' "$n" | jq -r '.insecure | if . == true then 1 elif . == false then 0 else . end')" \
@@ -271,14 +272,14 @@ _sub_sb_outbound_plain() {
                 # the obfuscation the server expects (without it such a node never connected)
                 + (if $obfs != "" then { obfs: { type: $otype, password: $obfs } } else {} end)' ;;
         anytls)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" \
                   --arg pw "$(printf '%s' "$n" | jq -r '.password')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.sni')" \
                   --argjson ins "$(printf '%s' "$n" | jq -r '.insecure | if . == true then 1 elif . == false then 0 else . end')" '
                 { type:"anytls", tag:$t, server:$s, server_port:$p, password:$pw,
                   tls:{ enabled:true, server_name:$sn, insecure:($ins == 1) } }' ;;
         tuic)
-            jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" --argjson n "$n" '
+            jq -n --arg t "$(psm_node_label "$tag" "$n")" --arg s "$server" --argjson p "$port" --argjson n "$n" '
                 { type:"tuic", tag:$t, server:$s, server_port:$p, uuid:$n.uuid, password:$n.password,
                   congestion_control:($n.congestion_control // "bbr"),
                   tls:{ enabled:true, server_name:$n.sni, alpn:["h3"],
@@ -308,7 +309,7 @@ _sub_mh_proxy() {
     [[ "$proto" == xhttp && "$(printf '%s' "$n" | jq -r '.mode // ""')" == mkcp ]] && return 0
     # mihomo's VLESS has no QUIC transport
     [[ "$proto" == vless && "$(printf '%s' "$n" | jq -r '.transport // "tcp"')" == quic ]] && return 0
-    jq -cn --arg name "PSM-$tag" --arg core "$core" --arg proto "$proto" --arg s "$server" \
+    jq -cn --arg name "$(psm_node_label "$tag" "$n")" --arg core "$core" --arg proto "$proto" --arg s "$server" \
         --argjson p "$port" --argjson n "$n" '
       ((($n.insecure // 0) | tostring | test("^(1|true)$"))) as $ins
       | ($n.sni // $n.domain // "") as $sni
@@ -409,12 +410,13 @@ _sub_build_mihomo_client() {
     # 这类节点从 provider 里排除，改为显式写成 ws + v2ray-http-upgrade。
     local hu_json hu_filter="" hu_proxies="" hu_names=""
     source "$LIB_DIR/node_cli.sh"
-    hu_json=$(_node_cli_collect "" "" 2>/dev/null | jq -c --arg s "$server" --argjson u "${_SUB_USER:-null}" '[.[]
+    hu_json=$(_node_cli_collect "" "" 2>/dev/null | jq -c --arg s "$server" --argjson u "${_SUB_USER:-null}" \
+            --arg flag "$(psm_server_flag)" "$PSM_LABEL_JQ"'[.[]
         | .node.tag as $t | select($u == null or (($u.nodes | index("*")) != null) or (($u.nodes | index($t)) != null))
         | select((.core == "xray" and .protocol == "xhttp" and .node.mode == "httpupgrade")
               or (.core == "sing-box" and .protocol == "vless" and .node.transport == "httpupgrade"))
         | .node as $n
-        | { name: ("PSM-" + $n.tag), server: $s, port: ($n.public_port // $n.port), uuid: (if $u == null then $n.uuid else $u.uuid end),
+        | { name: ($n | psm_label($flag)), server: $s, port: ($n.public_port // $n.port), uuid: (if $u == null then $n.uuid else $u.uuid end),
             host: (if (.core == "xray") then $n.domain else $n.sni end), path: ($n.path // "/"),
             insecure: (($n.insecure // 0) | tostring | test("^(1|true)$")), cert_path: ($n.cert_path // "") }]' 2>/dev/null) || hu_json='[]'
     # self-signed: pin the certificate as well (psm_node_pins)
@@ -427,6 +429,7 @@ _sub_build_mihomo_client() {
     hu_json="$hu_pinned"
     if [[ "$(jq 'length' <<<"${hu_json:-[]}")" != "0" ]]; then
         hu_filter=$(jq -r '[.[].name | gsub("(?<c>[.^$*+?()\\[\\]{}|\\\\])"; "\\\(.c)")] | "^(" + join("|") + ")$"' <<<"$hu_json")
+        hu_filter=${hu_filter//\'/\'\'}   # it goes in a single-quoted YAML string
         hu_proxies=$(jq -r '.[] | "  - {name: \(.name|@json), type: vless, server: \(.server|@json), port: \(.port), uuid: \(.uuid|@json), tls: true, servername: \(.host|@json), skip-cert-verify: \(.insecure), \(if (._pin.sha256 // "") != "" and .insecure then "fingerprint: \(._pin.sha256|@json), " else "" end)network: ws, ws-opts: {path: \(.path|@json), headers: {Host: \(.host|@json)}, v2ray-http-upgrade: true}}"' <<<"$hu_json")
         hu_names=$(jq -r '.[] | "      - \(.name|@json)"' <<<"$hu_json")
     fi

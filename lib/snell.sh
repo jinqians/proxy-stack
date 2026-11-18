@@ -242,7 +242,7 @@ snell_show_config() {
     printf "  %-12s %s\n" "$(t snell.lbl_version)" "$version"
 
     echo -e "\n${BOLD}$(t snell.surge_format)${NC}"
-    echo "  PSM-Snell = snell, ${ip}, ${port}, psk = ${psk}, version = ${version}, reuse = true, tfo = true"
+    echo "  $(psm_node_label Snell) = snell, ${ip}, ${port}, psk = ${psk}, version = ${version}, reuse = true, tfo = true"
 }
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────

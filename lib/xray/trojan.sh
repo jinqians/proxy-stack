@@ -340,7 +340,7 @@ trojan_show_share() {
     # 覆盖掉 url_encode 的，jq 缺失时的失败会被静默吞掉（SC2155）。
     local enc_pass uri
     enc_pass=$(url_encode "$pass") || return 1
-    uri="trojan://${enc_pass}@${host}:${public_port}?security=tls&sni=${domain}&type=tcp&alpn=h2%2Chttp%2F1.1#PSM-${tag}"
+    uri="trojan://${enc_pass}@${host}:${public_port}?security=tls&sni=${domain}&type=tcp&alpn=h2%2Chttp%2F1.1#$(psm_link_label "$tag" "$node")"
     echo -e "\n${BOLD}${GREEN}$(t xray.trojan.share_title)${NC}"
     echo "  $uri"
     echo ""

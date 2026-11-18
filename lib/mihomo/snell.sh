@@ -131,7 +131,7 @@ _mh_snell_share() {
 
     local spw;  spw=$(echo "$node"  | jq -r '.stls_password // ""')
     local ssni; ssni=$(echo "$node" | jq -r '.stls_sni // ""')
-    local surge="PSM-${tag} = snell, ${ip}, ${port}, psk=${psk}, version=${ver}"
+    local surge; surge="$(psm_node_label "$tag" "$node") = snell, ${ip}, ${port}, psk=${psk}, version=${ver}"
     if [[ -n "$spw" ]]; then
         surge="${surge}, shadow-tls-password=${spw}, shadow-tls-sni=${ssni}, shadow-tls-version=3"
     elif [[ -n "$om" ]]; then
@@ -142,7 +142,7 @@ _mh_snell_share() {
     echo ""
     echo -e "${BOLD}$(t mh.snell.clash_label):${NC}"
     echo "proxies:"
-    echo "  - name: PSM-${tag}"
+    echo "  - name: $(psm_yaml_str "$(psm_node_label "$tag" "$node")")"
     echo "    type: snell"
     echo "    server: ${ip}"
     echo "    port: ${port}"

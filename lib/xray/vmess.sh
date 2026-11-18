@@ -329,7 +329,7 @@ _vmess_build_uri() {
     local tag="$1" host="$2" port="$3" uuid="$4" domain="$5" path="$6"
     local payload
     payload=$(jq -nc \
-        --arg ps "PSM-$tag" --arg add "$host" --arg port "$port" \
+        --arg ps "$(psm_node_label "$tag" "${node:-}")" --arg add "$host" --arg port "$port" \
         --arg id "$uuid" --arg host_hdr "$domain" --arg path "$path" \
         '{v:"2", ps:$ps, add:$add, port:$port, id:$id, aid:"0", scy:"auto",
           net:"ws", type:"none", host:$host_hdr, path:$path, tls:"tls", sni:$host_hdr}')

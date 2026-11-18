@@ -147,7 +147,7 @@ _sb_hy2_uri() {
     local uri
     uri="hysteria2://${pass}@${ip}:${port}${hop:+,$hop}?insecure=${insec}&sni=${sni}$(psm_pin_q "$node" pinSHA256)"
     [[ -n "$obfs" ]] && uri="${uri}&obfs=${otype}&obfs-password=${obfs}"
-    uri="${uri}#PSM-${tag}"
+    uri="${uri}#$(psm_link_label "$tag" "$node")"
 
     echo -e "\n${BOLD}${GREEN}── sing-box Hysteria2: ${tag} ──${NC}"
     [[ "$insec" == "1" ]] && echo -e "  ${YELLOW}$(t sb.hy2.self_cert_hint)${NC}"
@@ -173,7 +173,7 @@ _sb_hy2_uri() {
     [[ -n "$pin_yaml" ]] && pin_yaml=$'\n'"$pin_yaml"
     cat <<EOF
 proxies:
-  - name: PSM-${tag}
+  - name: $(psm_yaml_str "$(psm_node_label "$tag" "$node")")
     type: hysteria2
     server: ${ip}
     port: ${port}

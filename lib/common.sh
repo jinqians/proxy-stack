@@ -743,6 +743,53 @@ rand_port() {
 # 用的是同一实现，两处行为保持一致。
 url_encode() { jq -nr --arg v "$1" '$v | @uri'; }
 
+# ── A node's name in clients ──────────────────────────────────────────────────
+# What a client shows for a node (the #name of its link, its Clash / sing-box
+# name): its display name when it has one (psm node … --display-name), else
+# the flag of the server's country and its tag, "🇭🇰 reality-1", or the tag
+# alone when the country is not known. It was "PSM-<tag>" before 2026-11 (#10).
+psm_node_label() {   # <tag> [node json]
+    local dn=""
+    [[ -n "${2:-}" ]] && dn=$(printf '%s' "$2" | jq -r '.display_name // ""' 2>/dev/null)
+    [[ -n "$dn" ]] && { printf '%s' "$dn"; return 0; }
+    local flag; flag=$(psm_country_flag "$(psm_server_country)")
+    printf '%s' "${flag:+$flag }$1"
+}
+psm_link_label() { url_encode "$(psm_node_label "$@")"; }   # for a link's #fragment
+psm_yaml_str() { jq -nc --arg v "$1" '$v'; }                # a YAML (JSON) string
+# the same rule inside jq, on a node object: jq --arg flag "$(psm_server_flag)" "$PSM_LABEL_JQ …"
+PSM_LABEL_JQ='def psm_label($flag): if (.display_name // "") != "" then .display_name
+    else (if $flag == "" then "" else $flag + " " end) + .tag end;'
+psm_server_flag() { psm_country_flag "$(psm_server_country)"; }
+
+# <two-letter code> → its flag (two regional indicator symbols), written as
+# UTF-8 bytes so that no locale is needed; nothing for anything else.
+psm_country_flag() {
+    local cc; cc=$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')
+    [[ "$cc" =~ ^[A-Z]{2}$ && "$cc" != XX ]] || return 0
+    local i o
+    for i in 0 1; do
+        printf -v o '%d' "'${cc:i:1}"
+        # shellcheck disable=SC2059   # the escape is built, then printed
+        printf "\\xf0\\x9f\\x87\\x$(printf '%x' $((0xa6 + o - 65)))"
+    done
+}
+
+# The server's country as Cloudflare places its address (the panel names its
+# nodes by the same), looked up once and kept in psm.state: a week, a day when
+# the lookup found nothing. PSM_SERVER_COUNTRY overrides it ("" for none).
+psm_server_country() {
+    if [[ -n "${PSM_SERVER_COUNTRY+x}" ]]; then printf '%s' "$PSM_SERVER_COUNTRY"; return 0; fi
+    local now at cc keep=86400
+    now=$(date +%s); at=$(state_get server_country_at); cc=$(state_get server_country)
+    [[ -n "$cc" ]] && keep=604800
+    if [[ "$at" =~ ^[0-9]+$ ]] && (( now - at < keep )); then printf '%s' "$cc"; return 0; fi
+    cc=$(curl -s --max-time 5 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | sed -n 's/^loc=\([A-Z][A-Z]\)$/\1/p')
+    [[ "$cc" == XX ]] && cc=""
+    { state_set server_country "$cc" && state_set server_country_at "$now"; } >/dev/null 2>&1 || true
+    printf '%s' "$cc"
+}
+
 rand_str() {
     # rand_str <length>
     local len="${1:-16}"

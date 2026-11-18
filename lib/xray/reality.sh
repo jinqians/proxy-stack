@@ -848,7 +848,7 @@ reality_show_uri() {
     command -v qrencode &>/dev/null || ensure_pkg_deps qrencode 2>/dev/null || true
 
     if [[ -n "$ipv4" ]]; then
-        local uri_v4="vless://${uuid}@${ipv4}:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&support-x25519mlkem768=true&type=tcp#PSM-${tag}-v4"
+        local uri_v4; uri_v4="vless://${uuid}@${ipv4}:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&support-x25519mlkem768=true&type=tcp#$(psm_link_label "$tag" "$node")-v4"
         echo -e "${BOLD}${GREEN}$(t xray.reality.ipv4_link)${NC}"
         echo "  $uri_v4"
         echo ""
@@ -856,7 +856,7 @@ reality_show_uri() {
     fi
 
     if [[ -n "$ipv6" ]]; then
-        local uri_v6="vless://${uuid}@[${ipv6}]:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&support-x25519mlkem768=true&type=tcp#PSM-${tag}-v6"
+        local uri_v6; uri_v6="vless://${uuid}@[${ipv6}]:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&support-x25519mlkem768=true&type=tcp#$(psm_link_label "$tag" "$node")-v6"
         echo -e "${BOLD}${GREEN}$(t xray.reality.ipv6_link)${NC}"
         echo "  $uri_v6"
         echo ""
@@ -882,7 +882,7 @@ reality_export_clash() {
     echo -e "\n${BOLD}${GREEN}$(t xray.reality.clash_title)${NC}"
     cat <<EOF
 proxies:
-  - name: PSM-${tag}
+  - name: $(psm_yaml_str "$(psm_node_label "$tag" "$node")")
     type: vless
     server: ${ip}
     port: ${port}
@@ -920,10 +920,11 @@ reality_export_singbox() {
         --arg tag "$tag" --arg ip "$ip" --arg uuid "$uuid" \
         --arg flow "$flow" --arg pub_key "$pub_key" \
         --arg short_id "$short_id" --arg sn "$server_name" \
+        --arg label "$(psm_node_label "$tag" "$node")" \
         --argjson port "$port" \
         '{
           "type": "vless",
-          "tag": ("PSM-" + $tag),
+          "tag": $label,
           "server": $ip,
           "server_port": $port,
           "uuid": $uuid,

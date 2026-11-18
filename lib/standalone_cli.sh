@@ -225,7 +225,7 @@ _sa_export() {   # <proto> <server> <name> <format>
     [[ "$server" == *:* ]] && host="[$server]"
     port=$(jq -r '.port' <<<"$s")
     if [[ "$proto" == snell ]]; then
-        [[ -n "$name" ]] || name="PSM-snell"
+        [[ -n "$name" ]] || name="$(psm_node_label Snell)"
         case "${format:-surge}" in
             surge) printf '%s = snell, %s, %s, psk=%s, version=%s\n' "$name" "$server" "$port" \
                        "$(jq -r '.psk' <<<"$s")" "$(jq -r '.version' <<<"$s")" ;;
@@ -233,7 +233,7 @@ _sa_export() {   # <proto> <server> <name> <format>
         esac
         return 0
     fi
-    [[ -n "$name" ]] || name="PSM-ss-rust"
+    [[ -n "$name" ]] || name="$(psm_node_label ss-rust)"
     local method password
     method=$(jq -r '.method' <<<"$s"); password=$(jq -r '.password' <<<"$s")
     case "${format:-uri}" in

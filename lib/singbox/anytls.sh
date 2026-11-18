@@ -118,7 +118,7 @@ _sb_anytls_uri() {
 
     local ip; ip=$(get_ipv4)
     local uri
-    uri="anytls://${pass}@${ip}:${port}?insecure=${insec}&sni=${sni}$(psm_pin_q "$node" hpkp)#PSM-${tag}"
+    uri="anytls://${pass}@${ip}:${port}?insecure=${insec}&sni=${sni}$(psm_pin_q "$node" hpkp)#$(psm_link_label "$tag" "$node")"
 
     echo -e "\n${BOLD}${GREEN}── sing-box AnyTLS: ${tag} ──${NC}"
     [[ "$insec" == "1" ]] && echo -e "  ${YELLOW}$(t sb.anytls.self_cert_hint)${NC}"

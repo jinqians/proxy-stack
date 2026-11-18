@@ -108,7 +108,7 @@ _sb_tuic_link() {   # <node-json> <server>
         "$server" "$(printf '%s' "$n" | jq -r '.port')" "$(printf '%s' "$n" | jq -r '.sni')" \
         "$(printf '%s' "$n" | jq -r '.congestion_control // "bbr"')"
     [[ "$insec" == "1" ]] && printf '&insecure=1&allow_insecure=1'
-    printf '#%s\n' "$(url_encode "PSM-$(printf '%s' "$n" | jq -r '.tag')")"
+    printf '#%s\n' "$(psm_link_label "$(printf '%s' "$n" | jq -r '.tag')" "$n")"
 }
 
 _sb_tuic_uri() {
@@ -147,7 +147,7 @@ _sb_tuic_uri() {
     [[ -n "$pin_yaml" ]] && pin_yaml=$'\n'"$pin_yaml"
     cat <<EOF
 proxies:
-  - name: PSM-${tag}
+  - name: $(psm_yaml_str "$(psm_node_label "$tag" "$node")")
     type: tuic
     server: ${ip}
     port: ${port}

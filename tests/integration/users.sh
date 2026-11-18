@@ -10,6 +10,8 @@ PASS=0; FAIL=0; FAILS=(); ADDED=()
 ok()  { PASS=$((PASS+1)); echo "  ok   $*"; }
 bad() { FAIL=$((FAIL+1)); FAILS+=("$*"); echo "  FAIL $*"; }
 sec() { echo; echo "=== $*"; }
+# a node's name in clients: the flag of this server's country and its tag (#10)
+label() { bash -c 'source lib/common.sh; psm_node_label "$1"' _ "$1"; }
 chk() { local d="$1"; shift; if "$@" >/tmp/chk.out 2>&1; then ok "$d"; else bad "$d"; tail -5 /tmp/chk.out | sed 's/^/       /'; fi; }
 psm() { bash manager.sh "$@"; }
 add() {
@@ -104,7 +106,7 @@ probe() {
 }
 all_204()  { local r; r=$(probe "$1"); [[ -n "$r" ]] && ! grep -qv ' 204$' <<<"$r" || { echo "$r" | grep -v ' 204$'; return 1; }; echo "$(grep -c . <<<"$r") of $(grep -c . <<<"$r")"; }
 none_204() { local r; r=$(probe "$1" once); [[ -n "$r" ]] && ! grep -q ' 204$' <<<"$r" || { echo "$r" | grep ' 204$'; return 1; }; }
-pick() { grep -E "#PSM-($2)\$" "$1"; }   # pick <links> 'tag|tag': non-VMess links of those nodes
+pick() { grep -E "(#|%20)($2)\$" "$1"; }   # pick <links> 'tag|tag': non-VMess links of those nodes
 
 sec "accounts"
 chk "user add alice (every node)"               psm user add alice --json

@@ -11,6 +11,8 @@ PASS=0; FAIL=0; FAILS=(); ADDED=()
 ok()  { PASS=$((PASS+1)); echo "  ok   $*"; }
 bad() { FAIL=$((FAIL+1)); FAILS+=("$*"); echo "  FAIL $*"; }
 sec() { echo; echo "=== $*"; }
+# a node's name in clients: the flag of this server's country and its tag (#10)
+label() { bash -c 'source lib/common.sh; psm_node_label "$1"' _ "$1"; }
 chk() { local d="$1"; shift; if "$@" >/tmp/chk.out 2>&1; then ok "$d"; else bad "$d"; tail -5 /tmp/chk.out | sed 's/^/       /'; fi; }
 psm() { bash manager.sh "$@"; }
 add() {
@@ -119,7 +121,7 @@ for _ in $(seq 1 60); do
 done
 [[ -n "$names" ]] && ok "mihomo loaded $(wc -l <<<"$names") nodes from the export" || { bad "mihomo loaded nothing"; tail -5 "$M/client.log" | sed 's/^/       /'; }
 for tag in "${ADDED[@]}"; do
-    name="PSM-$tag"
+    name=$(label "$tag")
     if ! grep -qxF "$name" <<<"$names"; then bad "$tag: the client could not import its share link"; continue; fi
     curl -s -o /dev/null -X PUT 127.0.0.1:19090/proxies/PSM -d "{\"name\":\"$name\"}"
     for _ in 1 2; do   # one retry: a single slow request must not fail a node
@@ -266,8 +268,8 @@ ech=$(psm node export sing-box vless e-sve --format ech 2>/dev/null)
 chk "live sing-box inbound has tls.ech" bash -c "jq -e '.inbounds[] | select(.tag == \"e-sve\") | .tls.ech.enabled' /etc/sing-box/config.json"
 E=/root/ech-sb; mkdir -p $E
 bash -c 'source lib/common.sh; source lib/subscribe.sh; _sub_build_singbox_client 127.0.0.1' > $E/export.json 2>/dev/null
-jq '.inbounds[0].listen_port = 17896 | (.outbounds[] | select(.type == "selector")).default = "PSM-e-sve"' $E/export.json > $E/client.json
-chk "the sing-box client export carries tls.ech for e-sve" jq -e '.outbounds[] | select(.tag == "PSM-e-sve") | .tls.ech.config | length > 0' $E/client.json
+jq --arg n "$(label e-sve)" '.inbounds[0].listen_port = 17896 | (.outbounds[] | select(.type == "selector")).default = $n' $E/export.json > $E/client.json
+chk "the sing-box client export carries tls.ech for e-sve" jq -e --arg n "$(label e-sve)" '.outbounds[] | select(.tag == $n) | .tls.ech.config | length > 0' $E/client.json
 SSL_CERT_FILE="$M/ca-bundle.pem" /usr/local/bin/sing-box run -c $E/client.json > $E/log 2>&1 & EP=$!; sleep 3
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -x socks5h://127.0.0.1:17896 https://www.gstatic.com/generate_204); kill $EP 2>/dev/null
 [[ "$code" == 204 ]] && ok "PSM's sing-box client export over ECH: HTTP 204" || { bad "sing-box client export over ECH: HTTP $code"; tail -3 $E/log | sed 's/^/       /'; }
@@ -306,7 +308,7 @@ sec "Hysteria2 port hopping (client in its own network namespace)"
 add sing-box hysteria2 e-shop --port 32020 "${C[@]}" --hop-ports 42000-42100
 chk "REDIRECT 42000-42100 -> 32020 (psm-hop:e-shop)" bash -c "iptables -t nat -S PREROUTING | grep 'psm-hop:e-shop' | grep -q 'to-ports 32020'"
 chk "boot hook installed" bash -c "test -f /etc/systemd/system/psm-hop.service || test -x /etc/local.d/psm-hop.start"
-hl=$(bash -c 'source lib/common.sh; source lib/subscribe.sh; _sub_collect_uris 10.99.0.1' 2>/dev/null | grep -m1 'PSM-e-shop')
+hl=$(bash -c 'source lib/common.sh; source lib/subscribe.sh; _sub_collect_uris 10.99.0.1' 2>/dev/null | grep -m1 -E '(#|%20)e-shop$')
 [[ "$hl" == *":32020,42000-42100?"* ]] && ok "share link carries the hop range" || bad "share link without the hop range: $hl"
 ip netns add cns; ip link add vh type veth peer name vc; ip link set vc netns cns
 ip addr add 10.99.0.1/24 dev vh; ip link set vh up

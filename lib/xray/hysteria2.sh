@@ -141,7 +141,7 @@ _xhy2_share_uri() {
     q="insecure=${insec}&sni=${sni}$(psm_pin_q "$n" pinSHA256)"
     [[ -n "$obfs" ]] && q="${q}&obfs=${otype}&obfs-password=$(url_encode "$obfs")"
     local hop; hop=$(echo "$n" | jq -r '.hop_ports // ""')
-    printf 'hysteria2://%s@%s:%s?%s#PSM-%s\n' "$(url_encode "$pass")" "$host" "${port}${hop:+,$hop}" "$q" "$tag"
+    printf 'hysteria2://%s@%s:%s?%s#%s\n' "$(url_encode "$pass")" "$host" "${port}${hop:+,$hop}" "$q" "$(psm_link_label "$tag" "$n")"
 }
 
 xhy2_show_share() {

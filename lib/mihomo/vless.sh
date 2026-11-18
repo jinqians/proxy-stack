@@ -192,7 +192,7 @@ _mh_vless_uri() {
     esac
     [[ "$insec" == "1" ]] && q="${q}&allowInsecure=1$(psm_pin_q "$node" pcs)"
 
-    local uri="vless://${uuid}@${host}:${port}?${q}#PSM-${tag}"
+    local uri; uri="vless://${uuid}@${host}:${port}?${q}#$(psm_link_label "$tag" "$node")"
     echo -e "\n${BOLD}${GREEN}── mihomo VLESS: ${tag} ──${NC}"
     [[ "$insec" == "1" ]] && echo -e "  ${YELLOW}$(t mh.vless.self_cert_hint)${NC}"
     printf "  %-12s %s\n" "$(t mh.vless.label_server):" "$host"

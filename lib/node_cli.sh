@@ -88,6 +88,11 @@ Cloudflare WARP or the free residential line (VPNGate); the rest goes direct.
   --exit-sites all|ai|streaming|GEOSITE,...   (default all)
   --exit-country CC                           the residential line's country the first time (default JP)
 
+The node's name in clients (its links, Clash and sing-box exports) is the
+flag of the server's country and its tag ("🇭🇰 reality-1"), or:
+  --display-name NAME                         up to 64 characters, emoji welcome; no = , or
+                                              control characters; "" goes back to the flag and tag
+
 Common field options are accepted directly, for example --uuid, --password,
 --method, --listen, --listen-addr, --domain, --sni, --cert-path and --key-path.
 Use --set for future/protocol-specific fields. Values for numeric, boolean and
@@ -367,13 +372,14 @@ _node_cli_field_name() {
         disable-pmtud) printf 'disable_pmtud' ;;
         peer-count) printf 'peer_count' ;;
         exit-sites) printf 'exit_sites' ;; exit-country) printf 'exit_country' ;;
+        display-name) printf 'display_name' ;;
         *) printf '%s' "$1" ;;
     esac
 }
 
 _node_cli_is_field_opt() {
     case "$1" in
-        tag|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-type|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport|transport|vless-enc|shadow-tls-sni|shadow-tls-password|congestion-control|hop-ports|bbr-profile|disable-pmtud|peer-count|ech|exit|exit-sites|exit-country) return 0 ;;
+        tag|display-name|port|uuid|password|username|method|listen|listen-addr|public-port|domain|sni|flow|dest|path|mode|version|psk|up|down|masquerade|insecure|server-name|server-names-raw|private-key|public-key|short-id|short-ids|cert-path|key-path|fallback-enabled|obfs-pass|obfs-type|obfs-mode|obfs-host|kcp-seed|kcp-header|reality-transport|transport|vless-enc|shadow-tls-sni|shadow-tls-password|congestion-control|hop-ports|bbr-profile|disable-pmtud|peer-count|ech|exit|exit-sites|exit-country) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -703,6 +709,13 @@ _node_cli_validate() {
         _node_cli_err "node requires a non-empty tag and an integer port in 1..65535"
         return 1
     fi
+    # the name in clients: on a Surge / Loon line ("NAME = type, server, …")
+    # an = or , would end it, and a line break or quote would end the YAML
+    if ! printf '%s' "$json" | jq -e '(.display_name // "") as $d | ($d | type) == "string" and ($d | length) <= 64
+        and ($d | test("[=,\\p{Cc}]") | not) and ($d == "" or ($d | test("^\\S(.*\\S)?$")))' >/dev/null; then
+        _node_cli_err "--display-name: up to 64 characters, no = , or control characters, no space at either end"
+        return 1
+    fi
     if ! printf '%s' "$json" | jq -e --arg proto "$proto" --arg core "$core" '
       if $proto == "reality" then
         ([.uuid,.private_key,.public_key,.server_name,.dest,.flow] | all(type == "string" and length > 0)) and
@@ -859,6 +872,24 @@ _node_cli_check_port_conflict() {
       ) | .id) // empty')
     if [[ -n "$conflict" ]]; then
         _node_cli_err "port $port is already used by $conflict"
+        return 1
+    fi
+}
+
+# Two nodes under one name would be one proxy to Clash, and a sing-box config
+# with two outbounds of one tag does not start: a display name is nobody else's
+# name (their display name, or their flag and tag).
+_node_cli_check_name_conflict() {
+    local core="$1" proto="$2" tag="$3" json="$4" dn all conflict
+    dn=$(printf '%s' "$json" | jq -r '.display_name // ""')
+    [[ -n "$dn" ]] || return 0
+    all=$(_node_cli_collect "" "") || return 1
+    conflict=$(printf '%s' "$all" | jq -r --arg core "$core" --arg proto "$proto" --arg tag "$tag" --arg dn "$dn" \
+        --arg flag "$(psm_server_flag)" "$PSM_LABEL_JQ"'
+      first(.[] | select((.core != $core) or (.protocol != $proto) or (.tag != $tag))
+        | select((.node | psm_label($flag)) == $dn or .tag == $dn) | .id) // empty')
+    if [[ -n "$conflict" ]]; then
+        _node_cli_err "--display-name: $conflict is called \"$dn\" in clients already"
         return 1
     fi
 }
@@ -1480,6 +1511,7 @@ _node_cli_cmd_add() {
         fi
     fi
     _node_cli_check_port_conflict "$core" "$proto" "$tag" "$port" || { _node_cli_lock_release; return 1; }
+    _node_cli_check_name_conflict "$core" "$proto" "$tag" "$node" || { _node_cli_lock_release; return 1; }
     if [[ -z "$existing" && "$(printf '%s' "$state" | jq -r '.store_only')" != "true" ]] \
         && _node_cli_port_is_listening "$port" "$(_node_cli_transport "$proto")"; then
         _node_cli_lock_release
@@ -1599,6 +1631,7 @@ _node_cli_cmd_update() {
     fi
     _node_cli_lock_acquire || return 1
     _node_cli_check_port_conflict "$core" "$proto" "$tag" "$port" || { _node_cli_lock_release; return 1; }
+    _node_cli_check_name_conflict "$core" "$proto" "$tag" "$node" || { _node_cli_lock_release; return 1; }
     path=$(_node_cli_store_path "$core" "$proto"); store=$(_node_cli_read_store "$path") || { _node_cli_lock_release; return 1; }
     # Re-check under lock to avoid overwriting a concurrent change.
     if ! printf '%s' "$store" | jq -e --arg tag "$tag" --argjson old "$old_node" 'first(.[] | select(.tag == $tag)) == $old' >/dev/null; then
@@ -1720,13 +1753,13 @@ _node_cli_export_uri() {
             printf 'vless://%s@%s:%s?encryption=%s&flow=%s&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s%s&type=tcp#%s\n' \
                 "$uuid" "$server" "$port" "$(_node_cli_urlencode "$(printf '%s' "$n" | jq -r '.vless_encryption // "none"')")" \
                 "$(_node_cli_urlencode "$flow")" "$(_node_cli_urlencode "$sn")" \
-                "$(_node_cli_urlencode "$pbk")" "$(_node_cli_urlencode "$sid")" "$pq" "$(_node_cli_urlencode "PSM-$tag")"
+                "$(_node_cli_urlencode "$pbk")" "$(_node_cli_urlencode "$sid")" "$pq" "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         vision)
             uuid=$(printf '%s' "$n" | jq -r '.uuid'); flow=$(printf '%s' "$n" | jq -r '.flow'); domain=$(printf '%s' "$n" | jq -r '.domain')
             printf 'vless://%s@%s:%s?encryption=%s&flow=%s&security=tls&sni=%s&type=tcp#%s\n' \
                 "$uuid" "$server" "$port" "$(_node_cli_urlencode "$(printf '%s' "$n" | jq -r '.vless_encryption // "none"')")" \
-                "$(_node_cli_urlencode "$flow")" "$(_node_cli_urlencode "$domain")" "$(_node_cli_urlencode "PSM-$tag")"
+                "$(_node_cli_urlencode "$flow")" "$(_node_cli_urlencode "$domain")" "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         xhttp)
             # 与交互菜单共用同一个链接构造器。此前这里另写了一份，只认 reality-layer /
@@ -1753,7 +1786,7 @@ _node_cli_export_uri() {
                 ws|h2|httpupgrade|xhttp)
                                printf '&path=%s&host=%s' "$(_node_cli_urlencode "$path")" "$(_node_cli_urlencode "$sni")" ;;
             esac
-            printf '#%s\n' "$(_node_cli_urlencode "PSM-$tag")"
+            printf '#%s\n' "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         socks)
             # 仅本机的节点没有可分享的地址（127.0.0.1 换台机器就连不上），
@@ -1767,9 +1800,9 @@ _node_cli_export_uri() {
             if [[ -n "$username" ]]; then
                 printf 'socks://%s@%s:%s#%s\n' \
                     "$(printf '%s:%s' "$username" "$password" | openssl base64 -A)" \
-                    "$server" "$port" "$(_node_cli_urlencode "PSM-$tag")"
+                    "$server" "$port" "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             else
-                printf 'socks://%s:%s#%s\n' "$server" "$port" "$(_node_cli_urlencode "PSM-$tag")"
+                printf 'socks://%s:%s#%s\n' "$server" "$port" "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             fi
             ;;
         vmess)
@@ -1784,7 +1817,7 @@ _node_cli_export_uri() {
             if [[ "$(printf '%s' "$n" | jq -r '.insecure // 0 | tostring')" =~ ^(1|true)$ ]]; then
                 vpin=$(psm_cert_sha256 "$(printf '%s' "$n" | jq -r '.cert_path // ""')") || vpin="-"
             fi
-            jq -nc --arg ps "PSM-$tag" --arg add "$server" --arg port "$port" \
+            jq -nc --arg ps "$(psm_node_label "$tag" "$n")" --arg add "$server" --arg port "$port" \
                 --arg id "$uuid" --arg host "$domain" --arg path "$path" --arg pin "$vpin" \
                 '{v:"2", ps:$ps, add:$add, port:$port, id:$id, aid:"0", scy:"auto",
                   net:"ws", type:"none", host:$host, path:$path, tls:"tls", sni:$host}
@@ -1806,7 +1839,7 @@ _node_cli_export_uri() {
                 "$(_node_cli_urlencode "$domain")"
             [[ "$core" == "xray" ]] && printf '&alpn=%s' "$(_node_cli_urlencode "h2,http/1.1")"
             _node_cli_selfsigned_q "$n" 'allowInsecure=1' pcs
-            printf '#%s\n' "$(_node_cli_urlencode "PSM-$tag")"
+            printf '#%s\n' "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         ss2022)
             # ShadowTLS 节点没有客户端公认的 URI 写法；不带插件的 ss:// 会让客户端
@@ -1816,7 +1849,7 @@ _node_cli_export_uri() {
                 return 2
             fi
             method=$(printf '%s' "$n" | jq -r '.method'); password=$(printf '%s' "$n" | jq -r '.password')
-            printf 'ss://%s@%s:%s#%s\n' "$(_node_cli_ss_userinfo "$method" "$password")" "$server" "$port" "$(_node_cli_urlencode "PSM-$tag")"
+            printf 'ss://%s@%s:%s#%s\n' "$(_node_cli_ss_userinfo "$method" "$password")" "$server" "$port" "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         hysteria2)
             # Xray 节点走模块自己的构造器：自签名证书时它会附上 pinSHA256
@@ -1831,13 +1864,13 @@ _node_cli_export_uri() {
             _node_cli_selfsigned_q "$n" '' pinSHA256
             [[ -n "$obfs" ]] && printf '&obfs=%s&obfs-password=%s' \
                 "$(printf '%s' "$n" | jq -r '.obfs_type // "salamander"')" "$(_node_cli_urlencode "$obfs")"
-            printf '#%s\n' "$(_node_cli_urlencode "PSM-$tag")"
+            printf '#%s\n' "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         anytls)
             password=$(printf '%s' "$n" | jq -r '.password'); sni=$(printf '%s' "$n" | jq -r '.sni'); insecure=$(printf '%s' "$n" | jq -r '.insecure | if . == true then 1 elif . == false then 0 else . end')
             printf 'anytls://%s@%s:%s?insecure=%s&sni=%s' "$(_node_cli_urlencode "$password")" "$server" "$port" "$insecure" "$(_node_cli_urlencode "$sni")"
             _node_cli_selfsigned_q "$n" '' hpkp
-            printf '#%s\n' "$(_node_cli_urlencode "PSM-$tag")"
+            printf '#%s\n' "$(_node_cli_urlencode "$(psm_node_label "$tag" "$n")")"
             ;;
         wireguard)
             # No URI for WireGuard: one wg-quick file per client
@@ -1867,11 +1900,11 @@ _node_cli_export_surge() {
     tag=$(printf '%s' "$n" | jq -r '.tag'); port=$(printf '%s' "$n" | jq -r '.port')
     spw=$(printf '%s' "$n" | jq -r '.stls_password // ""'); ssni=$(printf '%s' "$n" | jq -r '.stls_sni // ""')
     if [[ "$proto" == "ss2022" ]]; then
-        line="PSM-${tag} = ss, ${server}, ${port}, encrypt-method=$(printf '%s' "$n" | jq -r '.method'), password=$(printf '%s' "$n" | jq -r '.password')"
+        line="$(psm_node_label "$tag" "$n") = ss, ${server}, ${port}, encrypt-method=$(printf '%s' "$n" | jq -r '.method'), password=$(printf '%s' "$n" | jq -r '.password')"
     else
         psk=$(printf '%s' "$n" | jq -r '.psk'); version=$(printf '%s' "$n" | jq -r '.version')
         om=$(printf '%s' "$n" | jq -r '.obfs_mode // ""'); oh=$(printf '%s' "$n" | jq -r '.obfs_host // ""')
-        line="PSM-${tag} = snell, ${server}, ${port}, psk=${psk}, version=${version}"
+        line="$(psm_node_label "$tag" "$n") = snell, ${server}, ${port}, psk=${psk}, version=${version}"
         [[ -n "$om" ]] && line="${line}, obfs=${om}, obfs-host=${oh:-bing.com}"
     fi
     [[ -n "$spw" ]] && line="${line}, shadow-tls-password=${spw}, shadow-tls-sni=${ssni}, shadow-tls-version=3"

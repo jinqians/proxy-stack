@@ -114,7 +114,7 @@ _mh_anytls_uri() {
 
     local ip; ip=$(get_ipv4)
     local uri
-    uri="anytls://${pass}@${ip}:${port}?insecure=${insec}&sni=${sni}$(psm_pin_q "$node" hpkp)#PSM-${tag}"
+    uri="anytls://${pass}@${ip}:${port}?insecure=${insec}&sni=${sni}$(psm_pin_q "$node" hpkp)#$(psm_link_label "$tag" "$node")"
 
     echo -e "\n${BOLD}${GREEN}── mihomo AnyTLS: ${tag} ──${NC}"
     [[ "$insec" == "1" ]] && echo -e "  ${YELLOW}$(t mh.anytls.self_cert_hint)${NC}"

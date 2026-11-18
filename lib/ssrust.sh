@@ -138,7 +138,7 @@ ssrust_show_config() {
 
     # SIP002: ss://base64url(method:password)@host:port#name
     local userinfo; userinfo=$(printf '%s:%s' "$method" "$password" | base64 -w 0 | tr '+/' '-_' | tr -d '=')
-    local uri="ss://${userinfo}@${ip}:${port}#PSM-ss-rust"
+    local uri; uri="ss://${userinfo}@${ip}:${port}#$(psm_link_label ss-rust)"
 
     echo -e "\n${BOLD}${GREEN}── $(t ssrust.config_title) ──${NC}"
     printf "  %-12s %s\n" "$(t ssrust.lbl_server)"   "$ip"

@@ -137,7 +137,7 @@ _sb_vmess_uri() {
 
     local payload uri
     payload=$(jq -nc \
-        --arg ps "PSM-$tag" --arg add "$host" --arg port "$port" \
+        --arg ps "$(psm_node_label "$tag" "${node:-}")" --arg add "$host" --arg port "$port" \
         --arg id "$uuid" --arg host_hdr "$sni" --arg path "$path" \
         --arg ins "$insec" --arg pin "$(psm_pin_q "$node" pcs)" \
         '{v:"2", ps:$ps, add:$add, port:$port, id:$id, aid:"0", scy:"auto",
