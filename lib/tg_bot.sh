@@ -16,6 +16,10 @@ TG_BOT_SVC="/etc/systemd/system/psm-tgbot.service"
 TG_API_BASE="https://api.telegram.org/bot"
 TG_USERS_FILE="${CFG_DIR}/tg_users.json"      # tenant uid → port bindings
 BIND_TOKENS_FILE="${CFG_DIR}/bind_tokens.json" # port → bind token
+TG_BOT_CONFLICT="${CFG_DIR}/tg_bot.conflict"   # when this token was last seen polled elsewhere
+TG_BOT_CONFLICT_SAID="${CFG_DIR}/tg_bot.conflict-said"   # when the admins were last told
+TG_BOT_USERNAME=""   # this bot's @name (getMe, at the daemon's start): commands in a group
+TG_SERVER_LABEL=""   # which server answers: hostname and IPv4, at the daemon's start
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
 _tgbot_load_cfg() {
@@ -45,13 +49,53 @@ _tgbot_api() {
         "${TG_API_BASE}${TG_BOT_TOKEN}/${method}" "$@" 2>/dev/null
 }
 
+# Through notify.sh's tg_send: a reply Telegram cannot parse as Markdown (an
+# unpaired _ in a node tag) goes again as plain text instead of nowhere.
 _tgbot_send() {
-    local chat_id="$1" text="$2"
-    _tgbot_api sendMessage \
-        -d "chat_id=${chat_id}" \
-        -d "parse_mode=Markdown" \
-        -d "disable_web_page_preview=true" \
-        --data-urlencode "text=${text}" >/dev/null
+    declare -f tg_send >/dev/null || source "$LIB_DIR/tgbot/notify.sh"
+    tg_send "$1" "$2"
+}
+
+# ── One bot, one server ────────────────────────────────────────────────────────
+# Telegram hands each of a bot's messages to one getUpdates poller, and a second
+# poller with the same token (the same bot on another server) makes it answer
+# 409 to the first. Several servers sharing a bot each answer a random part of
+# the commands — /list showing one server's nodes (#14). A server that sees the
+# 409 says so: in the journal, in the menu, and once a day to the admins.
+_tgbot_conflict() {
+    local now last
+    now=$(date +%s)
+    echo "$now" > "$TG_BOT_CONFLICT"
+    last=$(cat "$TG_BOT_CONFLICT_SAID" 2>/dev/null || echo 0)
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    (( now - last < 86400 )) && return 0
+    echo "$now" > "$TG_BOT_CONFLICT_SAID"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $(t tgbot.conflict.log)" >&2
+    declare -f tg_notify_admins >/dev/null || source "$LIB_DIR/tgbot/notify.sh"
+    tg_notify_admins "$(t tgbot.conflict.notify "${TG_SERVER_LABEL:-$(hostname)}")"
+}
+
+_tgbot_conflict_recent() {   # seen in the last 10 minutes
+    local seen; seen=$(cat "$TG_BOT_CONFLICT" 2>/dev/null || echo 0)
+    [[ "$seen" =~ ^[0-9]+$ ]] && (( $(date +%s) - seen < 600 ))
+}
+
+# The text of a message this bot should act on, on stdout; status 1 for one it
+# should leave alone. In a group (several servers' bots in one, privacy mode
+# off, so every bot gets every message) that is a command, for no bot in
+# particular (/list) or for this one (/list@this_bot): each server answers
+# for itself, and chatter and other bots' commands get no reply.
+_tgbot_own_text() {   # <chat type> <text>
+    local type="$1" text="$2" first rest at
+    first=${text%%[[:space:]]*}; rest=${text#"$first"}
+    if [[ "$first" == /*@* ]]; then
+        at=${first#*@}; first=${first%%@*}
+        [[ -z "$TG_BOT_USERNAME" || "${at,,}" == "${TG_BOT_USERNAME,,}" ]] || return 1
+    fi
+    if [[ "$type" == group || "$type" == supergroup ]]; then
+        [[ "$first" == /* ]] || return 1
+    fi
+    printf '%s' "$first$rest"
 }
 
 # Send a message with an inline keyboard.
@@ -290,12 +334,16 @@ _tgbot_query_port() {
 
 _tgbot_list_nodes() {
     local state="${CFG_DIR}/traffic/state.json"
-    [[ -f "$state" ]] || { echo "$(t tgbot.list.no_data)"; return; }
+    # which server this is: with several servers' bots in one group, each answers
+    # (in a code span: a _ in a hostname is no Markdown there)
+    local server=""; [[ -n "$TG_SERVER_LABEL" ]] && server="🖥 \`${TG_SERVER_LABEL}\`"$'\n'
+    [[ -f "$state" ]] || { echo "${server}$(t tgbot.list.no_data)"; return; }
 
     local count; count=$(jq 'length' "$state" 2>/dev/null || echo 0)
-    (( count == 0 )) && { echo "$(t tgbot.list.empty)"; return; }
+    (( count == 0 )) && { echo "${server}$(t tgbot.list.empty)"; return; }
 
     printf "$(t tgbot.list.title)"
+    printf '%s' "$server"
     printf '━━━━━━━━━━━━━━━━━━━━\n'
 
     while IFS= read -r tag; do
@@ -668,17 +716,26 @@ tgbot_daemon() {
     local offset=0
     [[ -f "$TG_BOT_OFFSET" ]] && offset=$(cat "$TG_BOT_OFFSET" 2>/dev/null || echo 0)
 
-    echo "$(date '+%Y-%m-%d %H:%M:%S') PSM Telegram Bot started (offset=${offset})"
+    TG_BOT_USERNAME=$(_tgbot_api getMe | jq -r '.result.username // empty' 2>/dev/null) || TG_BOT_USERNAME=""
+    TG_SERVER_LABEL="$(hostname)"
+    local ip; ip=$(get_ipv4 2>/dev/null) || ip=""
+    [[ "$ip" =~ ^[0-9.]+$ ]] && TG_SERVER_LABEL="$TG_SERVER_LABEL · $ip"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') PSM Telegram Bot started (offset=${offset}, @${TG_BOT_USERNAME:-?}, ${TG_SERVER_LABEL})"
 
     while true; do
         local resp
-        resp=$(_tgbot_api getUpdates \
+        # not curl -f: Telegram's refusal is in the body (409 = polled elsewhere too)
+        resp=$(curl -sS --max-time 35 "${TG_API_BASE}${TG_BOT_TOKEN}/getUpdates" \
             -d "offset=${offset}" \
             -d "timeout=30" \
-            -d 'allowed_updates=["message","callback_query"]') || { sleep 5; continue; }
+            -d 'allowed_updates=["message","callback_query"]' 2>/dev/null) || { sleep 5; continue; }
 
         local ok; ok=$(echo "$resp" | jq -r '.ok' 2>/dev/null)
-        [[ "$ok" != "true" ]] && { sleep 5; continue; }
+        if [[ "$ok" != "true" ]]; then
+            [[ "$(echo "$resp" | jq -r '.error_code // empty' 2>/dev/null)" == 409 ]] && _tgbot_conflict
+            sleep 5; continue
+        fi
 
         local n; n=$(echo "$resp" | jq '.result | length' 2>/dev/null || echo 0)
 
@@ -702,10 +759,12 @@ tgbot_daemon() {
                     _tgbot_handle_callback "$cb_id" "$cb_chat" "$cb_user" "$cb_data" || true
             else
                 # Regular text message
-                local chat_id user_id text
+                local chat_id user_id text chat_type
                 chat_id=$(echo "$upd" | jq -r '.message.chat.id // empty')
                 user_id=$(echo "$upd" | jq -r '.message.from.id // empty')
                 text=$(echo "$upd" | jq -r '.message.text // empty')
+                chat_type=$(echo "$upd" | jq -r '.message.chat.type // "private"')
+                text=$(_tgbot_own_text "$chat_type" "$text") || text=""
                 [[ -n "$chat_id" && -n "$text" ]] && \
                     _tgbot_handle "$chat_id" "$user_id" "$text" || true
             fi
@@ -765,6 +824,7 @@ tgbot_setup() {
     echo -e "$(t tgbot.setup.step1 "${CYAN}@BotFather${NC}")"
     echo -e "$(t tgbot.setup.step2)"
     echo -e "$(t tgbot.setup.step3)"
+    echo -e "  ${YELLOW}$(t tgbot.setup.one_per_server)${NC}"
     echo ""
 
     local cur_token=""
@@ -905,6 +965,7 @@ tgbot_menu() {
         fi
 
         echo -e "\n${BOLD}${BLUE}$(t tgbot.menu.header)${NC}  ($(t tgbot.menu.service_status "$(echo -e "$svc_status")")${BOLD}${BLUE})${NC}"
+        _tgbot_conflict_recent && echo -e "  ${YELLOW}$(t tgbot.conflict.menu)${NC}"
         show_menu "Telegram Bot" \
             "$(t tgbot.menu.config)" \
             "$(t tgbot.menu.tenants)" \
