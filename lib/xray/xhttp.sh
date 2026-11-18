@@ -681,9 +681,9 @@ _xhttp_share_uri() {
             local sid; sid=$(echo "$node" | jq -r '.short_id')
             local rt; rt=$(echo "$node" | jq -r '.reality_transport // "xhttp"')
             if [[ "$rt" == "grpc" ]]; then
-                query="${query}&serviceName=${encoded_svc}&fp=chrome&pbk=${pub_key}&sid=${sid}"
+                query="${query}&serviceName=${encoded_svc}&fp=chrome&pbk=${pub_key}&sid=${sid}&support-x25519mlkem768=true"
             else
-                query="${query}&path=${encoded_path}&fp=chrome&pbk=${pub_key}&sid=${sid}&mode=auto"
+                query="${query}&path=${encoded_path}&fp=chrome&pbk=${pub_key}&sid=${sid}&support-x25519mlkem768=true&mode=auto"
             fi
             ;;
         xhttp|splithttp)

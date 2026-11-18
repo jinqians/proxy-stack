@@ -1714,10 +1714,13 @@ _node_cli_export_uri() {
         reality)
             uuid=$(printf '%s' "$n" | jq -r '.uuid'); flow=$(printf '%s' "$n" | jq -r '.flow'); sn=$(printf '%s' "$n" | jq -r '.server_name')
             pbk=$(printf '%s' "$n" | jq -r '.public_key'); sid=$(printf '%s' "$n" | jq -r '.short_ids[0]')
-            printf 'vless://%s@%s:%s?encryption=%s&flow=%s&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#%s\n' \
+            # an Xray server (v26.9.8+) wants mihomo to send the ML-KEM key share,
+            # and mihomo's link importer reads this; other clients pass it by
+            local pq=""; [[ "$core" == xray ]] && pq="&support-x25519mlkem768=true"
+            printf 'vless://%s@%s:%s?encryption=%s&flow=%s&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s%s&type=tcp#%s\n' \
                 "$uuid" "$server" "$port" "$(_node_cli_urlencode "$(printf '%s' "$n" | jq -r '.vless_encryption // "none"')")" \
                 "$(_node_cli_urlencode "$flow")" "$(_node_cli_urlencode "$sn")" \
-                "$(_node_cli_urlencode "$pbk")" "$(_node_cli_urlencode "$sid")" "$(_node_cli_urlencode "PSM-$tag")"
+                "$(_node_cli_urlencode "$pbk")" "$(_node_cli_urlencode "$sid")" "$pq" "$(_node_cli_urlencode "PSM-$tag")"
             ;;
         vision)
             uuid=$(printf '%s' "$n" | jq -r '.uuid'); flow=$(printf '%s' "$n" | jq -r '.flow'); domain=$(printf '%s' "$n" | jq -r '.domain')

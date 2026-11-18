@@ -848,7 +848,7 @@ reality_show_uri() {
     command -v qrencode &>/dev/null || ensure_pkg_deps qrencode 2>/dev/null || true
 
     if [[ -n "$ipv4" ]]; then
-        local uri_v4="vless://${uuid}@${ipv4}:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&type=tcp#PSM-${tag}-v4"
+        local uri_v4="vless://${uuid}@${ipv4}:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&support-x25519mlkem768=true&type=tcp#PSM-${tag}-v4"
         echo -e "${BOLD}${GREEN}$(t xray.reality.ipv4_link)${NC}"
         echo "  $uri_v4"
         echo ""
@@ -856,7 +856,7 @@ reality_show_uri() {
     fi
 
     if [[ -n "$ipv6" ]]; then
-        local uri_v6="vless://${uuid}@[${ipv6}]:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&type=tcp#PSM-${tag}-v6"
+        local uri_v6="vless://${uuid}@[${ipv6}]:${public_port}?encryption=${venc}&flow=${flow}&security=reality&sni=${server_name}&fp=chrome&pbk=${pub_key}&sid=${short_id}&support-x25519mlkem768=true&type=tcp#PSM-${tag}-v6"
         echo -e "${BOLD}${GREEN}$(t xray.reality.ipv6_link)${NC}"
         echo "  $uri_v6"
         echo ""
@@ -893,6 +893,7 @@ proxies:
     reality-opts:
       public-key: ${pub_key}
       short-id: ${short_id}
+      support-x25519mlkem768: true
     client-fingerprint: chrome
     servername: ${server_name}
     network: tcp

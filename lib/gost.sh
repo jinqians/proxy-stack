@@ -31,7 +31,9 @@ _gost_err() { printf 'psm relay: %s\n' "$*" >&2; }
 
 gost_version() {   # the installed version (3.3.0), nothing when there is none
     [[ -x "$GOST_BIN" ]] || return 1
-    "$GOST_BIN" -V 2>/dev/null | sed -n 's/^gost v\([0-9][0-9.]*\).*/\1/p' | head -1
+    # "gost v3.3.0 (go1.25 linux/amd64)" up to 3.3.0, "gost 3.3.3 (…)" since:
+    # without the v nothing was read, and every install ended as "older than 3.3.0"
+    "$GOST_BIN" -V 2>/dev/null | sed -n 's/^gost v\{0,1\}\([0-9][0-9.]*\).*/\1/p' | head -1
 }
 
 _gost_new_enough() {

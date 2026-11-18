@@ -64,7 +64,8 @@ _mh_outb_build() {
                 servername: .servername,
                 network: "tcp",
                 "client-fingerprint": (.fingerprint // "chrome"),
-                "reality-opts": {"public-key": ."public-key", "short-id": ."short-id"}
+                # the far side may be an Xray from v26.9.8 on (see _sub_mh_proxy)
+                "reality-opts": {"public-key": ."public-key", "short-id": ."short-id", "support-x25519mlkem768": true}
             }'
             ;;
         vless-tls)

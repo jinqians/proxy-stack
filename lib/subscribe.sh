@@ -167,6 +167,17 @@ _sub_build_singbox_client() {
     }'
 }
 
+# An Xray REALITY server from v26.9.8 on takes only a hello with an
+# X25519MLKEM768 key share (XTLS/REALITY 8cdf7bf, on purpose), and sing-box
+# takes that share out of its REALITY hello (SagerNet/sing-box#4520): no
+# sing-box client reaches such a node. Its own REALITY nodes, and mihomo's,
+# take sing-box. An Xray that does not answer counts as a current one.
+_sub_xray_refuses_sing_box() {
+    local v; v=$("$XRAY_BIN" version 2>/dev/null | awk 'NR == 1 {print $2}')
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+    [[ "$(printf '26.9.8\n%s\n' "$v" | sort -V | head -1)" == 26.9.8 ]]
+}
+
 # 单个节点 → sing-box 客户端 outbound。不支持的协议返回空串由调用方跳过。
 # A self-signed node pins its certificate's public key
 # (certificate_public_key_sha256, sing-box 1.13+) instead of skipping
@@ -176,6 +187,8 @@ _sub_sb_outbound() {
     # sing-box has no VLESS Encryption: such a node (REALITY, Vision, XHTTP,
     # mihomo VLESS) gets no outbound rather than one that cannot connect
     [[ "$(printf '%s' "$3" | jq -r '(.vless_encryption // "") | if . == "" then "none" else . end')" == none ]] || return 0
+    # nor an Xray REALITY node, once Xray refuses its hello (_sub_xray_refuses_sing_box)
+    [[ "$1/$2" == xray/reality ]] && _sub_xray_refuses_sing_box && return 0
     ob=$(_sub_sb_outbound_plain "$@") || return 1
     [[ -n "$ob" ]] || return 0
     pins=$(psm_node_pins "$3")
@@ -227,12 +240,16 @@ _sub_sb_outbound_plain() {
                 { type:"trojan", tag:$t, server:$s, server_port:$p, password:$pw,
                   tls:{ enabled:true, server_name:$sn, insecure:$ins } }' ;;
         vmess)
+            # A cipher by name, not "auto": sing-box's auto under TLS is one
+            # Xray v26.11.9 answers with nothing (as it does "none"); with
+            # aes-128-gcm or chacha20-poly1305 the same node carries traffic.
+            # ChaCha20 is the one that is fast without AES hardware too.
             jq -n --arg t "PSM-$tag" --arg s "$server" --argjson p "$port" \
                   --arg u "$(printf '%s' "$n" | jq -r '.uuid')" \
                   --arg sn "$(printf '%s' "$n" | jq -r '.sni // .domain')" \
                   --arg path "$(printf '%s' "$n" | jq -r '.path // "/"')" \
                   --argjson ins "$(printf '%s' "$n" | jq '(.insecure // 0) | tostring | test("^(1|true)$")')" '
-                { type:"vmess", tag:$t, server:$s, server_port:$p, uuid:$u, security:"auto",
+                { type:"vmess", tag:$t, server:$s, server_port:$p, uuid:$u, security:"chacha20-poly1305",
                   tls:{ enabled:true, server_name:$sn, insecure:$ins },
                   transport:{ type:"ws", path:$path } }' ;;
         ss2022)
@@ -313,9 +330,14 @@ _sub_mh_proxy() {
             + (if ($n.stls_password // "") != "" then
                  {plugin: "shadow-tls", "plugin-opts": {host: $n.stls_sni, password: $n.stls_password, version: 3}} else {} end))
          elif $proto == "reality" then
+           # support-x25519mlkem768: an Xray server from v26.9.8 on refuses a
+           # REALITY client whose hello has no X25519MLKEM768 key share, and
+           # mihomo sends one only when told to (and only as chrome). Older
+           # Xray, sing-box and mihomo servers take the hello either way.
            ({type: "vless", uuid: $n.uuid, udp: true, tls: true, network: "tcp", servername: $n.server_name,
              "client-fingerprint": "chrome",
-             "reality-opts": {"public-key": $n.public_key, "short-id": (($n.short_ids // [])[0] // $n.short_id // "")}}
+             "reality-opts": {"public-key": $n.public_key, "short-id": (($n.short_ids // [])[0] // $n.short_id // ""),
+                              "support-x25519mlkem768": true}}
             + (if ($n.flow // "") != "" then {flow: $n.flow} else {} end)
             + (if ($n.vless_encryption // "") != "" then {encryption: $n.vless_encryption} else {} end))
          elif $proto == "vision" then
@@ -332,7 +354,8 @@ _sub_mh_proxy() {
             | {type: "vless", uuid: $n.uuid, udp: true, tls: true, "client-fingerprint": "chrome"}
             + (if ($n.vless_encryption // "") != "" then {encryption: $n.vless_encryption} else {} end)
             + (if $m == "reality-layer" then
-                 {servername: $n.server_name, "reality-opts": {"public-key": $n.public_key, "short-id": ($n.short_id // "")}}
+                 {servername: $n.server_name, "reality-opts": {"public-key": $n.public_key, "short-id": ($n.short_id // ""),
+                                                               "support-x25519mlkem768": true}}
                  + (if ($n.reality_transport // "xhttp") == "grpc"
                     then {network: "grpc", "grpc-opts": {"grpc-service-name": ($path | ltrimstr("/"))}}
                     else {network: "xhttp", "xhttp-opts": {path: $path, mode: "auto"}} end)
